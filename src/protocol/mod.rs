@@ -29,4 +29,18 @@ impl KrpcMsg {
             method_name: "".to_string(),
         };
     }
+
+    pub fn new(
+        unique_identifier: String,
+        version: String,
+        class_name: String,
+        method_name: String,
+    ) -> KrpcMsg {
+        return KrpcMsg {
+            unique_identifier,
+            version,
+            class_name,
+            method_name,
+        };
+    }
 }

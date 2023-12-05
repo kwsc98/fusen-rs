@@ -1,7 +1,12 @@
+use std::{marker::PhantomData, vec};
+
 use crate::{
-    filter::KrpcRouter,
+    filter::{self, KrpcFilter, KrpcRouter},
     support::{TokioExecutor, TokioIo},
 };
+use bytes::Bytes;
+use futures::Future;
+use http_body::Body;
 use http_body_util::{BodyExt, Full};
 use hyper::{server::conn::http2, Request, Response};
 use tokio::{
@@ -9,6 +14,8 @@ use tokio::{
     sync::{broadcast, mpsc},
 };
 use tracing::debug;
+
+use super::KrpcMsg;
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,
@@ -18,16 +25,12 @@ pub struct StreamHandler {
 
 impl StreamHandler {
     pub async fn run(mut self) {
-        let server = KrpcRouter::new(|req: Request<hyper::body::Incoming>| {
-            debug!("rev {:?}", req);
-            let response_body: Vec<u8> = req.headers().get("1122").unwrap().as_bytes().to_vec();
-            async move {
-                let mut req_body = req.into_body();
-                while let Some(_chunk) = req_body.frame().await {}
-                Ok::<_, std::convert::Infallible>(Response::new(Full::<bytes::Bytes>::from(
-                    response_body,
-                )))
-            }
+        let server = KrpcRouter::new(|req: Request<hyper::body::Incoming>| async move {
+            let mut msg = KrpcMsg::new_empty();
+
+            Ok::<_, std::convert::Infallible>(Response::new(Full::<bytes::Bytes>::from(
+                "response_body",
+            )))
         });
         let hyper_io = TokioIo::new(self.tcp_stream);
         let future = http2::Builder::new(TokioExecutor)
