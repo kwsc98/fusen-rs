@@ -1,9 +1,13 @@
 use http::Request;
 use http_body_util::{BodyExt as _, Full};
-use krpc_rust::support::{TokioExecutor, TokioIo};
+use krpc_rust::{
+    common::date_util,
+    support::{TokioExecutor, TokioIo},
+};
 use tokio::{
     io::{self, AsyncWriteExt as _},
-    net::TcpStream, sync::broadcast,
+    net::TcpStream,
+    sync::broadcast,
 };
 use tracing::debug;
 use tracing_subscriber::{
@@ -36,21 +40,39 @@ async fn main() {
         }
     });
     let req = Request::builder()
-        .header("1122", "1221")
+        .header("unique_identifier", "unique_identifier")
+        .header("version", "version")
+        .header("class_name", "class_name")
+        .header("method_name", "method_name")
         .body(Full::<bytes::Bytes>::from("ds"))
         .unwrap();
-    let mut res1 = sender.send_request(req).await.unwrap();
+    let start_time = date_util::get_now_date_time_as_millis();
+    let mut re: (broadcast::Sender<i32>, broadcast::Receiver<_>) = broadcast::channel(1);
+
+    for _ in 0..10000 {
+        let send = re.0.clone();
+        let mut sender1 = sender.clone();
+        let de = |req, send| async move {
+            let mut res1 = sender1.send_request(req).await.unwrap();
+            debug!("res1{:?}", res1);
+            while let Some(next) = res1.frame().await {
+                let frame = next.unwrap();
+                if let Some(chunk) = frame.data_ref() {
+                    debug!("sdsd1{:?}", chunk);
+                }
+            }
+        };
+        tokio::spawn(de(req.clone(), send.clone()));
+    }
     let req = Request::builder()
-        .header("1122", "12213")
+        .header("unique_identifier", "unique_identifier")
+        .header("version", "version")
+        .header("class_name", "class_name")
+        .header("method_name", "method_name")
         .body(Full::<bytes::Bytes>::from("ds"))
         .unwrap();
     let mut res2 = sender.send_request(req).await.unwrap();
-    while let Some(next) = res1.frame().await {
-        let frame = next.unwrap();
-        if let Some(chunk) = frame.data_ref() {
-            debug!("sdsd1{:?}", chunk);
-        }
-    }
+    debug!("res1{:?}", res2);
     while let Some(next) = res2.frame().await {
         let frame = next.unwrap();
         if let Some(chunk) = frame.data_ref() {
@@ -58,5 +80,10 @@ async fn main() {
         }
     }
     let mut re: (broadcast::Sender<i32>, broadcast::Receiver<_>) = broadcast::channel(1);
+    drop(re.0);
     re.1.recv().await;
+    debug!(
+        "end   {:?}",
+        date_util::get_now_date_time_as_millis() - start_time
+    );
 }

@@ -3,6 +3,7 @@ use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, debug};
 
+use crate::filter::TestFilter;
 use crate::protocol::http2_handler::StreamHandler;
 
 pub struct TcpServer {
@@ -43,8 +44,10 @@ impl TcpServer {
             };
             match tcp_stream {
                 Ok(stream) => {
+                    let filter_list = vec![TestFilter{}];
                     let stream_handler = StreamHandler {
                         tcp_stream: stream.0,
+                        filter_list,
                         shutdown: self.notify_shutdown.subscribe(),
                         _shutdown_complete: self.shutdown_complete_tx.clone(),
                     };
