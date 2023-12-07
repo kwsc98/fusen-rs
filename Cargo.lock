@@ -362,6 +362,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
+ "lazy_static",
  "pin-project-lite",
  "pretty_env_logger",
  "serde",

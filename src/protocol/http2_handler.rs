@@ -3,6 +3,7 @@ use crate::{
     support::{TokioExecutor, TokioIo},
 };
 use hyper::{server::conn::http2, Request, Response};
+use lazy_static::lazy_static;
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},
@@ -18,13 +19,17 @@ pub struct StreamHandler {
     pub _shutdown_complete: mpsc::Sender<()>,
 }
 
+lazy_static! {
+    static ref filter_list: Vec<TestFilter> = vec![TestFilter {}];
+}
+
 impl StreamHandler {
     pub async fn run(mut self) {
         let server = KrpcRouter::new(
-            |req: Request<hyper::body::Incoming>, filter| async move {
+            |req: Request<hyper::body::Incoming>| async move {
                 let mut msg = decode_filter(req);
-                for idx in 0..filter.len() {
-                    msg = filter[idx].call(msg).await.unwrap();
+                for idx in 0..filter_list.len() {
+                    msg = filter_list[idx].call(msg).await.unwrap();
                 }
                 return encode_filter(msg);
             },
@@ -32,9 +37,8 @@ impl StreamHandler {
         );
         let hyper_io = TokioIo::new(self.tcp_stream);
         let future = http2::Builder::new(TokioExecutor)
-            .initial_stream_window_size(10)
-            .initial_connection_window_size(10)
-            .adaptive_window(false)
+            .initial_stream_window_size(1024 * 1024 * 2)
+            .initial_connection_window_size(1024 * 1024 * 5)
             .serve_connection(hyper_io, server);
         let err_info = tokio::select! {
                 res = future =>

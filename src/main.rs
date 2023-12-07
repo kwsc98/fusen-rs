@@ -1,29 +1,29 @@
-use bytes::Bytes;
+use std::{thread, time::Duration};
+
 use http::Request;
 use http_body_util::{BodyExt as _, Full};
-use hyper::client::conn::http1::SendRequest;
 use krpc_rust::{
     common::date_util,
     support::{TokioExecutor, TokioIo},
 };
-use std::{sync::Arc, thread, time::Duration};
 use tokio::{
     io::{self, AsyncWriteExt as _},
     net::TcpStream,
-    sync::{broadcast, Mutex},
+    sync::broadcast,
 };
 use tracing::debug;
 use tracing_subscriber::{
     filter, fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, Layer,
 };
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 50)]
 async fn main() {
     let start_time = date_util::get_now_date_time_as_millis();
     tokio::spawn(main1());
-\
+    tokio::spawn(main1());
+
     loop {
-        thread::sleep(Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(100));
         println!(
             "end {:?}",
             date_util::get_now_date_time_as_millis() - start_time
@@ -58,10 +58,14 @@ async fn main1() {
         .header("method_name", "method_name")
         .body(Full::<bytes::Bytes>::from("ds"))
         .unwrap();
-    for _ in 0..100000 {
-        let mut send = sender.clone();
-        let de = |req| async move {
-            let mut res1 = send.send_request(req).await.unwrap();
+    let start_time = date_util::get_now_date_time_as_millis();
+    let mut re: (broadcast::Sender<i32>, broadcast::Receiver<_>) = broadcast::channel(1);
+
+    for _ in 0..10000 {
+        let send = re.0.clone();
+        let mut sender1 = sender.clone();
+        let de = |req, send| async move {
+            let mut res1 = sender1.send_request(req).await.unwrap();
             println!("res1{:?}", res1);
             while let Some(next) = res1.frame().await {
                 let frame = next.unwrap();
@@ -70,6 +74,28 @@ async fn main1() {
                 }
             }
         };
-        tokio::spawn(de(req.clone()));
+        tokio::spawn(de(req.clone(), send.clone()));
     }
+    let req = Request::builder()
+        .header("unique_identifier", "unique_identifier")
+        .header("version", "version")
+        .header("class_name", "class_name")
+        .header("method_name", "method_name")
+        .body(Full::<bytes::Bytes>::from("ds"))
+        .unwrap();
+    let mut res2 = sender.send_request(req).await.unwrap();
+    debug!("res1{:?}", res2);
+    while let Some(next) = res2.frame().await {
+        let frame = next.unwrap();
+        if let Some(chunk) = frame.data_ref() {
+            debug!("sdsd2{:?}", chunk);
+        }
+    }
+    let mut re: (broadcast::Sender<i32>, broadcast::Receiver<_>) = broadcast::channel(1);
+    drop(re.0);
+    re.1.recv().await;
+    debug!(
+        "end   {:?}",
+        date_util::get_now_date_time_as_millis() - start_time
+    );
 }

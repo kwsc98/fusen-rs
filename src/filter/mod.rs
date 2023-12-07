@@ -14,14 +14,14 @@ pub struct KrpcRouter<F, KF, ReqBody, Err> {
 
 impl<F, KF, S, ReqBody, Err> KrpcRouter<F, KF, ReqBody, Err>
 where
-    F: Fn(Request<ReqBody>, Vec<TestFilter>) -> S,
+    F: Fn(Request<ReqBody>) -> S,
     S: Future,
     KF: KrpcFilter<Request = KrpcMsg, Response = KrpcMsg, Error = crate::Error>,
 {
     pub fn new(codec_filter: F, filter_list: Vec<KF>) -> Self {
         return KrpcRouter {
             codec_filter,
-            filter_list: filter_list,
+            filter_list,
             _req: PhantomData,
             _err: PhantomData,
         };
@@ -33,7 +33,7 @@ impl<F, KF, Ret, ReqBody, ResBody, Err> Service<Request<ReqBody>>
 where
     ReqBody: Body,
     ResBody: Body,
-    F: Fn(Request<ReqBody>, Vec<KF>) -> Ret,
+    F: Fn(Request<ReqBody>) -> Ret,
     Err: Into<Box<dyn std::error::Error + Send + Sync>>,
     Ret: Future<Output = Result<Response<ResBody>, Err>>,
     KF: KrpcFilter<Request = KrpcMsg, Response = KrpcMsg, Error = crate::Error> + Clone,
@@ -43,7 +43,7 @@ where
     type Future = Ret;
 
     fn call(&self, req: Request<ReqBody>) -> Self::Future {
-        return (self.codec_filter)(req, self.filter_list.clone());
+        return (self.codec_filter)(req);
     }
 }
 
@@ -51,14 +51,13 @@ where
 pub struct TestFilter {}
 
 impl KrpcFilter for TestFilter {
-
     type Request = KrpcMsg;
 
     type Response = KrpcMsg;
 
     type Error = crate::Error;
 
-    type Future = crate::KrpcFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = crate::KrpcFuture<Result<Self::Response, Self::Error>>;
 
     fn call(&self, req: Self::Response) -> Self::Future {
         let mut msg: KrpcMsg = req;
