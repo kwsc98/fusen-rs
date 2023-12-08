@@ -20,7 +20,7 @@ pub struct StreamHandler {
 }
 
 lazy_static! {
-    static ref filter_list: Vec<TestFilter> = vec![TestFilter {}];
+    static ref FILTER_LIST: Vec<TestFilter> = vec![TestFilter {}];
 }
 
 impl StreamHandler {
@@ -28,8 +28,8 @@ impl StreamHandler {
         let server = KrpcRouter::new(
             |req: Request<hyper::body::Incoming>| async move {
                 let mut msg = decode_filter(req);
-                for idx in 0..filter_list.len() {
-                    msg = filter_list[idx].call(msg).await.unwrap();
+                for idx in 0..FILTER_LIST.len() {
+                    msg = FILTER_LIST[idx].call(msg).await.unwrap();
                 }
                 return encode_filter(msg);
             },
@@ -37,8 +37,6 @@ impl StreamHandler {
         );
         let hyper_io = TokioIo::new(self.tcp_stream);
         let future = http2::Builder::new(TokioExecutor)
-            .initial_stream_window_size(1024 * 1024 * 2)
-            .initial_connection_window_size(1024 * 1024 * 5)
             .serve_connection(hyper_io, server);
         let err_info = tokio::select! {
                 res = future =>

@@ -5,5 +5,5 @@ use tracing_subscriber::{
 
 #[tokio::main]
 async fn main() {
-    KrpcServer::build().set_port("8080").run().await;
+    KrpcServer::build().set_port("8081").run().await;
 }

@@ -1,19 +1,29 @@
+use serde::{de::DeserializeSeed, Deserialize, Deserializer, Serialize};
 
 pub struct KrpcClient {
-    url: Option<String>
+    addr: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct KrpcRequest<Req, Res> {
+    #[serde(default)]
+    pub req: Req,
+    #[serde(default)]
+    pub res: Option<Res>,
 }
 
 impl KrpcClient {
-    pub fn build() -> KrpcClient {
-        return KrpcClient { url: None };
+    pub fn build(addr: String) -> KrpcClient {
+        return KrpcClient { addr };
     }
 
-    pub fn set_url(mut self, url: &str) -> KrpcClient {
-        let _ = self.url.insert(url.to_string());
-        return self;
-    }
-
-    pub async fn run(self) {
-        
+    pub async fn invoke<Req, Res>(&mut self, req: KrpcRequest<Req, Res>) -> Res
+    where
+        Req: Send + Sync + 'static + Serialize,
+        Res: Send + Sync + 'static + Serialize + for<'a> Deserialize<'a> + Default,
+    {
+        let de = serde_json::to_string(&req).unwrap();
+        println!("{}", de);
+        return req.res.unwrap();
     }
 }

@@ -1,38 +1,41 @@
+use async_trait::async_trait;
 use bytes::Bytes;
 use http::Request;
 use http_body_util::{BodyExt as _, Full};
 use hyper::client::conn::http1::SendRequest;
 use krpc_rust::{
+    client::{KrpcClient, KrpcRequest},
     common::date_util,
     support::{TokioExecutor, TokioIo},
 };
-use std::{sync::Arc, thread, time::Duration};
+use std::{thread, time::Duration};
 use tokio::{
     io::{self, AsyncWriteExt as _},
     net::TcpStream,
-    sync::{broadcast, Mutex},
-};
-use tracing::debug;
-use tracing_subscriber::{
-    filter, fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, Layer,
 };
 
 #[tokio::main]
 async fn main() {
     let start_time = date_util::get_now_date_time_as_millis();
-    tokio::spawn(main1());
-\
-    loop {
-        thread::sleep(Duration::from_millis(1000));
-        println!(
-            "end {:?}",
-            date_util::get_now_date_time_as_millis() - start_time
-        );
-    }
+    // tokio::spawn(main1());
+    let mut  cli = KrpcClient::build("addr".to_string());
+    let k_req
+     = KrpcRequest::<String,Option<String>>{ 
+        req:"sdd".to_string(),
+        res: None
+    };
+    let de = cli.invoke(k_req).await;
+    // loop {
+    //     thread::sleep(Duration::from_millis(200));
+    //     println!(
+    //         "end {:?}",
+    //         date_util::get_now_date_time_as_millis() - start_time
+    //     );
+    // }
 }
 
 async fn main1() {
-    let url = "http://127.0.0.1:8080".parse::<hyper::Uri>().unwrap();
+    let url = "http://127.0.0.1:8081".parse::<hyper::Uri>().unwrap();
     let host = url.host().expect("uri has no host");
     let port = url.port_u16().unwrap_or(80);
     let addr = format!("{}:{}", host, port);
@@ -58,7 +61,7 @@ async fn main1() {
         .header("method_name", "method_name")
         .body(Full::<bytes::Bytes>::from("ds"))
         .unwrap();
-    for _ in 0..100000 {
+    for _ in 0..10000 {
         let mut send = sender.clone();
         let de = |req| async move {
             let mut res1 = send.send_request(req).await.unwrap();
