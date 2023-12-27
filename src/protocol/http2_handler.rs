@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 use crate::{
     filter::{KrpcFilter, KrpcRouter, TestFilter},
     support::{TokioExecutor, TokioIo},
 };
 use hyper::{server::conn::http2, Request, Response};
-use lazy_static::lazy_static;
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},
@@ -19,25 +20,20 @@ pub struct StreamHandler {
     pub _shutdown_complete: mpsc::Sender<()>,
 }
 
-lazy_static! {
-    static ref FILTER_LIST: Vec<TestFilter> = vec![TestFilter {}];
-}
-
 impl StreamHandler {
     pub async fn run(mut self) {
         let server = KrpcRouter::new(
-            |req: Request<hyper::body::Incoming>| async move {
+            |req: Request<hyper::body::Incoming>, filter_list: Arc<Vec<TestFilter>>| async move {
                 let mut msg = decode_filter(req);
-                for idx in 0..FILTER_LIST.len() {
-                    msg = FILTER_LIST[idx].call(msg).await.unwrap();
+                for idx in 0..filter_list.len() {
+                    msg = filter_list[idx].call(msg).await.unwrap();
                 }
                 return encode_filter(msg);
             },
             self.filter_list,
         );
         let hyper_io = TokioIo::new(self.tcp_stream);
-        let future = http2::Builder::new(TokioExecutor)
-            .serve_connection(hyper_io, server);
+        let future = http2::Builder::new(TokioExecutor).serve_connection(hyper_io, server);
         let err_info = tokio::select! {
                 res = future =>
                     match res {
@@ -91,7 +87,7 @@ fn encode_filter(msg: KrpcMsg) -> Result<Response<String>, std::convert::Infalli
         .header("version", msg.version)
         .header("class_name", msg.class_name)
         .header("method_name", msg.method_name)
-        .body("sd".to_string())
+        .body("\"sd\"".to_string())
         .unwrap();
     return Ok(response);
 }

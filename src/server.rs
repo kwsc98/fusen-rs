@@ -2,9 +2,11 @@ use crate::protocol::server::TcpServer;
 
 pub struct KrpcServer {
     port: Option<String>,
+
 }
 
 impl KrpcServer {
+    
     pub fn build() -> KrpcServer {
         return KrpcServer { port: None };
     }
