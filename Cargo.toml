@@ -1,10 +1,17 @@
-[package]
+[workspace]
+members = [
+  "krpc-core",
+  "examples",
+]
+resolver = "2"
+
+[workspace.package]
 name = "krpc-rust"
 version = "0.1.0"
 edition = "2021"
 
 
-[dependencies]
+[workspace.dependencies]
 #网络协议处理
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1.0.1", features = ["full"] }
