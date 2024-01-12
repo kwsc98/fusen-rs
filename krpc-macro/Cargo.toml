@@ -1,0 +1,9 @@
+[package]
+name = "krpc-macro"
+version = "0.1.0"
+edition.workspace = true
+
+
+[dependencies]
+krpc-common = { path = "../krpc-common"}
+serde_json.workspace = true

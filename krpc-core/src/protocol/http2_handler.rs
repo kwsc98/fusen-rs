@@ -5,13 +5,13 @@ use crate::{
     support::{TokioExecutor, TokioIo},
 };
 use hyper::{server::conn::http2, Request, Response};
+use krpc_common::KrpcMsg;
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},
 };
 use tracing::debug;
 
-use super::KrpcMsg;
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,
@@ -79,7 +79,7 @@ fn decode_filter(req: Request<hyper::body::Incoming>) -> KrpcMsg {
         .to_str()
         .unwrap()
         .to_string();
-    return KrpcMsg::new(unique_identifier, version, class_name, method_name);
+    return KrpcMsg::new(unique_identifier, version, class_name, method_name,"ds".to_string());
 }
 fn encode_filter(msg: KrpcMsg) -> Result<Response<String>, std::convert::Infallible> {
     let response = Response::builder()

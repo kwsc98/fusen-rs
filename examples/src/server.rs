@@ -1,40 +1,34 @@
+use examples::TestInterface;
+use hyper::server;
+use krpc_common::KrpcMsg;
 use krpc_core::server::KrpcServer;
+use krpc_macro::krpc_server;
 use tracing_subscriber::{
     fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt,
 };
 
+krpc_server! {
+   TestServer
+   async fn do_run1(&self,de : i32) -> i32 {
+       return de;
+   }
+   async fn do_run2(&self,de : i32) -> i32 {
+    return de + 1;
+}
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry().with(fmt::layer()).init();
-    KrpcServer::build().set_port("8081").run().await;
+     let server = TestServer{str : "de".to_string()};
+     let mut msg = KrpcMsg::new_empty();
+     msg.method_name = "do_run1".to_string();
+     msg.data = "2".to_string();
+     let de = server.invoke(msg).await;
+    println!("{:?}",de);
+    // tracing_subscriber::registry().with(fmt::layer()).init();
+    // KrpcServer::build().set_port("8081").run().await;
 }
 
 struct TestServer {
-    db: Option<String>,
-}
-
-
-
-impl TestServer {
-    
-}
-
-#[macro_export]
-macro_rules! my_vec {
-    // 没带任何参数的 my_vec，我们创建一个空的 vec
-    () => {
-        std::vec::Vec::new()
-    };
-
-    // 处理 my_vec![1, 2, 3, 4]
-    ($($el:expr);*) => ({
-        let mut v = std::vec::Vec::new();
-        $(v.push($el);)*
-        v
-    });
-
-    // 处理 my_vec![0; 10]
-    ($el:expr; $n:expr) => {
-        std::vec::from_elem($el, $n)
-    }
+    str: String,
 }

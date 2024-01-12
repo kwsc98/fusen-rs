@@ -3,6 +3,7 @@ use crate::support::{TokioExecutor, TokioIo};
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
+use krpc_common::KrpcMsg;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 use tokio::io::AsyncWriteExt;
@@ -44,6 +45,9 @@ impl KrpcClient {
         )
         .unwrap();
         return res;
+    }
+    fn ds (ds : KrpcMsg) {
+
     }
 
     async fn get_socket_sender(&self) -> SendRequest<Full<bytes::Bytes>> {

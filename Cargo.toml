@@ -1,6 +1,8 @@
 [workspace]
 members = [
+  "krpc-common",
   "krpc-core",
+  "krpc-macro",
   "examples",
 ]
 resolver = "2"
@@ -34,3 +36,4 @@ serde_json = "1.0"
 
 pin-project-lite = "0.2.13"
 lazy_static = "1"
+proc-macro2 = "1"

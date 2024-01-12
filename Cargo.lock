@@ -131,7 +131,9 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
+ "krpc-common",
  "krpc-core",
+ "krpc-macro",
  "lazy_static",
  "pin-project-lite",
  "pretty_env_logger",
@@ -375,6 +377,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1a46d1a171d865aa5f83f92695765caa047a9b4cbae2cbf37dbd613a793fd4c"
 
 [[package]]
+name = "krpc-common"
+version = "0.1.0"
+
+[[package]]
 name = "krpc-core"
 version = "0.1.0"
 dependencies = [
@@ -385,6 +391,8 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
+ "krpc-common",
+ "krpc-macro",
  "lazy_static",
  "pin-project-lite",
  "pretty_env_logger",
@@ -394,6 +402,14 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "krpc-macro"
+version = "0.1.0"
+dependencies = [
+ "krpc-common",
+ "serde_json",
 ]
 
 [[package]]
@@ -564,9 +580,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.74"
+version = "1.0.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2de98502f212cfcea8d0bb305bd0f49d7ebdd75b64ba0a68f937d888f4e0d6db"
+checksum = "95fc56cda0b5c3325f5fbbd7ff9fda9e02bb00bb3dac51252d2f1bfa1cb8cc8c"
 dependencies = [
  "unicode-ident",
 ]
@@ -725,9 +741,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.46"
+version = "2.0.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89456b690ff72fddcecf231caedbe615c59480c93358a93dfae7fc29e3ebbf0e"
+checksum = "0f3531638e407dfc0814761abb7c00a5b54992b849452a0646b7f65c9f770f3f"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -1,7 +1,7 @@
-use crate::protocol::KrpcMsg;
 use futures::Future;
 use http_body::Body;
 use hyper::{service::Service, Request, Response};
+use krpc_common::KrpcMsg;
 use std::{marker::PhantomData, thread, sync::Arc};
 use tracing::debug;
 
