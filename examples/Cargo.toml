@@ -10,6 +10,9 @@ path = "src/server.rs"
 name = "client"
 path = "src/client.rs"
 
+[lib]
+proc-macro = true
+
 [dependencies]
 krpc-common = { path = "../krpc-common"}
 krpc-core = { path = "../krpc-core"}
@@ -36,5 +39,4 @@ serde.workspace = true
 serde_json.workspace = true 
 
 pin-project-lite.workspace = true 
-lazy_static.workspace = true 
-
+lazy_static.workspace = true

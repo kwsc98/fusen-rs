@@ -6,6 +6,8 @@ pub mod support;
 pub mod common;
 pub mod handler;
 pub mod register;
-pub type Error = Box<dyn std::error::Error + Send + Sync>;
-pub type Result<T> = std::result::Result<T, Error>;
-pub type KrpcFuture< T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send >>;
+pub mod r#macro;
+
+pub type Error = krpc_common::Error;
+pub type Result<T> = krpc_common::Result<T>;
+pub type KrpcFuture<T> = krpc_common::KrpcFuture<T>;

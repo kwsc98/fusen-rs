@@ -3,7 +3,9 @@ name = "krpc-macro"
 version = "0.1.0"
 edition.workspace = true
 
-
 [dependencies]
 krpc-common = { path = "../krpc-common"}
 serde_json.workspace = true
+quote = "1"
+syn = "2"
+proc-macro2.workspace = true

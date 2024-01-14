@@ -1,8 +1,9 @@
 use futures::Future;
 use http_body::Body;
 use hyper::{service::Service, Request, Response};
-use krpc_common::KrpcMsg;
-use std::{marker::PhantomData, thread, sync::Arc};
+use krpc_common::{KrpcMsg, RpcServer};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc, thread};
+use tokio::sync::Mutex;
 use tracing::debug;
 
 pub struct KrpcRouter<F, KF, ReqBody, Err> {
@@ -21,7 +22,7 @@ where
     pub fn new(codec_filter: F, filter_list: Vec<KF>) -> Self {
         return KrpcRouter {
             codec_filter,
-            filter_list : Arc::new(filter_list),
+            filter_list: Arc::new(filter_list),
             _req: PhantomData,
             _err: PhantomData,
         };
@@ -47,10 +48,18 @@ where
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct TestFilter {}
+#[derive(Clone, Default)]
+pub struct Filter {
+    map: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>,
+}
 
-impl KrpcFilter for TestFilter {
+impl Filter {
+    pub fn new(map: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>) -> Self {
+        return Filter { map };
+    }
+}
+
+impl KrpcFilter for Filter {
     type Request = KrpcMsg;
 
     type Response = KrpcMsg;
@@ -60,17 +69,17 @@ impl KrpcFilter for TestFilter {
     type Future = crate::KrpcFuture<Result<Self::Response, Self::Error>>;
 
     fn call(&self, req: Self::Response) -> Self::Future {
-        let mut msg: KrpcMsg = req;
-        debug!("thead_id1{:?}", thread::current().id());
-        debug!("thead_id2{:?}", thread::current().id());
-        msg.class_name = "test".to_string();
-        debug!("thead_id3{:?}", thread::current().id());
-        Box::pin(async move { Ok(msg) })
+        let msg: KrpcMsg = req;
+        let rpc = self.map.get(&msg.class_name).unwrap().clone();
+        Box::pin(async move {
+            let mut rpc = rpc.lock_owned().await;
+            let res = rpc.invoke(msg).await;
+            Ok(res)
+        })
     }
 }
 
 pub trait KrpcFilter {
-
     type Request;
 
     type Response;

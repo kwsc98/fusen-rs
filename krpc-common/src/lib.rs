@@ -1,3 +1,7 @@
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+pub type Result<T> = std::result::Result<T, Error>;
+pub type KrpcFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+
 #[derive(Debug)]
 pub struct KrpcMsg {
     pub unique_identifier: String,
@@ -30,7 +34,12 @@ impl KrpcMsg {
             version,
             class_name,
             method_name,
-            data
+            data,
         };
     }
+}
+
+pub trait RpcServer: Send {
+    fn invoke(&mut self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
+    fn get_info(&self) -> (String);
 }

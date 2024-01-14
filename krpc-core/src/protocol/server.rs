@@ -1,23 +1,30 @@
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use krpc_common::RpcServer;
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, RwLock, Mutex};
 use tracing::{error, debug};
 
-use crate::filter::TestFilter;
+use crate::filter::Filter;
 use crate::protocol::http2_handler::StreamHandler;
 
 pub struct TcpServer {
     port: String,
+    rpc_servers: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>,
     notify_shutdown: broadcast::Sender<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
     shutdown_complete_rx: mpsc::Receiver<()>,
 }
 
 impl TcpServer {
-    pub fn init(port: &str) -> Self {
+    pub fn init(port: &str,rpc_servers: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>) -> Self {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         return TcpServer {
             port: port.to_string(),
+            rpc_servers,
             notify_shutdown: broadcast::channel(1).0,
             shutdown_complete_tx,
             shutdown_complete_rx,
@@ -44,10 +51,11 @@ impl TcpServer {
             };
             match tcp_stream {
                 Ok(stream) => {
-                    let filter_list = vec![TestFilter{}];
+                    let filter_list = vec![];
                     let stream_handler = StreamHandler {
                         tcp_stream: stream.0,
                         filter_list,
+                        rpc_server : self.rpc_servers.clone(),
                         shutdown: self.notify_shutdown.subscribe(),
                         _shutdown_complete: self.shutdown_complete_tx.clone(),
                     };

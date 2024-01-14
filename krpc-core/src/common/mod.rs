@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize,Clone)]
 pub struct KrpcRequest<Req, Res> {
     #[serde(default)]
     pub req: Req,
@@ -11,18 +11,18 @@ pub struct KrpcRequest<Req, Res> {
     pub resource: KrpcResource<Req, Res>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize,Clone)]
 pub struct KrpcResource<Req, Res> {
     #[serde(default)]
     _req: PhantomData<Req>,
     #[serde(default)]
     _res: PhantomData<Res>,
     #[serde(default)]
-    version: String,
+    pub version: String,
     #[serde(default)]
-    class_name: String,
+    pub class_name: String,
     #[serde(default)]
-    method_name: String,
+    pub method_name: String,
 }
 
 impl<Req, Res> KrpcRequest<Req, Res> {

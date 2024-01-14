@@ -409,7 +409,10 @@ name = "krpc-macro"
 version = "0.1.0"
 dependencies = [
  "krpc-common",
+ "proc-macro2",
+ "quote",
  "serde_json",
+ "syn",
 ]
 
 [[package]]
