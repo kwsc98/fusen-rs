@@ -1,13 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
-
 use krpc_common::RpcServer;
-use tokio::sync::Mutex;
-
 use crate::protocol::server::TcpServer;
 
 pub struct KrpcServer {
     port: Option<String>,
-    rpc_servers: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>,
+    rpc_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
 }
 
 impl KrpcServer {
@@ -25,7 +22,7 @@ impl KrpcServer {
 
     pub fn add_rpc_server(mut self, server: Box<dyn RpcServer>) -> KrpcServer {
         self.rpc_servers
-            .insert(server.get_info(), Arc::new(Mutex::new(server)));
+            .insert(server.get_info(), Arc::new(server));
         return self;
     }
 

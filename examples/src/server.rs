@@ -1,48 +1,54 @@
-use std::process::Output;
-
-use futures::Future;
-use krpc_common::{KrpcFuture, KrpcMsg, RpcServer};
+use krpc_common::RpcServer;
 use krpc_core::server::KrpcServer;
 use krpc_macro::krpc_server;
+use serde::{Deserialize, Serialize};
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+#[derive(Serialize, Deserialize, Default)]
+struct ReqDto {
+    str: String,
+}
+impl ReqDto {
+    fn add_randStr(&mut self) {
+        self.str = krpc_core::common::get_uuid();
+    }
+}
+
 #[derive(Clone)]
 struct TestServer {
     str: String,
 }
 #[derive(Clone)]
+
 struct TestServer1 {
     str: String,
 }
 
 krpc_server! {
    TestServer
-   async fn do_run1(&self,de : i32) -> i32 {
+   async fn do_run1(&self,de : ReqDto) -> ReqDto {
+       let mut de = de;
+       de.add_randStr();
        return de;
    }
-   async fn do_run2(&self,de : i32) -> i32 {
-    return de + 1;
+   async fn do_run2(&self,de : ReqDto) -> ReqDto {
+    return de;
    }
 }
 
 krpc_server! {
-    TestServer1
-    async fn do_run1(&self,de : i32) -> i32 {
-        return de+2;
-    }
-    async fn do_run2(&self,de : i32) -> i32 {
-     return de + 3;
-    }
- }
+   TestServer1
+   async fn do_run1(&self,de : ReqDto) -> ReqDto {
+       return de;
+   }
+   async fn do_run2(&self,de : ReqDto) -> ReqDto {
+    return de;
+   }
+}
 
-// impl RpcServer for TestServer1 {
-//     fn invoke(&mut self, msg: krpc_common::KrpcMsg) -> KrpcFuture<KrpcMsg> {
-//         Box::pin(async move { self.invoke(msg).await })
-//     }
-// }
-
-#[tokio::main(worker_threads = 200)]
+#[tokio::main(worker_threads = 500)]
 async fn main() {
     let server: TestServer = TestServer {
         str: "de".to_string(),

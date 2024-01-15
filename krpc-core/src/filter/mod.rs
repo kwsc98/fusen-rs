@@ -3,7 +3,6 @@ use http_body::Body;
 use hyper::{service::Service, Request, Response};
 use krpc_common::{KrpcMsg, RpcServer};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
-use tokio::sync::Mutex;
 
 pub struct KrpcRouter<F, KF, ReqBody, Err> {
     codec_filter: F,
@@ -49,11 +48,11 @@ where
 
 #[derive(Clone, Default)]
 pub struct Filter {
-    map: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>,
+    map: HashMap<String, Arc<Box<dyn RpcServer>>>,
 }
 
 impl Filter {
-    pub fn new(map: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>) -> Self {
+    pub fn new(map: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
         return Filter { map };
     }
 }
@@ -70,16 +69,11 @@ impl KrpcFilter for Filter {
     fn call(&self, req: Self::Response) -> Self::Future {
         let msg: KrpcMsg = req;
         let rpc = self.map.get(&msg.class_name).unwrap().clone();
-        Box::pin(async move {
-            let mut rpc = rpc.lock_owned().await;
-            let res = rpc.invoke(msg).await;
-            Ok(res)
-        })
+        Box::pin(async move { Ok(rpc.invoke(msg).await) })
     }
 }
 
 pub trait KrpcFilter {
-    
     type Request;
 
     type Response;

@@ -9,14 +9,14 @@ use hyper::{server::conn::http2, Request, Response};
 use krpc_common::{KrpcMsg, RpcServer};
 use tokio::{
     net::TcpStream,
-    sync::{broadcast, mpsc, Mutex},
+    sync::{broadcast, mpsc},
 };
 use tracing::debug;
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,
     pub filter_list: Vec<Filter>,
-    pub rpc_server: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>,
+    pub rpc_server: HashMap<String, Arc<Box<dyn RpcServer>>>,
     pub shutdown: broadcast::Receiver<()>,
     pub _shutdown_complete: mpsc::Sender<()>,
 }
@@ -37,9 +37,7 @@ impl StreamHandler {
         );
         let hyper_io = TokioIo::new(self.tcp_stream);
         let future = http2::Builder::new(TokioExecutor)
-            .initial_stream_window_size(100000)
-            .initial_connection_window_size(100000)
-            .adaptive_window(false)
+            .adaptive_window(true)
             .serve_connection(hyper_io, server);
         let err_info = tokio::select! {
                 res = future =>

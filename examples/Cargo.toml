@@ -37,6 +37,7 @@ pretty_env_logger.workspace = true
 #json序列化
 serde.workspace = true 
 serde_json.workspace = true 
+uuid.workspace = true
 
 pin-project-lite.workspace = true 
 lazy_static.workspace = true

@@ -14,7 +14,7 @@ macro_rules! krpc_server {
             }
         }
         impl krpc_common::RpcServer for $name {
-            fn invoke (&mut self, param : krpc_common::KrpcMsg) -> krpc_common::KrpcFuture<krpc_common::KrpcMsg> {
+            fn invoke (&self, param : krpc_common::KrpcMsg) -> krpc_common::KrpcFuture<krpc_common::KrpcMsg> {
                 let s = self.clone();
                 Box::pin(async move { s.prv_invoke(param).await })
             }

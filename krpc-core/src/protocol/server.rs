@@ -4,20 +4,20 @@ use std::sync::Arc;
 use krpc_common::RpcServer;
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, debug};
 use crate::protocol::http2_handler::StreamHandler;
 
 pub struct TcpServer {
     port: String,
-    rpc_servers: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>,
+    rpc_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
     notify_shutdown: broadcast::Sender<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
     shutdown_complete_rx: mpsc::Receiver<()>,
 }
 
 impl TcpServer {
-    pub fn init(port: &str,rpc_servers: HashMap<String, Arc<Mutex<Box<dyn RpcServer>>>>) -> Self {
+    pub fn init(port: &str,rpc_servers: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         return TcpServer {
             port: port.to_string(),
