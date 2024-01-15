@@ -1,14 +1,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-
 use krpc_common::RpcServer;
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::sync::{broadcast, mpsc, RwLock, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{error, debug};
-
-use crate::filter::Filter;
 use crate::protocol::http2_handler::StreamHandler;
 
 pub struct TcpServer {

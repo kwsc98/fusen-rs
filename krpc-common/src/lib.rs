@@ -41,5 +41,11 @@ impl KrpcMsg {
 
 pub trait RpcServer: Send {
     fn invoke(&mut self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
-    fn get_info(&self) -> (String);
+    fn get_info(&self) -> String;
+}
+
+
+pub trait RpcClient: Send {
+    fn invoke(&mut self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
+    fn get_info(&self) -> String;
 }

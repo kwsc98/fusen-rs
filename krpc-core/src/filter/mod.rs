@@ -2,9 +2,8 @@ use futures::Future;
 use http_body::Body;
 use hyper::{service::Service, Request, Response};
 use krpc_common::{KrpcMsg, RpcServer};
-use std::{collections::HashMap, marker::PhantomData, sync::Arc, thread};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tokio::sync::Mutex;
-use tracing::debug;
 
 pub struct KrpcRouter<F, KF, ReqBody, Err> {
     codec_filter: F,
@@ -80,14 +79,13 @@ impl KrpcFilter for Filter {
 }
 
 pub trait KrpcFilter {
+    
     type Request;
 
     type Response;
 
-    /// Errors produced by the service.
     type Error;
 
-    /// The future response value.
     type Future: Future<Output = Result<Self::Response, Self::Error>>;
 
     fn call(&self, req: Self::Request) -> Self::Future;

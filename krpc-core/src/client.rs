@@ -1,8 +1,8 @@
-use crate::common::KrpcRequest;
 use crate::support::{TokioExecutor, TokioIo};
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
+use krpc_common::KrpcMsg;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 use tokio::io::AsyncWriteExt;
@@ -23,25 +23,20 @@ impl KrpcClient {
         return cli;
     }
 
-    pub async fn invoke<Req, Res>(&self, krpc_req: KrpcRequest<Req, Res>) -> Res
+    pub async fn invoke<Req, Res>(&self, msg: KrpcMsg) -> Res
     where
         Req: Send + Sync + Serialize,
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
         let mut sender = self.get_socket_sender().await;
-        let req_str = serde_json::to_string(&krpc_req.req).unwrap();
         let req = Request::builder()
-            .header("unique_identifier", "unique_identifier")
-            .header("version", krpc_req.resource.version)
-            .header("class_name", krpc_req.resource.class_name)
-            .header("method_name", krpc_req.resource.method_name)
-            .body(Full::<bytes::Bytes>::from(req_str))
+            .header("unique_identifier", msg.unique_identifier)
+            .header("version", msg.version)
+            .header("class_name", msg.class_name)
+            .header("method_name", msg.method_name)
+            .body(Full::<bytes::Bytes>::from(msg.data))
             .unwrap();
-        let mut res = sender.send_request(req).await;
-        if let Err(err) = res {
-            panic!()
-        }
-        let mut res = res.unwrap();
+        let mut res = sender.send_request(req).await.unwrap();
         let res: Res = serde_json::from_slice(
             res.frame()
                 .await
@@ -68,9 +63,7 @@ impl KrpcClient {
                 let stream = TcpStream::connect(addr).await.unwrap();
                 let stream = TokioIo::new(stream);
                 let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
-                    .initial_stream_window_size(100000)
-                    .initial_connection_window_size(100000)
-                    .adaptive_window(false)
+                    .adaptive_window(true)
                     .handshake(stream)
                     .await
                     .unwrap();
