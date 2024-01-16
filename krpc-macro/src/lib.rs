@@ -1,6 +1,7 @@
 #[macro_export]
 macro_rules! krpc_server {
-    ($name:ident
+    ($name:ident,
+    $version:expr,
     $(async fn $method:ident (&$self:ident, $req:ident : $reqType:ty ) ->  $resType:ty  { $($code:tt)* })*) => {
         impl $name {
             $(async fn $method (&$self, $req : $reqType) -> $resType { $($code)* })*
@@ -15,12 +16,11 @@ macro_rules! krpc_server {
         }
         impl krpc_common::RpcServer for $name {
             fn invoke (&self, param : krpc_common::KrpcMsg) -> krpc_common::KrpcFuture<krpc_common::KrpcMsg> {
-                let s = self.clone();
-                Box::pin(async move { s.prv_invoke(param).await })
+                let rpc = self.clone();
+                Box::pin(async move {rpc.prv_invoke(param).await})
             }
-
-            fn get_info(&self) -> (String) {
-               return (stringify!($name).to_string())
+            fn get_info(&self) -> (String,String) {
+               return (stringify!($name).to_string(),stringify!($version).to_string())
             }
         }
     }
@@ -30,8 +30,8 @@ macro_rules! krpc_server {
 macro_rules! krpc_client {
     (
     $cli:ident,
+    $name:ident,
     $version:expr,
-    $name:ident
     $(async fn $method:ident (&$self:ident, $req:ident : $reqType:ty ) ->  $resType:ty )*) => {
         impl $name {
             $(async fn $method (&$self, $req : $reqType) -> $resType {

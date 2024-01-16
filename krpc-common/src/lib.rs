@@ -41,11 +41,11 @@ impl KrpcMsg {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
-    fn get_info(&self) -> String;
+    fn get_info(&self) -> (String, String);
 }
 
-
-pub trait RpcClient: Send {
-    fn invoke(&mut self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
-    fn get_info(&self) -> String;
+pub struct PixBox <T>{
+    pub ptr : T
 }
+unsafe impl<T> Send for PixBox<T> {}
+unsafe impl<T> Sync for PixBox<T> {}

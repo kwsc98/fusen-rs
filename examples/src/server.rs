@@ -1,3 +1,5 @@
+use std::f64::consts;
+
 use krpc_common::RpcServer;
 use krpc_core::server::KrpcServer;
 use krpc_macro::krpc_server;
@@ -15,23 +17,21 @@ impl ReqDto {
         self.str = krpc_core::common::get_uuid();
     }
 }
-
 #[derive(Clone)]
 struct TestServer {
     str: String,
 }
+}
 #[derive(Clone)]
-
 struct TestServer1 {
     str: String,
 }
 
 krpc_server! {
-   TestServer
+   TestServer,
+   "1.0.0",
    async fn do_run1(&self,de : ReqDto) -> ReqDto {
-       let mut de = de;
-       de.add_randStr();
-       return de;
+    return de;
    }
    async fn do_run2(&self,de : ReqDto) -> ReqDto {
     return de;
@@ -39,14 +39,23 @@ krpc_server! {
 }
 
 krpc_server! {
-   TestServer1
-   async fn do_run1(&self,de : ReqDto) -> ReqDto {
-       return de;
-   }
-   async fn do_run2(&self,de : ReqDto) -> ReqDto {
-    return de;
-   }
-}
+    TestServer1,
+    "1.0.0",
+    async fn do_run1(&self,de : ReqDto) -> ReqDto {
+        return de;
+    }
+    async fn do_run2(&self,de : ReqDto) -> ReqDto {
+     return de;
+    }
+ }
+
+ impl TestServer {
+    async fn do_run3(&self,de : ReqDto) -> ReqDto {
+        let de1 = self as *const TestServer ;
+        let de1 = unsafe { (&*de1).do_run2(de) }.await;
+        return de1;
+    }
+ }
 
 #[tokio::main(worker_threads = 500)]
 async fn main() {
@@ -59,8 +68,7 @@ async fn main() {
     // tracing_subscriber::registry().with(fmt::layer()).init();
     KrpcServer::build()
         .set_port("8081")
-        .add_rpc_server(Box::new(server) as Box<dyn RpcServer>)
-        .add_rpc_server(Box::new(server2) as Box<dyn RpcServer>)
+        .add_rpc_server(Box::new(server))
         .run()
         .await;
 }

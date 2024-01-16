@@ -25,8 +25,8 @@ struct TestServer;
 
 krpc_client! {
     CLI,
+    TestServer,
     "1.0.0",
-    TestServer
     async fn do_run1(&self, de : ReqDto) -> ReqDto
     async fn do_run2(&self, de : ReqDto) -> ReqDto
 }

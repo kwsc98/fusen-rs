@@ -20,9 +20,10 @@ impl KrpcServer {
         return self;
     }
 
-    pub fn add_rpc_server(mut self, server: Box<dyn RpcServer>) -> KrpcServer {
+    pub fn add_rpc_server(mut self, server:Box<dyn RpcServer>) -> KrpcServer {
+        let info = server.get_info();
         self.rpc_servers
-            .insert(server.get_info(), Arc::new(server));
+            .insert(info.0 + &info.1, Arc::new(server));
         return self;
     }
 
