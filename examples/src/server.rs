@@ -21,7 +21,7 @@ impl ReqDto {
 struct TestServer {
     str: String,
 }
-}
+
 #[derive(Clone)]
 struct TestServer1 {
     str: String,
