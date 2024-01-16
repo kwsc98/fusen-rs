@@ -22,8 +22,9 @@ impl KrpcServer {
 
     pub fn add_rpc_server(mut self, server:Box<dyn RpcServer>) -> KrpcServer {
         let info = server.get_info();
+        let key = info.0.to_string() + &info.1.to_string();
         self.rpc_servers
-            .insert(info.0 + &info.1, Arc::new(server));
+            .insert(key, Arc::new(server));
         return self;
     }
 

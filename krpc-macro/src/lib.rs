@@ -19,8 +19,8 @@ macro_rules! krpc_server {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
-            fn get_info(&self) -> (String,String) {
-               return (stringify!($name).to_string(),stringify!($version).to_string())
+            fn get_info(&self) -> (&str , &str) {
+               (stringify!($name) , $version)
             }
         }
     }

@@ -68,7 +68,8 @@ impl KrpcFilter for Filter {
 
     fn call(&self, req: Self::Response) -> Self::Future {
         let msg: KrpcMsg = req;
-        let rpc = self.map.get(&msg.class_name).unwrap().clone();
+        let class_name = (msg.class_name.clone() + &msg.version).clone();
+        let rpc = self.map.get(&class_name).unwrap().clone();
         Box::pin(async move { Ok(rpc.invoke(msg).await) })
     }
 }

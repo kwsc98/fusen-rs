@@ -41,7 +41,7 @@ impl KrpcMsg {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
-    fn get_info(&self) -> (String, String);
+    fn get_info(&self) -> (&str, &str);
 }
 
 pub struct PixBox <T>{

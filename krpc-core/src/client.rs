@@ -52,13 +52,10 @@ impl KrpcClient {
 
     async fn get_socket_sender(&self) -> SendRequest<Full<bytes::Bytes>> {
         let socket_sender = self.socket_sender.read().await;
-        println!("read");
         if socket_sender.is_none() {
-            println!("read is none");
             drop(socket_sender);
             let mut socket_sender = self.socket_sender.write().await;
             if socket_sender.is_none() {
-                println!("write");
                 let url = self.addr.parse::<hyper::Uri>().unwrap();
                 let host = url.host().expect("uri has no host");
                 let port = url.port_u16().unwrap_or(80);

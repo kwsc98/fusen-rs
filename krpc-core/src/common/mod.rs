@@ -1,4 +1,4 @@
-use uuid::{Uuid, uuid};
+use uuid::uuid;
 
 pub mod date_util;
 
