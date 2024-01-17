@@ -9,6 +9,9 @@ path = "src/server.rs"
 [[bin]]
 name = "client"
 path = "src/client.rs"
+[[bin]]
+name = "client-pt"
+path = "src/client_pt.rs"
 
 [lib]
 proc-macro = true

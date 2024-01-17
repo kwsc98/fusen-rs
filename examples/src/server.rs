@@ -21,7 +21,7 @@ krpc_server! {
    TestServer,
    "1.0.0",
    async fn do_run1(&self,res : ReqDto) -> ResDto {
-    println!("{:?}" ,res);
+    // println!("{:?}" ,res);
     return ResDto { str : "TestServer say hello 1".to_string()};
    }
    async fn do_run2(&self,res : ReqDto) -> ResDto {
@@ -30,7 +30,7 @@ krpc_server! {
    }
 }
 
-#[tokio::main(worker_threads = 500)]
+#[tokio::main(worker_threads = 512)]
 async fn main() {
     let server: TestServer = TestServer {
         _db: "我是一个DB数据库".to_string(),
