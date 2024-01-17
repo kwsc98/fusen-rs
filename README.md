@@ -45,13 +45,14 @@ Dubbo 快速入门章节中介绍了Dubbo Rust的使用方法，其实主要是�
 
 第一部分定义接口，dubbo目前支持很多协议，其中还支持gRPC协议，其中Rust版本就是通过ProtoBuf协议来实现接口
 
-![avatar](https://raw.githubusercontent.com/kwsc98/krpc-rust/main/readme_image/WechatIMG176.jpg?token=GHSAT0AAAAAACMIYVHFXNWWHJG77AMWTRRQZNH4ZZQ)
+
+![avatar](http://s7eyya91n.hb-bkt.clouddn.com/WechatIMG176.jpg)
 
 
 第二部则是通过定义文件实现相关的Rust代码，因为Rust没有运行时，所以Client调用时没有办法通过动态代理的方式生成client类，而dubbo的解决方法就是通过定义接口内容生成相关的Client调用代码，来"降低"使用者的使用成本。
 
 
-![avatar](https://raw.githubusercontent.com/kwsc98/krpc-rust/main/readme_image/WechatIMG177.jpg?token=GHSAT0AAAAAACMIYVHE37LB2MFT346RBOSUZNH42LQ)
+![avatar](http://s7eyya91n.hb-bkt.clouddn.com/WechatIMG177.jpg)
 
 
 第三部分则是编写相关的Server端代码逻辑，然后通过生成的Client代码进行RPC调用
