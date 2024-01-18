@@ -23,11 +23,11 @@ krpc_client! {
    CLI,
    TestServer,
    "1.0.0",
-   async fn do_run1(&self,res : ReqDto) -> ResDto
-   async fn do_run2(&self,res : ReqDto) -> ResDto 
-}
+   async fn do_run1(&self,res : ReqDto) -> Result<ResDto>
+   async fn do_run2(&self,res : ReqDto) -> Result<ResDto> 
+} 
 
-#[tokio::main(worker_threads = 500)]
+#[tokio::main(worker_threads = 512)]
 async fn main() {
     let client = TestServer;
     let res = client.do_run1(ReqDto{str : "client say hello 1".to_string()}).await;

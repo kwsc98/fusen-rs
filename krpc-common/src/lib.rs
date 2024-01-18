@@ -1,5 +1,6 @@
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
+pub type Response<T> = std::result::Result<T, String>;
 pub type KrpcFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 
 #[derive(Debug)]
@@ -8,7 +9,8 @@ pub struct KrpcMsg {
     pub version: String,
     pub class_name: String,
     pub method_name: String,
-    pub data: String,
+    pub req: String,
+    pub res: Response<String>,
 }
 
 impl KrpcMsg {
@@ -18,7 +20,8 @@ impl KrpcMsg {
             version: "".to_string(),
             class_name: "".to_string(),
             method_name: "".to_string(),
-            data: "".to_string(),
+            req: "".to_string(),
+            res: Err("empty".into())
         };
     }
 
@@ -27,14 +30,16 @@ impl KrpcMsg {
         version: String,
         class_name: String,
         method_name: String,
-        data: String,
+        req: String,
+        res: Response<String>
     ) -> KrpcMsg {
         return KrpcMsg {
             unique_identifier,
             version,
             class_name,
             method_name,
-            data,
+            req,
+            res
         };
     }
 }
@@ -43,9 +48,3 @@ pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
     fn get_info(&self) -> (&str, &str);
 }
-
-pub struct PixBox <T>{
-    pub ptr : T
-}
-unsafe impl<T> Send for PixBox<T> {}
-unsafe impl<T> Sync for PixBox<T> {}

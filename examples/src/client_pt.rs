@@ -17,6 +17,7 @@ struct ReqDto {
 struct ResDto {
     str: String,
 }
+
 #[derive(Clone)]
 struct TestServer;
 
@@ -24,8 +25,8 @@ krpc_client! {
    CLI,
    TestServer,
    "1.0.0",
-   async fn do_run1(&self,res : ReqDto) -> ResDto
-   async fn do_run2(&self,res : ReqDto) -> ResDto 
+   async fn do_run1(&self,res : ReqDto) -> Result<ResDto>
+   async fn do_run2(&self,res : ReqDto) -> Result<ResDto>
 }
 
 #[tokio::main(worker_threads = 512)]

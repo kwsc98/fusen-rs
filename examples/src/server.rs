@@ -1,6 +1,7 @@
+use krpc_common::Response;
 use krpc_core::server::KrpcServer;
 use krpc_macro::krpc_server;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize}; 
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ReqDto {
@@ -20,14 +21,14 @@ struct TestServer {
 krpc_server! {
    TestServer,
    "1.0.0",
-   async fn do_run1(&self,res : ReqDto) -> ResDto {
-    // println!("{:?}" ,res);
-    return ResDto { str : "TestServer say hello 1".to_string()};
+   async fn do_run1(&self,res : ReqDto) -> Result<ResDto> {
+      println!("{:?}" ,res);
+      return Err("错误".to_string());
    }
-   async fn do_run2(&self,res : ReqDto) -> ResDto {
-    println!("{:?}" ,res);
-    return ResDto { str : "TestServer say hello 2".to_string()};
-   }
+   async fn do_run2(&self,res : ReqDto) -> Result<ResDto> {
+     println!("{:?}" ,res);
+     return Ok(ResDto { str : "TestServer say hello 1".to_string()});
+    }
 }
 
 #[tokio::main(worker_threads = 512)]

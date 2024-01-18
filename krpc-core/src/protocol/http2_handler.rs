@@ -101,6 +101,7 @@ async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
         class_name,
         method_name,
         data.unwrap(),
+        krpc_common::Response::Err("empty".into())
     );
 }
 async fn encode_filter(msg: KrpcMsg) -> Result<Response<String>, std::convert::Infallible> {
@@ -109,7 +110,7 @@ async fn encode_filter(msg: KrpcMsg) -> Result<Response<String>, std::convert::I
         .header("version", msg.version)
         .header("class_name", msg.class_name)
         .header("method_name", msg.method_name)
-        .body(msg.data)
+        .body(serde_json::to_string(&msg.res).unwrap())
         .unwrap();
     return Ok(response);
 }
