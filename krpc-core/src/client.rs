@@ -2,7 +2,7 @@ use crate::support::{TokioExecutor, TokioIo};
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
-use krpc_common::{KrpcMsg, Response};
+use krpc_common::{KrpcMsg, RpcError};
 use serde::{Deserialize, Serialize};
 use tokio::io;
 use tokio::io::AsyncWriteExt;
@@ -23,33 +23,33 @@ impl KrpcClient {
         return cli;
     }
 
-    pub async fn invoke<Req, Res>(&self, msg: KrpcMsg) -> Response<Res>
+    pub async fn invoke<Req, Res>(&self, msg: KrpcMsg) -> Result<Res,RpcError>
     where
         Req: Send + Sync + Serialize,
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
         let mut sender 
-        = self.get_socket_sender().await.map_err(|e|e.to_string())?;
+        = self.get_socket_sender().await.map_err(|e|RpcError::Client(e.to_string()))?;
         let req = Request::builder()
             .header("unique_identifier", msg.unique_identifier)
             .header("version", msg.version)
             .header("class_name", msg.class_name)
             .header("method_name", msg.method_name)
-            .body(Full::<bytes::Bytes>::from(msg.req)).map_err(|e|e.to_string())?;
-        let mut res = sender.send_request(req).await.map_err(|e|e.to_string())?;
-        let res: Response<String> = serde_json::from_slice(
+            .body(Full::<bytes::Bytes>::from(msg.req)).map_err(|e|RpcError::Client(e.to_string()))?;
+        let mut res = sender.send_request(req).await.map_err(|e|RpcError::Client(e.to_string()))?;
+        let res: Result<String,RpcError> = serde_json::from_slice(
             res.frame()
                 .await
                 .unwrap()
-                .map_err(|e|e.to_string())?
+                .map_err(|e|RpcError::Client(e.to_string()))?
                 .data_ref()
                 .unwrap()
                 .as_ref(),
         )
-        .map_err(|e|e.to_string())?;
-        let res: Result<Res, String> = match res {
-            Ok(data) => Ok(serde_json::from_slice(&data.as_bytes()).map_err(|e|e.to_string())?),
-            Err(info) => Err(info),
+        .map_err(|e|RpcError::Client(e.to_string()))?;
+        let res: Result<Res, RpcError> = match res {
+            Ok(data) => Ok(serde_json::from_slice(&data.as_bytes()).map_err(|e|RpcError::Client(e.to_string()))?),
+            Err(err) => Err(err),
         };
         return res;
     }

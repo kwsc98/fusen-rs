@@ -1,7 +1,35 @@
+use std::fmt::{self, Display, Formatter};
+
+use serde::{Deserialize, Serialize};
+
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type KrpcFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum RpcError {
+    Null,
+    Client(String),
+    Server(String),
+    Method(String),
+}
+
+unsafe impl Send for RpcError {}
+unsafe impl Sync for RpcError {}
+
+impl Display for RpcError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            RpcError::Null => write!(f, "Bad value"),
+            RpcError::Client(msg) => write!(f, "RpcError::Client {}", msg),
+            RpcError::Server(msg) => write!(f, "RpcError::Server {}", msg),
+            RpcError::Method(msg) => write!(f, "RpcError::Method {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for RpcError {}
 
 #[derive(Debug)]
 pub struct KrpcMsg {
@@ -10,7 +38,7 @@ pub struct KrpcMsg {
     pub class_name: String,
     pub method_name: String,
     pub req: String,
-    pub res: Response<String>,
+    pub res: core::result::Result<String, RpcError>,
 }
 
 impl KrpcMsg {
@@ -21,7 +49,7 @@ impl KrpcMsg {
             class_name: "".to_string(),
             method_name: "".to_string(),
             req: "".to_string(),
-            res: Err("empty".into())
+            res: Err(RpcError::Null),
         };
     }
 
@@ -31,7 +59,7 @@ impl KrpcMsg {
         class_name: String,
         method_name: String,
         req: String,
-        res: Response<String>
+        res: core::result::Result<String, RpcError>,
     ) -> KrpcMsg {
         return KrpcMsg {
             unique_identifier,
@@ -39,7 +67,7 @@ impl KrpcMsg {
             class_name,
             method_name,
             req,
-            res
+            res,
         };
     }
 }

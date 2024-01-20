@@ -1,4 +1,3 @@
-use krpc_common::Response;
 use krpc_core::server::KrpcServer;
 use krpc_macro::krpc_server;
 use serde::{Deserialize, Serialize}; 
@@ -20,7 +19,7 @@ struct TestServer {
 
 krpc_server! {
    TestServer,
-   "1.0.0",
+   "1.0.01",
    async fn do_run1(&self,res : ReqDto) -> Result<ResDto> {
       println!("{:?}" ,res);
       return Err("错误".to_string());

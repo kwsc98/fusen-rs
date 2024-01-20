@@ -6,7 +6,7 @@ use crate::{
 };
 use http_body_util::BodyExt;
 use hyper::{server::conn::http2, Request, Response};
-use krpc_common::{KrpcMsg, RpcServer};
+use krpc_common::{KrpcMsg, RpcServer, RpcError};
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},
@@ -29,7 +29,7 @@ impl StreamHandler {
             |req: Request<hyper::body::Incoming>, filter_list: Arc<Vec<Filter>>| async move {
                 let mut msg = decode_filter(req).await;
                 for idx in 0..filter_list.len() {
-                    msg = filter_list[idx].call(msg).await.unwrap();
+                    msg =  filter_list[idx].call(msg).await.unwrap()
                 }
                 return encode_filter(msg).await;
             },
@@ -101,16 +101,20 @@ async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
         class_name,
         method_name,
         data.unwrap(),
-        krpc_common::Response::Err("empty".into())
+        Result::Err(RpcError::Server("empty".to_string()))
     );
 }
 async fn encode_filter(msg: KrpcMsg) -> Result<Response<String>, std::convert::Infallible> {
+    let res_data= match serde_json::to_string(&msg.res) {
+        Ok(data) => data,
+        Err(err) => err.to_string(),
+    };
     let response = Response::builder()
         .header("unique_identifier", msg.unique_identifier)
         .header("version", msg.version)
         .header("class_name", msg.class_name)
         .header("method_name", msg.method_name)
-        .body(serde_json::to_string(&msg.res).unwrap())
+        .body(res_data)
         .unwrap();
     return Ok(response);
 }

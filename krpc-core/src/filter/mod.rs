@@ -1,7 +1,7 @@
 use futures::Future;
 use http_body::Body;
 use hyper::{service::Service, Request, Response};
-use krpc_common::{KrpcMsg, RpcServer};
+use krpc_common::{KrpcMsg, RpcError, RpcServer};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 pub struct KrpcRouter<F, KF, ReqBody, Err> {
@@ -67,12 +67,21 @@ impl KrpcFilter for Filter {
     type Future = crate::KrpcFuture<Result<Self::Response, Self::Error>>;
 
     fn call(&self, req: Self::Response) -> Self::Future {
-        let msg: KrpcMsg = req;
+        let mut msg: KrpcMsg = req;
         let class_name = (msg.class_name.clone() + &msg.version).clone();
-        let rpc = self.map.get(&class_name).unwrap().clone();
-        Box::pin(async move { Ok(rpc.invoke(msg).await) })
+        match self.map.get(&class_name) {
+            Some(server) => {
+                let server = server.clone();
+                Box::pin(async move { Ok(server.invoke(msg).await) })
+            },
+            None => Box::pin(async move {
+                msg.res = Err(RpcError::Server(format!("not find server by {}",class_name))); 
+                Ok(msg)
+            })
+        }
     }
 }
+
 
 pub trait KrpcFilter {
     type Request;
