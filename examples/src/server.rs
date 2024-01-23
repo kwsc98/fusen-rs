@@ -21,7 +21,7 @@ krpc_server! {
    TestServer,
    "1.0.0",
    async fn do_run1(&self,res : ReqDto) -> Result<ResDto> {
-      println!("{:?}" ,res);
+    //   println!("{:?}" ,res);
       return Err("错误".to_string());
    }
    async fn do_run2(&self,res : ReqDto) -> Result<ResDto> {

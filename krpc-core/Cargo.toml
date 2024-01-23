@@ -31,3 +31,6 @@ uuid.workspace = true
 
 pin-project-lite.workspace = true 
 lazy_static.workspace = true
+
+#注册中心
+zookeeper-client.workspace = true

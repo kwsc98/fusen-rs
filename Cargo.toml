@@ -33,3 +33,6 @@ uuid = "1"
 pin-project-lite = "0.2.13"
 lazy_static = "1"
 proc-macro2 = "1"
+
+#注册中心
+zookeeper-client = "0.6.2"
