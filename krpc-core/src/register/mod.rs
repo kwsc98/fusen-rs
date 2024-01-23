@@ -1,4 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 pub mod zookeeper;
 
@@ -12,7 +13,7 @@ pub enum RegisterType {
     ZooKeeper,
     Nacos,
 }
-
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Info {
     server_name: String,
     version: String,
@@ -20,6 +21,7 @@ pub struct Info {
     port: Option<i32>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Resource {
     Client(Info),
     Server(Info),
@@ -31,5 +33,5 @@ pub trait Register {
         map: Arc<RwLock<HashMap<String, (Vec<Resource>, Vec<Resource>)>>>,
     ) -> Self;
 
-    async fn add_resource(&self, resource: Resource);
+    async fn add_resource(&mut self, resource: Resource);
 }
