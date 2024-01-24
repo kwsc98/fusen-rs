@@ -18,7 +18,7 @@ pub struct Info {
     server_name: String,
     version: String,
     ip: String,
-    port: Option<i32>,
+    port: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -30,8 +30,10 @@ pub enum Resource {
 pub trait Register {
     async fn init(
         register_info: RegisterInfo,
-        map: Arc<RwLock<HashMap<String, (Vec<Resource>, Vec<Resource>)>>>,
+        map: Arc<RwLock<HashMap<String, Vec<Info>>>>,
     ) -> Self;
 
     async fn add_resource(&mut self, resource: Resource);
 }
+
+

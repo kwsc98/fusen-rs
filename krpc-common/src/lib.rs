@@ -1,11 +1,14 @@
 use std::fmt::{self, Display, Formatter};
 
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type KrpcFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+
+pub mod date_util;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RpcError {
@@ -75,4 +78,21 @@ impl KrpcMsg {
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
     fn get_info(&self) -> (&str, &str);
+}
+
+
+pub fn init_log() {
+    let stdout = std::io::stdout.with_max_level(tracing::Level::DEBUG);
+    tracing_subscriber::fmt()
+        .with_writer(stdout)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .init();
+}
+
+use uuid::Uuid;
+
+
+pub fn get_uuid() -> String {
+    Uuid::new_v4().to_string()
 }

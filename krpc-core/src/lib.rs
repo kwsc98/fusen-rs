@@ -3,10 +3,8 @@ mod filter;
 pub mod protocol;
 pub mod server;
 pub mod support;
-pub mod common;
 pub mod handler;
 pub mod register;
-pub mod r#macro;
 
 pub type Error = krpc_common::Error;
 pub type Result<T> = krpc_common::Result<T>;
