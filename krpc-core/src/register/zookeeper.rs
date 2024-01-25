@@ -1,13 +1,11 @@
+use super::{Register, Resource, SocketInfo};
+use crate::register::{Info, RegisterBuilder, RegisterType};
 use async_recursion::async_recursion;
 use krpc_common::get_uuid;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info};
+use tracing::info;
 use zk::OneshotWatcher;
-
-use crate::register::Info;
-
-use super::{Register, RegisterInfo, Resource};
 use zookeeper_client as zk;
 
 static EPHEMERAL_OPEN: &zk::CreateOptions<'static> =
@@ -15,86 +13,74 @@ static EPHEMERAL_OPEN: &zk::CreateOptions<'static> =
 static CONTAINER_OPEN: &zk::CreateOptions<'static> =
     &zk::CreateMode::Container.with_acls(zk::Acls::anyone_all());
 
-struct KrpcZookeeper {
+pub struct KrpcZookeeper {
+    addr: String,
+
     root_path: String,
 
-    register_info: RegisterInfo,
-
-    map: Arc<RwLock<HashMap<String, Vec<Info>>>>,
+    map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
 }
 
 impl Register for KrpcZookeeper {
-    async fn init(
-        register_info: RegisterInfo,
-        map: Arc<RwLock<HashMap<String, Vec<Info>>>>,
-    ) -> Self {
-        let root_path = "/krpc/".to_string() + &register_info.name_space;
-        let krpc_zookeeper = KrpcZookeeper {
-            root_path,
-            register_info,
-            map,
-        };
-        return krpc_zookeeper;
-    }
-
-    async fn add_resource(&mut self, resource: Resource) {
+    fn add_resource(&mut self, resource: Resource) {
         creat_resource_node(
-            self.register_info.addr.clone(),
+            self.addr.clone(),
             self.root_path.clone(),
             resource,
             self.map.clone(),
         )
-        .await;
+    }
+}
+
+impl KrpcZookeeper {
+    pub fn init(
+        addr: &str,
+        name_space: &str,
+        map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
+    ) -> Self {
+        let root_path = "/krpc/".to_string() + name_space;
+        let krpc_zookeeper = KrpcZookeeper {
+            addr: addr.to_string(),
+            root_path,
+            map,
+        };
+        return krpc_zookeeper;
     }
 }
 
 #[tokio::test]
 async fn test() {
     // krpc_common::init_log();
-    let register_info = RegisterInfo {
-        addr: format!("127.0.0.1:{}", "2181"),
-        name_space: "default".to_string(),
-        register_type: crate::register::RegisterType::ZooKeeper,
-    };
-    let map = Arc::new(RwLock::new(HashMap::new()));
-    let mut zk = KrpcZookeeper::init(register_info, map).await;
-
-    let resource = Resource::Server(Info {
+    let mut zk = RegisterBuilder::new(
+        &format!("127.0.0.1:{}", "2181"),
+        "default",
+        RegisterType::ZooKeeper,
+    )
+    .init(Arc::new(RwLock::new(HashMap::new())));
+    zk.add_resource(Resource::Server(Info {
         server_name: "TestServer".to_string(),
         version: "1.0.0".to_string(),
         ip: "127.0.0.1".to_string(),
         port: Some("8080".to_string()),
-    });
-    zk.add_resource(resource).await;
+    }));
     zk.add_resource(Resource::Server(Info {
         server_name: "TestServer".to_string(),
         version: "1.0.0".to_string(),
         ip: "127.0.0.2".to_string(),
         port: Some("8080".to_string()),
-    }))
-    .await;
-    let de = Resource::Client(Info {
-        server_name: "TestServer".to_string(),
-        version: "1.0.0".to_string(),
-        ip: "127.0.0.2".to_string(),
-        port: None,
-    });
-    listener_resource_node_change(
-        "127.0.0.1:2181".to_string(),
-        "/krpc/default".to_string(),
-        de.clone(),
-        Arc::new(RwLock::new(HashMap::new())),
-    )
-    .await;
-    zk.add_resource(de).await;
-
+    }));
     zk.add_resource(Resource::Client(Info {
         server_name: "TestServer".to_string(),
         version: "1.0.0".to_string(),
         ip: "127.0.0.2".to_string(),
         port: None,
-    }))
-    .await;
+    }));
+    zk.add_resource(Resource::Client(Info {
+        server_name: "TestServer".to_string(),
+        version: "1.0.0".to_string(),
+        ip: "127.0.0.2".to_string(),
+        port: None,
+    }));
     let mut msp: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
     msp.1.recv().await;
 }
@@ -142,11 +128,11 @@ async fn connect(cluster: &str, chroot: &str) -> zk::Client {
     }
 }
 
-async fn creat_resource_node(
+fn creat_resource_node(
     cluster: String,
     root: String,
     resource: Resource,
-    map: Arc<RwLock<HashMap<String, Vec<Info>>>>,
+    map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
 ) {
     let mut path = root.to_string();
     let info = match resource {
@@ -156,8 +142,7 @@ async fn creat_resource_node(
                 root,
                 Resource::Client(info.clone()),
                 map,
-            )
-            .await;
+            );
             path.push_str(&("/".to_owned() + &info.server_name + "/client/"));
             info
         }
@@ -197,15 +182,16 @@ async fn creat_resource_node(
                     info!("resource node err {:?}", err);
                 }
             };
+            drop(client);
         }
     });
 }
 
-async fn listener_resource_node_change(
+fn listener_resource_node_change(
     cluster: String,
     root: String,
     resource: Resource,
-    map: Arc<RwLock<HashMap<String, Vec<Info>>>>,
+    map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
 ) {
     let mut path = root;
     let info = match resource {
@@ -232,13 +218,13 @@ async fn listener_resource_node_change(
             let mut server_list = vec![];
             for node in watcher.0 {
                 let server_info: Vec<&str> = node.split(":").collect();
-                let resource_info = Info {
+                let info = Info {
                     server_name: info.server_name.clone(),
                     version: info.version.clone(),
                     ip: server_info[0].to_string(),
                     port: Some(server_info[1].to_string()),
                 };
-                server_list.push(resource_info);
+                server_list.push(SocketInfo { info, sender: Arc::new(RwLock::new(None))});
             }
             let key = info.server_name.clone() + ":" + &info.version.clone();
             info!("update server cache {:?} : {:?}", key, server_list);

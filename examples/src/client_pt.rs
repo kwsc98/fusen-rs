@@ -1,12 +1,18 @@
 use krpc_common::date_util::get_now_date_time_as_millis;
-use krpc_core::{client::KrpcClient};
+use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
 use krpc_macro::krpc_client;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc,};
+use tokio::sync::mpsc;
 
 lazy_static! {
-    static ref CLI: KrpcClient = KrpcClient::build("http://127.0.0.1:8081".to_string());
+    static ref CLI: KrpcClient = KrpcClient::build(
+        RegisterBuilder::new(
+            &format!("127.0.0.1:{}", "2181"),
+            "default",
+            RegisterType::ZooKeeper,
+        )
+    );
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]

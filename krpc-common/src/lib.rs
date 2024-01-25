@@ -1,4 +1,4 @@
-use std::fmt::{self, Display, Formatter};
+use std::{fmt::{self, Display, Formatter}, net::IpAddr};
 
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -95,4 +95,12 @@ use uuid::Uuid;
 
 pub fn get_uuid() -> String {
     Uuid::new_v4().to_string()
+}
+
+
+pub fn get_local_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+    socket.connect("8.8.8.8:80")?;
+    let local_ip = socket.local_addr()?.ip();
+    Ok(local_ip)
 }

@@ -35,3 +35,5 @@ lazy_static.workspace = true
 
 #注册中心
 zookeeper-client.workspace = true
+
+rand.workspace = true

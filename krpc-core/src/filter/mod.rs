@@ -68,7 +68,7 @@ impl KrpcFilter for Filter {
 
     fn call(&self, req: Self::Response) -> Self::Future {
         let mut msg: KrpcMsg = req;
-        let class_name = (msg.class_name.clone() + &msg.version).clone();
+        let class_name = (msg.class_name.clone() + ":" + &msg.version).clone();
         match self.map.get(&class_name) {
             Some(server) => {
                 let server = server.clone();
