@@ -22,7 +22,7 @@ pub struct KrpcZookeeper {
 }
 
 impl Register for KrpcZookeeper {
-    fn add_resource(&mut self, resource: Resource) {
+    fn add_resource(&self, resource: Resource) {
         creat_resource_node(
             self.addr.clone(),
             self.root_path.clone(),

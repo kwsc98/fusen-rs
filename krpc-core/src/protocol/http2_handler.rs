@@ -56,6 +56,7 @@ impl StreamHandler {
 }
 
 async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
+    println!("dsds");
     let unique_identifier = req
         .headers()
         .get("unique_identifier")

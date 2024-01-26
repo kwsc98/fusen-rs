@@ -63,5 +63,5 @@ pub enum Resource {
 }
 
 pub trait Register: Send + Sync {
-    fn add_resource(&mut self, resource: Resource);
+    fn add_resource(&self, resource: Resource);
 }

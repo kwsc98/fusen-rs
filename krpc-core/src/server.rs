@@ -28,7 +28,7 @@ impl KrpcServer {
         self.register.add_resource(Resource::Server(Info {
             server_name: info.0.to_string(),
             version: info.1.to_string(),
-            ip: krpc_common::get_local_ip().unwrap().to_string(),
+            ip: krpc_common::get_ip(),
             port: Some(self.port.clone()),
         }));
         self.rpc_servers.insert(key, Arc::new(server));

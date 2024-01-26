@@ -1,4 +1,7 @@
-use std::{fmt::{self, Display, Formatter}, net::IpAddr};
+use std::{
+    fmt::{self, Display, Formatter},
+    net::IpAddr,
+};
 
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -80,7 +83,6 @@ pub trait RpcServer: Send + Sync {
     fn get_info(&self) -> (&str, &str);
 }
 
-
 pub fn init_log() {
     let stdout = std::io::stdout.with_max_level(tracing::Level::DEBUG);
     tracing_subscriber::fmt()
@@ -92,15 +94,20 @@ pub fn init_log() {
 
 use uuid::Uuid;
 
-
 pub fn get_uuid() -> String {
     Uuid::new_v4().to_string()
 }
 
-
-pub fn get_local_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
+pub fn get_network_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("8.8.8.8:80")?;
     let local_ip = socket.local_addr()?.ip();
     Ok(local_ip)
+}
+
+pub fn get_ip() -> String {
+    match get_network_ip() {
+        Ok(ok) => ok.to_string(),
+        Err(_err) => "127.0.0.1".to_string(),
+    }
 }
