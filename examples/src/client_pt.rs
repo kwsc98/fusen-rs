@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use krpc_common::date_util::get_now_date_time_as_millis;
 use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
 use krpc_macro::krpc_client;
@@ -8,7 +10,7 @@ use tokio::sync::mpsc;
 lazy_static! {
     static ref CLI: KrpcClient = KrpcClient::build(
         RegisterBuilder::new(
-            &format!("127.0.0.1:{}", "2181"),
+            &format!("192.168.10.105:{}", "2181"),
             "default",
             RegisterType::ZooKeeper,
         )
@@ -38,6 +40,8 @@ krpc_client! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
+    let _res = TestServer.do_run1(ReqDto{str : "client say hello 1".to_string()}).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let start_time = get_now_date_time_as_millis();
     let client = TestServer;
     let mut m: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);

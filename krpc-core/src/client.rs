@@ -15,12 +15,11 @@ pub struct KrpcClient {
 }
 
 impl KrpcClient {
-
     pub fn build(register_builder: RegisterBuilder) -> KrpcClient {
         let map = Arc::new(RwLock::new(HashMap::new()));
         let register = register_builder.init(map.clone());
         let cli = KrpcClient {
-            route: Route::new(map,register),
+            route: Route::new(map, register),
         };
         return cli;
     }
@@ -29,8 +28,7 @@ impl KrpcClient {
     where
         Req: Send + Sync + Serialize,
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
-    {   
-        
+    {
         let mut sender: SendRequest<Full<bytes::Bytes>> = self
             .route
             .get_socket_sender(&msg.class_name, &msg.version)

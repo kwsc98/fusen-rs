@@ -4,6 +4,8 @@ use crate::{register::SocketInfo, support::TokioIo};
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use rand::seq::SliceRandom;
+use std::collections::HashSet;
+use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use tokio::io::{self, AsyncWriteExt};
 use tokio::{net::TcpStream, sync::RwLock};
@@ -11,6 +13,7 @@ use tokio::{net::TcpStream, sync::RwLock};
 pub struct Route {
     register: Box<dyn Register>,
     map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
+    client_resource: RwLock<HashSet<String>>,
 }
 
 impl Route {
@@ -18,7 +21,12 @@ impl Route {
         map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
         register: Box<dyn Register>,
     ) -> Self {
-        Route { map, register }
+        let client_resource = RwLock::new(HashSet::new());
+        Route {
+            map,
+            register,
+            client_resource,
+        }
     }
 
     pub async fn get_socket_sender(
@@ -43,21 +51,21 @@ impl Route {
                         ip: krpc_common::get_ip(),
                         port: None,
                     });
-                    let mut map_write_lock = self.map.write().await;
-                    let value = map_write_lock.get(&(class_name.to_owned() + ":" + version));
-                    match value {
-                        Some(value) => {
-                            vec_info = value.clone();
-                            break;
-                        }
-                        None => {
-                            map_write_lock.insert(class_name.to_owned() + ":" + version, vec![]);
-                            drop(map_write_lock);
+                    let read_lock = self.client_resource.read().await;
+                    let value = read_lock.get(&(class_name.to_owned() + ":" + version));
+                    if let None = value {
+                        drop(read_lock);
+                        let mut write_lock = self.client_resource.write().await;
+                        if let None =  write_lock.get(&(class_name.to_owned() + ":" + version)) {
                             self.register.add_resource(resource_client);
+                            write_lock.insert(class_name.to_owned() + ":" + version);
+                            // tokio::time::sleep(Duration::from_millis(1000)).await;
+                            drop(write_lock);
                         }
                     }
                 }
             }
+            // tokio::time::sleep(Duration::from_millis(50)).await;
         }
         let socket_info = vec_info
             .choose(&mut rand::thread_rng())

@@ -40,7 +40,7 @@ async fn main() {
     };
     KrpcServer::build(
         RegisterBuilder::new(
-            &format!("127.0.0.1:{}", "2181"),
+            &format!("192.168.10.105:{}", "2181"),
             "default",
             RegisterType::ZooKeeper,
         ),
