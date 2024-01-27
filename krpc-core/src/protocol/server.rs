@@ -28,7 +28,7 @@ impl TcpServer {
         };
     }
     pub async fn run(self) -> crate::Result<()> {
-        let listener = TcpListener::bind(&format!("127.0.0.1:{}", self.port)).await?;
+        let listener = TcpListener::bind(&format!("0.0.0.0:{}", self.port)).await?;
         loop {
             let tcp_stream = tokio::select! {
                 _ = signal::ctrl_c() => {
