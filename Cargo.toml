@@ -18,6 +18,7 @@ http-body-util = "0.1.0"
 bytes = "1"
 futures = "0.3"
 async-trait = "0.1.74"
+async-recursion = "1"
 
 #日志处理
 tracing = "0.1.13"
@@ -33,6 +34,7 @@ uuid = "1"
 pin-project-lite = "0.2.13"
 lazy_static = "1"
 proc-macro2 = "1"
+rand = "0"
 
 #注册中心
 zookeeper-client = "0.6.2"

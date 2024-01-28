@@ -17,6 +17,7 @@ http-body-util.workspace = true
 bytes.workspace = true 
 futures.workspace = true 
 async-trait.workspace = true 
+async-recursion.workspace = true
 
 #日志处理
 tracing.workspace = true 
@@ -34,3 +35,5 @@ lazy_static.workspace = true
 
 #注册中心
 zookeeper-client.workspace = true
+
+rand.workspace = true
