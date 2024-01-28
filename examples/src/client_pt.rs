@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 lazy_static! {
     static ref CLI: KrpcClient = KrpcClient::build(
         RegisterBuilder::new(
-            &format!("192.168.10.105:{}", "2181"),
+            &format!("127.0.0.1:{}", "2181"),
             "default",
             RegisterType::ZooKeeper,
         )
@@ -96,7 +96,7 @@ async fn do_run(client : TestServer , sender : mpsc::Sender<i32>) {
         let temp_sender = sender.clone();
         tokio::spawn(async move {
             let res = temp_client.do_run2(ReqDto{str : "client say hello 1".to_string()}).await;
-            // println!("{:?}",res);
+            println!("{:?}",res);
             drop(temp_sender);
         });
     }

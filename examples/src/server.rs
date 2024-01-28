@@ -28,7 +28,7 @@ krpc_server! {
       return Err("错误".to_string());
    }
    async fn do_run2(&self,res : ReqDto) -> Result<ResDto> {
-    //  println!("{:?}" ,res);
+     println!("{:?}" ,res);
      return Ok(ResDto { str : "TestServer say hello 1".to_string()});
     }
 }
@@ -40,7 +40,7 @@ async fn main() {
     };
     KrpcServer::build(
         RegisterBuilder::new(
-            &format!("192.168.10.105:{}", "2181"),
+            &format!("127.0.0.1:{}", "2181"),
             "default",
             RegisterType::ZooKeeper,
         ),

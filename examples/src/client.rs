@@ -2,12 +2,11 @@ use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
 use krpc_macro::krpc_client;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 lazy_static! {
     static ref CLI: KrpcClient = KrpcClient::build(
         RegisterBuilder::new(
-            &format!("192.168.10.105:{}", "2181"),
+            &format!("127.0.0.1:{}", "2181"),
             "default",
             RegisterType::ZooKeeper,
         )
@@ -41,8 +40,6 @@ async fn main() {
     println!("{:?}",res);
     let res = client.do_run2(ReqDto{str : "client say hello 2".to_string()}).await;
     println!("{:?}",res);
-    let mut msp: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
-    msp.1.recv().await;
 }
 
 
