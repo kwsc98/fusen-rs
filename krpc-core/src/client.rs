@@ -1,6 +1,5 @@
-use crate::register::{Info, Register, RegisterBuilder, SocketInfo};
-use crate::route::{self, Route};
-use crate::support::{TokioExecutor, TokioIo};
+use crate::register::RegisterBuilder;
+use crate::route::Route;
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;

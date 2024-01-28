@@ -1,13 +1,11 @@
-use crate::register::{self, Info, Register, Resource};
+use crate::register::{Info, Register, Resource};
 use crate::support::TokioExecutor;
 use crate::{register::SocketInfo, support::TokioIo};
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
-use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
-use tokio::io::{self, AsyncWriteExt};
 use tokio::{net::TcpStream, sync::RwLock};
 
 pub struct Route {
@@ -34,7 +32,7 @@ impl Route {
         class_name: &str,
         version: &str,
     ) -> crate::Result<SendRequest<Full<bytes::Bytes>>> {
-        let mut vec_info: Vec<SocketInfo> = vec![];
+        let vec_info: Vec<SocketInfo>;
         loop {
             let map = self.map.read().await;
             let value = map.get(&(class_name.to_owned() + ":" + version));
@@ -56,16 +54,14 @@ impl Route {
                     if let None = value {
                         drop(read_lock);
                         let mut write_lock = self.client_resource.write().await;
-                        if let None =  write_lock.get(&(class_name.to_owned() + ":" + version)) {
+                        if let None = write_lock.get(&(class_name.to_owned() + ":" + version)) {
                             self.register.add_resource(resource_client);
                             write_lock.insert(class_name.to_owned() + ":" + version);
-                            // tokio::time::sleep(Duration::from_millis(1000)).await;
                             drop(write_lock);
                         }
                     }
                 }
             }
-            // tokio::time::sleep(Duration::from_millis(50)).await;
         }
         let socket_info = vec_info
             .choose(&mut rand::thread_rng())
@@ -93,14 +89,11 @@ impl Route {
                         .adaptive_window(true)
                         .handshake(stream)
                         .await?;
+                let sender = sender.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = conn.await {
-                        let mut stdout = io::stdout();
-                        stdout
-                            .write_all(format!("Connection failed: {:?}", err).as_bytes())
-                            .await
-                            .unwrap();
-                        stdout.flush().await.unwrap();
+                    let sender = sender;
+                    if let Err(_err) = conn.await {
+                        sender.write().await.take();
                     }
                 });
                 let _ = sender_write_lock.insert(sender_requset.clone());

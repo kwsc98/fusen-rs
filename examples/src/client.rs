@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
 use krpc_macro::krpc_client;
 use lazy_static::lazy_static;

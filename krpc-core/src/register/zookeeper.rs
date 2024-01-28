@@ -1,9 +1,9 @@
 use super::{Register, Resource, SocketInfo};
-use crate::register::{Info, RegisterBuilder, RegisterType};
+use crate::register::Info;
 use async_recursion::async_recursion;
 use krpc_common::get_uuid;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use tracing::info;
 use zk::OneshotWatcher;
 use zookeeper_client as zk;
@@ -46,43 +46,6 @@ impl KrpcZookeeper {
         };
         return krpc_zookeeper;
     }
-}
-
-#[tokio::test]
-async fn test() {
-    // krpc_common::init_log();
-    let mut zk = RegisterBuilder::new(
-        &format!("127.0.0.1:{}", "2181"),
-        "default",
-        RegisterType::ZooKeeper,
-    )
-    .init(Arc::new(RwLock::new(HashMap::new())));
-    zk.add_resource(Resource::Server(Info {
-        server_name: "TestServer".to_string(),
-        version: "1.0.0".to_string(),
-        ip: "127.0.0.1".to_string(),
-        port: Some("8080".to_string()),
-    }));
-    zk.add_resource(Resource::Server(Info {
-        server_name: "TestServer".to_string(),
-        version: "1.0.0".to_string(),
-        ip: "127.0.0.2".to_string(),
-        port: Some("8080".to_string()),
-    }));
-    zk.add_resource(Resource::Client(Info {
-        server_name: "TestServer".to_string(),
-        version: "1.0.0".to_string(),
-        ip: "127.0.0.2".to_string(),
-        port: None,
-    }));
-    zk.add_resource(Resource::Client(Info {
-        server_name: "TestServer".to_string(),
-        version: "1.0.0".to_string(),
-        ip: "127.0.0.2".to_string(),
-        port: None,
-    }));
-    let mut msp: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
-    msp.1.recv().await;
 }
 
 #[async_recursion]
