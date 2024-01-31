@@ -23,9 +23,8 @@ impl KrpcClient {
         return cli;
     }
 
-    pub async fn invoke<Req, Res>(&self, msg: KrpcMsg) -> Result<Res, RpcError>
+    pub async fn invoke<Res>(&self, msg: KrpcMsg) -> Result<Res, RpcError>
     where
-        Req: Send + Sync + Serialize,
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
         let mut sender: SendRequest<Full<bytes::Bytes>> = self

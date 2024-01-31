@@ -18,7 +18,7 @@ struct ReqDto {
     str: String,
 }
 
-#[derive(Serialize, Deserialize, Default,Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct ResDto {
     str: String,
 }
@@ -29,14 +29,17 @@ krpc_client! {
    CLI,
    TestServer,
    "1.0.0",
-   async fn do_run1(&self,res : ReqDto) -> Result<ResDto>
+   async fn do_run1(&self,res1 : ReqDto,res2 : ResDto) -> Result<ResDto>
    async fn do_run2(&self,res : ReqDto) -> Result<ResDto> 
 } 
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
+    krpc_common::init_log();
     let client = TestServer;
-    let res = client.do_run1(ReqDto{str : "client say hello 1".to_string()}).await;
+    let res = client.do_run1(
+        ReqDto{str : "client say hello 1".to_string()},
+        ResDto{str : "client say hello 2".to_string()}).await;
     println!("{:?}",res);
     let res = client.do_run2(ReqDto{str : "client say hello 2".to_string()}).await;
     println!("{:?}",res);

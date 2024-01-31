@@ -13,8 +13,6 @@ path = "src/client.rs"
 name = "client-pt"
 path = "src/client_pt.rs"
 
-[lib]
-proc-macro = true
 
 [dependencies]
 krpc-common = { path = "../krpc-common"}
