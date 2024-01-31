@@ -10,7 +10,7 @@ struct ReqDto {
     str: String,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default,Debug)]
 struct ResDto {
     str: String,
 }
@@ -23,18 +23,19 @@ struct TestServer {
 krpc_server! {
    TestServer,
    "1.0.0",
-   async fn do_run1(&self,res : ReqDto) -> Result<ResDto> {
-      println!("{:?}" ,res);
+   async fn do_run1(&self,res1 : ReqDto,res2 : ResDto) -> Result<ResDto> {
+      println!("res1 : {:?} , res2 : {:?}" ,res1, res2);
       return Err("错误".to_string());
    }
    async fn do_run2(&self,res : ReqDto) -> Result<ResDto> {
      println!("{:?}" ,res);
-     return Ok(ResDto { str : "TestServer say hello 1".to_string()});
+     return Ok(ResDto { str : "TestServer say hello 2".to_string()});
     }
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
+    krpc_common::init_log();
     let server: TestServer = TestServer {
         _db: "我是一个DB数据库".to_string(),
     };

@@ -2,15 +2,25 @@
 macro_rules! krpc_server {
     ($name:ident,
     $version:expr,
-    $(async fn $method:ident (&$self:ident, $req:ident : $reqType:ty ) -> Result<$resType:ty>  { $($code:tt)* })*) => {
+    $(async fn $method:ident (&$self:ident $(,$req:ident : $reqType:ty)* ) -> Result<$resType:ty>  { $($code:tt)* })*) => {
         impl $name {
-            $(async fn $method (&$self, $req : $reqType) -> krpc_common::Response<$resType> { $($code)* })*
+            $(async fn $method (&$self $(,$req : $reqType)* ) -> krpc_common::Response<$resType> { $($code)* })*
 
             async fn prv_invoke (&self, mut param : krpc_common::KrpcMsg) -> krpc_common::KrpcMsg {
                 $(if &param.method_name[..] == stringify!($method) {
                     param.res = match serde_json::from_slice(param.req.as_bytes()){
                         Ok(req) => {
-                            let res = self.$method(req).await;
+                            let req : Vec<String> = req;
+                            let mut idx = 0;
+                            $(
+                                let $req : $reqType = serde_json::from_slice(req[idx].as_bytes()).unwrap();
+                                idx += 1;
+                            )*
+                            let res = self.$method(
+                                $(
+                                    $req,
+                                )*
+                            ).await;
                             match res {
                                 Ok(res) => {
                                     let res = serde_json::to_string(&res);
@@ -46,23 +56,27 @@ macro_rules! krpc_client {
     $cli:ident,
     $name:ident,
     $version:expr,
-    $(async fn $method:ident (&$self:ident, $req:ident : $reqType:ty ) -> Result<$resType:ty> )*) => {
+    $(async fn $method:ident (&$self:ident $(,$req:ident : $reqType:ty)* ) -> Result<$resType:ty> )*) => {
         impl $name {
-            $(async fn $method (&$self, $req : $reqType) -> Result<$resType,krpc_common::RpcError> {
-                let mut res_str = serde_json::to_string(&$req);
-                if let Err(err) = res_str {
-                    return Err(krpc_common::RpcError::Client(err.to_string()));
-                }
-                let res_str = res_str.unwrap();
+            $(async fn $method (&$self $(,$req : $reqType)*) -> Result<$resType,krpc_common::RpcError> {
+                let mut req_vec : Vec<String> = vec![];
+                $(
+                    let mut res_str = serde_json::to_string(&$req);
+                    if let Err(err) = res_str {
+                        return Err(krpc_common::RpcError::Client(err.to_string()));
+                    }
+                    req_vec.push(res_str.unwrap());
+                )*
+                let req_str = serde_json::to_string(&req_vec).unwrap();
                 let msg = krpc_common::KrpcMsg::new(
                     "unique_identifier".to_string(),
                     $version.to_string(),
                     stringify!($name).to_string(),
                     stringify!($method).to_string(),
-                    res_str,
+                    req_str,
                     Err(krpc_common::RpcError::Null)
                 );
-                let res : Result<$resType,krpc_common::RpcError> = $cli.invoke::<$reqType,$resType>(msg).await;
+                let res : Result<$resType,krpc_common::RpcError> = $cli.invoke::<$resType>(msg).await;
                 return res;
             })*
         }
