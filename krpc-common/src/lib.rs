@@ -80,7 +80,7 @@ impl KrpcMsg {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
-    fn get_info(&self) -> (&str, &str);
+    fn get_info(&self) -> (&str, &str, &str);
 }
 
 pub fn init_log() {

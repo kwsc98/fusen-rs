@@ -21,6 +21,7 @@ struct TestServer {
 }
 
 krpc_server! {
+   "com.krpc",
    TestServer,
    "1.0.0",
    async fn do_run1(&self,res1 : ReqDto,res2 : ResDto) -> Result<ResDto> {

@@ -1,6 +1,8 @@
 #[macro_export]
 macro_rules! krpc_server {
-    ($name:ident,
+    (
+    $package:expr,
+    $name:ident,
     $version:expr,
     $(async fn $method:ident (&$self:ident $(,$req:ident : $reqType:ty)* ) -> Result<$resType:ty>  { $($code:tt)* })*) => {
         impl $name {
@@ -43,8 +45,8 @@ macro_rules! krpc_server {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
-            fn get_info(&self) -> (&str , &str) {
-               (stringify!($name) , $version)
+            fn get_info(&self) -> (&str , &str , &str) {
+               ($package ,stringify!($name) , $version )
             }
         }
     }
@@ -54,6 +56,7 @@ macro_rules! krpc_server {
 macro_rules! krpc_client {
     (
     $cli:ident,
+    $package:expr,
     $name:ident,
     $version:expr,
     $(async fn $method:ident (&$self:ident $(,$req:ident : $reqType:ty)* ) -> Result<$resType:ty> )*) => {
@@ -71,7 +74,7 @@ macro_rules! krpc_client {
                 let msg = krpc_common::KrpcMsg::new(
                     "unique_identifier".to_string(),
                     $version.to_string(),
-                    stringify!($name).to_string(),
+                    $package.to_owned() + "." + stringify!($name),
                     stringify!($method).to_string(),
                     req_str,
                     Err(krpc_common::RpcError::Null)

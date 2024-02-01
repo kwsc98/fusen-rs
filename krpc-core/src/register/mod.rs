@@ -1,10 +1,11 @@
-use self::zookeeper::KrpcZookeeper;
+use self::{dubbo_zookeeper::DubboZookeeper, zookeeper::KrpcZookeeper};
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 pub mod zookeeper;
+pub mod dubbo_zookeeper;
 
 pub struct RegisterBuilder {
     addr: String,
@@ -27,6 +28,9 @@ impl RegisterBuilder {
                 Box::new(KrpcZookeeper::init(&self.addr, &self.name_space, map))
             }
             RegisterType::Nacos => panic!("not support"),
+            RegisterType::DubboZooKeeper => {
+                Box::new(DubboZookeeper::init(&self.addr, &self.name_space, map))
+            },
         }
     }
 }
@@ -35,6 +39,7 @@ impl RegisterBuilder {
 pub enum RegisterType {
     ZooKeeper,
     Nacos,
+    DubboZooKeeper,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Info {
