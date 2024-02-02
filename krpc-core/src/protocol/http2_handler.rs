@@ -56,34 +56,9 @@ impl StreamHandler {
 }
 
 async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
-    let unique_identifier = req
-        .headers()
-        .get("unique_identifier")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    let version = req
-        .headers()
-        .get("version")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    let class_name = req
-        .headers()
-        .get("class_name")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    let method_name = req
-        .headers()
-        .get("method_name")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+    let url = req.uri().path().to_string();
+    println!("url : {:?}",url);
+    println!("header : {:?}",req.headers());
     let data = String::from_utf8(
         req.body_mut()
             .frame()
@@ -95,11 +70,13 @@ async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
             .as_ref()
             .to_vec(),
     );
+    println!("data : {:?}",data);
+    let path: Vec<&str> = url.split("/").collect();
     return KrpcMsg::new(
-        unique_identifier,
-        version,
-        class_name,
-        method_name,
+        "unique_identifier".to_string(),
+        "1.0.0".to_string(),
+        path[1].to_string(),
+        path[2].to_string(),
         data.unwrap(),
         Result::Err(RpcError::Server("empty".to_string()))
     );

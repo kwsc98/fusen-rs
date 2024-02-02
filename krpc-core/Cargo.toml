@@ -30,6 +30,8 @@ serde.workspace = true
 serde_json.workspace = true 
 uuid.workspace = true
 
+prost = "0.12.3"
+
 pin-project-lite.workspace = true 
 lazy_static.workspace = true
 

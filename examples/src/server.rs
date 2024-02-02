@@ -1,3 +1,4 @@
+use krpc_common::url_util::{decode_url, encode_url};
 use krpc_core::{
     register::{RegisterBuilder, RegisterType},
     server::KrpcServer,
@@ -36,6 +37,8 @@ krpc_server! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
+  
+
     krpc_common::init_log();
     let server: TestServer = TestServer {
         _db: "我是一个DB数据库".to_string(),
@@ -51,4 +54,11 @@ async fn main() {
     .add_rpc_server(Box::new(server))
     .run()
     .await;
+}
+#[test]
+fn test() {
+    let str = "/dubbo/org.apache.dubbo.springboot.demo.DemoService/providers/tri%3A%2F%2F10.224.1.29%3A50052%2Forg.apache.dubbo.springboot.demo.DemoService%3Fapplication%3Ddubbo-springboot-demo-provider%26deprecated%3Dfalse%26dubbo%3D2.0.2%26dynamic%3Dtrue%26generic%3Dfalse%26interface%3Dorg.apache.dubbo.springboot.demo.DemoService%26methods%3DsayHello%26prefer.serialization%3Dfastjson2%2Chessian2%26release%3D3.3.0-beta.1%26service-name-mapping%3Dtrue%26side%3Dprovider%26timestamp%3D1706775452118";
+    let str = decode_url(str).unwrap();
+    println!("{:?}",str);
+    println!("{:?}",encode_url(&str));
 }

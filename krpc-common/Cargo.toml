@@ -9,6 +9,7 @@ serde.workspace = true
 serde_json.workspace = true 
 uuid.workspace = true
 
+percent-encoding.workspace = true
 
 #日志处理
 tracing.workspace = true 

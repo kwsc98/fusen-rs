@@ -12,6 +12,7 @@ pub type Response<T> = std::result::Result<T, String>;
 pub type KrpcFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 
 pub mod date_util;
+pub mod url_util;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RpcError {

@@ -1,11 +1,12 @@
+use crate::support::dubbo::{decode_url, encode_url};
+
 use super::{Register, Resource, SocketInfo};
-use crate::register::Info;
 use async_recursion::async_recursion;
 use krpc_common::get_uuid;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::info;
-use zk::OneshotWatcher;
+use zk::{Client, OneshotWatcher};
 use zookeeper_client as zk;
 
 static EPHEMERAL_OPEN: &zk::CreateOptions<'static> =
@@ -14,7 +15,6 @@ static CONTAINER_OPEN: &zk::CreateOptions<'static> =
     &zk::CreateMode::Container.with_acls(zk::Acls::anyone_all());
 
 pub struct DubboZookeeper {
-    
     addr: String,
 
     root_path: String,
@@ -99,7 +99,7 @@ fn creat_resource_node(
     map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
 ) {
     let mut path = root.to_string();
-    let info = match resource {
+    let info = match &resource {
         Resource::Client(info) => {
             listener_resource_node_change(
                 cluster.clone(),
@@ -115,13 +115,7 @@ fn creat_resource_node(
             info
         }
     };
-    let mut node_name = "/".to_owned() + &info.ip.clone();
-    match info.port.clone() {
-        Some(port) => node_name.push_str(&(":".to_owned() + &port.to_string())),
-        None => {
-            node_name.push_str(&(":".to_owned() + &get_uuid()));
-        }
-    };
+    let mut node_name = encode_url(&resource);
     let node_data = serde_json::to_string(&info).unwrap();
     tokio::spawn(async move {
         loop {
@@ -131,7 +125,8 @@ fn creat_resource_node(
                 .await
             {
                 Ok(_) => {}
-                Err(_err) => {
+                Err(err) => {
+                    info!("create node err {:?}", err);
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
@@ -179,14 +174,13 @@ fn listener_resource_node_change(
                 };
             let mut server_list = vec![];
             for node in watcher.0 {
-                let server_info: Vec<&str> = node.split(":").collect();
-                let info = Info {
-                    server_name: info.server_name.clone(),
-                    version: info.version.clone(),
-                    ip: server_info[0].to_string(),
-                    port: Some(server_info[1].to_string()),
-                };
-                server_list.push(SocketInfo { info, sender: Arc::new(RwLock::new(None))});
+                let info = decode_url(&node).unwrap();
+                if let Resource::Client(info) = info {
+                    server_list.push(SocketInfo {
+                        info,
+                        sender: Arc::new(RwLock::new(None)),
+                    });
+                }
             }
             let key = info.server_name.clone() + ":" + &info.version.clone();
             info!("update server cache {:?} : {:?}", key, server_list);
