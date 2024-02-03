@@ -6,6 +6,7 @@ use tokio::{
 pub mod server;
 
 mod http2_handler;
+mod compression;
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,

@@ -37,7 +37,12 @@ krpc_server! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-  
+    
+        prost_build::Config::new()
+            .out_dir("examples/src/proto")//设置proto输出目录
+            .compile_protos(&["examples/src/proto/triple_wrapper.proto"], &["."])//我们要处理的proto文件
+            .unwrap();
+    
 
     krpc_common::init_log();
     let server: TestServer = TestServer {
@@ -57,7 +62,7 @@ async fn main() {
 }
 #[test]
 fn test() {
-    let str = "/dubbo/org.apache.dubbo.springboot.demo.DemoService/providers/tri%3A%2F%2F10.224.1.29%3A50052%2Forg.apache.dubbo.springboot.demo.DemoService%3Fapplication%3Ddubbo-springboot-demo-provider%26deprecated%3Dfalse%26dubbo%3D2.0.2%26dynamic%3Dtrue%26generic%3Dfalse%26interface%3Dorg.apache.dubbo.springboot.demo.DemoService%26methods%3DsayHello%26prefer.serialization%3Dfastjson2%2Chessian2%26release%3D3.3.0-beta.1%26service-name-mapping%3Dtrue%26side%3Dprovider%26timestamp%3D1706775452118";
+    let str = "/dubbo/org.apache.dubbo.springboot.demo.DemoService/providers/tri%3A%2F%2F192.168.10.111%3A50052%2Forg.apache.dubbo.springboot.demo.DemoService%3Fapplication%3Ddubbo-springboot-demo-provider%26deprecated%3Dfalse%26dubbo%3D2.0.2%26dynamic%3Dtrue%26generic%3Dfalse%26interface%3Dorg.apache.dubbo.springboot.demo.DemoService%26methods%3DsayHello%26prefer.serialization%3Djson%26release%3D3.3.0-beta.1%26serialization%3Djson%26service-name-mapping%3Dtrue%26side%3Dprovider%26timestamp%3D1706958095974";
     let str = decode_url(str).unwrap();
     println!("{:?}",str);
     println!("{:?}",encode_url(&str));
