@@ -3,8 +3,9 @@ use std::{collections::HashMap, io::Read, sync::Arc};
 use crate::{
     filter::{Filter, KrpcFilter, KrpcRouter}, protocol::compression::{decompress, CompressionEncoding}, support::{triple::TripleRequestWrapper, TokioExecutor, TokioIo}
 };
-use bytes::{buf::{self, Reader}, Bytes, BytesMut};
+use bytes::{buf::{self, Reader}, BufMut, Bytes, BytesMut};
 use bzip2::{read::BzDecoder, read::BzEncoder, Compression};
+use flate2::GzBuilder;
 use http_body_util::BodyExt;
 use hyper::{server::conn::http2, Request, Response};
 use krpc_common::{KrpcMsg, RpcServer, RpcError};
@@ -72,31 +73,24 @@ async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
             .into_data()
             .unwrap();
 
-    // let data = "Hello, World!".as_bytes();
-    // let mut de_dst = bytes::BytesMut::new();
-    // decompress(CompressionEncoding::Gzip, &mut dst, &mut de_dst, len).unwrap()
-    // let data = "Hello, World!".as_bytes();
-    // let compressor = BzEncoder::new(data, Compression::best());
-    let data = "Hello, World!".as_bytes();
-let mut compressor = BzEncoder::new(data, Compression::best());
-let mut dtet = String::new();
-   compressor.read_to_string(&mut dtet);
-    // let bug = bytes::Bytes::from(data);
-    println!("de_dst : {:?}",dtet);
-    let mut buf = BytesMut::default();
-    let mut de = TripleRequestWrapper::default();
-    de.serialize_type = "json".to_string();
-    de.encode(&mut buf);
-    println!("data : {:?}",buf);
-    let req =  TripleRequestWrapper::decode_length_delimited(data);
-    println!("data : {:?}",req);
+
+    //  let mut trip = TripleRequestWrapper::default();
+    //  trip.serialize_type = "fastjson2".to_string();
+    //  trip.args = vec!["{\"name\":\"world\"}".as_bytes().to_vec()];
+    //  trip.arg_types = vec!["org.apache.dubbo.springboot.demo.ReqDto".to_string()];
+
+
+    println!("data : {:?}" ,data);
+
+    let mut trip: Result<TripleRequestWrapper, prost::DecodeError> = TripleRequestWrapper::decode(data);
+    println!("encode : {:?}" ,trip);
     let path: Vec<&str> = url.split("/").collect();
     return KrpcMsg::new(
         "unique_identifier".to_string(),
         "1.0.0".to_string(),
         path[1].to_string(),
         path[2].to_string(),
-        "ds".to_string(),
+        trip.unwrap().get_req(),
         Result::Err(RpcError::Server("empty".to_string()))
     );
 }

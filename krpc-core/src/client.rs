@@ -1,9 +1,11 @@
 use crate::register::RegisterBuilder;
 use crate::route::Route;
+use crate::support::triple::TripleRequestWrapper;
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
 use krpc_common::{KrpcMsg, RpcError};
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,11 +35,9 @@ impl KrpcClient {
             .await
             .map_err(|e| RpcError::Client(e.to_string()))?;
         let req = Request::builder()
-            .header("unique_identifier", msg.unique_identifier)
-            .header("version", msg.version)
-            .header("class_name", msg.class_name)
-            .header("method_name", msg.method_name)
-            .body(Full::<bytes::Bytes>::from(msg.req))
+            .uri("/".to_owned() + &msg.class_name + "/" + &msg.method_name)
+            .header("content-type", "application/grpc")
+            .body(Full::<bytes::Bytes>::from(TripleRequestWrapper::get_request(msg.req).encode_to_vec()))
             .map_err(|e| RpcError::Client(e.to_string()))?;
         let mut res = sender
             .send_request(req)

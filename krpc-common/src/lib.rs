@@ -44,7 +44,7 @@ pub struct KrpcMsg {
     pub version: String,
     pub class_name: String,
     pub method_name: String,
-    pub req: String,
+    pub req: Vec<String>,
     pub res: core::result::Result<String, RpcError>,
 }
 
@@ -55,7 +55,7 @@ impl KrpcMsg {
             version: "".to_string(),
             class_name: "".to_string(),
             method_name: "".to_string(),
-            req: "".to_string(),
+            req: vec![],
             res: Err(RpcError::Null),
         };
     }
@@ -65,7 +65,7 @@ impl KrpcMsg {
         version: String,
         class_name: String,
         method_name: String,
-        req: String,
+        req: Vec<String>,
         res: core::result::Result<String, RpcError>,
     ) -> KrpcMsg {
         return KrpcMsg {

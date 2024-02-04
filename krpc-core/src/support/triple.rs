@@ -32,3 +32,24 @@ pub struct TripleExceptionWrapper {
     #[prost(bytes = "vec", tag = "4")]
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
+
+impl TripleRequestWrapper {
+    pub fn get_request(strs: Vec<String>) -> Self {
+        let mut trip = TripleRequestWrapper::default();
+        trip.serialize_type = "fastjson2".to_string();
+        trip.args = vec![];
+        for str in strs {
+            trip.args.push(str.as_bytes().to_vec());
+        }
+        trip.arg_types = vec!["org.apache.dubbo.springboot.demo.ReqDto".to_string()];
+        return trip;
+    }
+
+    pub fn get_req(&self)-> Vec<String> {
+        let mut res = vec![];
+        for str in &self.args {
+            res.push(String::from_utf8(str.clone()).unwrap());
+        }
+        return res;
+    }
+}
