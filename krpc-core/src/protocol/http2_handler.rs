@@ -69,6 +69,8 @@ async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
     let url = req.uri().path().to_string();
     println!("url : {:?}", url);
     println!("header : {:?}", req.headers());
+    println!("aa : {:?}", req.extensions());
+
     let mut data: Bytes = req
         .body_mut()
         .frame()
@@ -77,10 +79,7 @@ async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
         .unwrap()
         .into_data()
         .unwrap();
-    println!("data : {:?}", data.to_vec());
-    let mut data = &data[5..];
-    let mut trip = TripleRequestWrapper::decode(data).unwrap();
-    println!("encode : {:?}", trip);
+    let trip = TripleRequestWrapper::decode(&data[5..]).unwrap();
     let path: Vec<&str> = url.split("/").collect();
     return KrpcMsg::new(
         "unique_identifier".to_string(),
@@ -94,23 +93,15 @@ async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
 async fn encode_filter(
     msg: KrpcMsg,
 ) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible> {
-    let mut buf = bytes::BytesMut::new();
-    buf.put_u8(b'\0');
-    buf.put_u8(b'\0');
-    buf.put_u8(b'\0');
-    buf.put_u8(b'\0');
-    buf.put_u8(b'F');
     let res_data = match msg.res {
-        Ok(data) => TripleResponseWrapper::get_respons(data)
-            .encode_to_vec()
-            .encode(&mut buf),
-        Err(err) => TripleExceptionWrapper::get_exception(err.to_string()).encode(&mut buf),
+        Ok(data) => TripleResponseWrapper::get_buf(data),
+        Err(err) => TripleExceptionWrapper::get_buf(err.to_string())
     };
-
-    println!("{:?}", buf);
     let response = Response::builder()
-        .header("content-type", "application/grpc+proto")
-        .body(Full::<bytes::Bytes>::from(buf.to_vec()))
+        .header("content-type", "application/grpc")
+        .header("te", "trailers")
+        .status(200)
+        .body(Full::<bytes::Bytes>::from(res_data))
         .unwrap();
     return Ok(response);
 }

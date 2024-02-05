@@ -1,3 +1,6 @@
+use bytes::BufMut;
+use prost::Message;
+
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TripleRequestWrapper {
@@ -35,17 +38,16 @@ pub struct TripleExceptionWrapper {
 
 
 impl TripleRequestWrapper {
-    pub fn get_request(strs: Vec<String>) -> Self {
+    pub fn get_buf(strs: Vec<String>) -> Vec<u8> {        
         let mut trip = TripleRequestWrapper::default();
         trip.serialize_type = "fastjson".to_string();
         trip.args = vec![];
         for str in strs {
             trip.args.push(str.as_bytes().to_vec());
         }
-        trip.arg_types = vec!["org.apache.dubbo.springboot.demo.ReqDto".to_string()];
-        return trip;
+        trip.arg_types = vec![];
+        return get_buf(trip.encode_to_vec());
     }
-
     pub fn get_req(&self)-> Vec<String> {
         let mut res = vec![];
         for str in &self.args {
@@ -56,21 +58,39 @@ impl TripleRequestWrapper {
 }
 
 impl TripleResponseWrapper {
-    pub fn get_respons(strs: String) -> Self {
+    pub fn get_buf(strs: String) -> Vec<u8> {
         let mut trip = TripleResponseWrapper::default();
         trip.serialize_type = "fastjson".to_string();
         trip.data = strs.as_bytes().to_vec();
-        trip.r#type = "org.apache.dubbo.springboot.demo.ResDto".to_string();
-        return trip;
+        trip.r#type = "org.apache.dubbo.springboot.demo.ResData".to_string();
+
+        return get_buf(trip.encode_to_vec());
     }
 }
 
 impl TripleExceptionWrapper {
-    pub fn get_exception(strs: String) -> Self {
+    pub fn get_buf(strs: String) -> Vec<u8> {
         let mut trip = TripleExceptionWrapper::default();
-        trip.serialization = "fastjson2".to_string();
-        // trip.class_name = strs.as_bytes().to_vec();
+        trip.serialization = "fastjson".to_string();
         trip.data = strs.as_bytes().to_vec();
-        return trip;
+        return get_buf(trip.encode_to_vec());
     }
+}
+
+
+fn get_buf(data : Vec<u8>) -> Vec<u8>{
+    let mut len = data.len();
+    let mut u8_array = [0 as u8;4];
+    for idx in 0..4 {
+        u8_array[idx] = len as u8 | 0;
+        len >>= 8;
+    }
+    let mut buf = bytes::BytesMut::default();
+    buf.put_u8(0);
+    for item in u8_array.iter().rev() {
+        buf.put_u8(*item);
+    }
+    buf.put_slice(&data);
+    println!("dsda {:?}",buf);
+    return buf.to_vec();
 }

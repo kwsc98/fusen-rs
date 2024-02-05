@@ -10,30 +10,27 @@ macro_rules! krpc_server {
 
             async fn prv_invoke (&self, mut param : krpc_common::KrpcMsg) -> krpc_common::KrpcMsg {
                 $(if &param.method_name[..] == stringify!($method) {
-                    
-                            let req = &param.req;
-                            let mut idx = 0;
-                            $(
-                                let $req : $reqType = serde_json::from_slice(req[idx].as_bytes()).unwrap();
-                                idx += 1;
-                            )*
-                            let res = self.$method(
-                                $(
-                                    $req,
-                                )*
-                            ).await;
-                            param.res = match res {
-                                Ok(res) => {
-                                    let res = serde_json::to_string(&res);
-                                    match res {
-                                        Ok(res) => Ok(res),
-                                        Err(err) => Err(krpc_common::RpcError::Server(err.to_string()))
-                                    }
-                                },
-                                Err(info) => Err(krpc_common::RpcError::Method(info))
+                    let req = &param.req;
+                    let mut idx = 0;
+                    $(
+                        let $req : $reqType = serde_json::from_slice(req[idx].as_bytes()).unwrap();
+                        idx += 1;
+                    )*
+                    let res = self.$method(
+                        $(
+                            $req,
+                        )*
+                    ).await;
+                    param.res = match res {
+                        Ok(res) => {
+                            let res = serde_json::to_string(&res);
+                            match res {
+                                Ok(res) => Ok(res),
+                                Err(err) => Err(krpc_common::RpcError::Server(err.to_string()))
                             }
-                        
-                   
+                        },
+                        Err(info) => Err(krpc_common::RpcError::Method(info))
+                    }
                 })*
                 return param;
             }

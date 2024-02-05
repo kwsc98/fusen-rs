@@ -21,7 +21,7 @@ struct ReqDto {
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ResDto {
-    res: String,
+    res : String,
 }
 
 struct DemoService;
