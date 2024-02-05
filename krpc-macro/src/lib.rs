@@ -11,9 +11,10 @@ macro_rules! krpc_server {
             async fn prv_invoke (&self, mut param : krpc_common::KrpcMsg) -> krpc_common::KrpcMsg {
                 $(if &param.method_name[..] == stringify!($method) {
                     
+                            let req = &param.req;
                             let mut idx = 0;
                             $(
-                                let $req : $reqType = serde_json::from_slice(param.req[idx].as_bytes()).unwrap();
+                                let $req : $reqType = serde_json::from_slice(req[idx].as_bytes()).unwrap();
                                 idx += 1;
                             )*
                             let res = self.$method(
@@ -31,7 +32,8 @@ macro_rules! krpc_server {
                                 },
                                 Err(info) => Err(krpc_common::RpcError::Method(info))
                             }
-                           
+                        
+                   
                 })*
                 return param;
             }

@@ -33,10 +33,11 @@ pub struct TripleExceptionWrapper {
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
 
+
 impl TripleRequestWrapper {
     pub fn get_request(strs: Vec<String>) -> Self {
         let mut trip = TripleRequestWrapper::default();
-        trip.serialize_type = "fastjson2".to_string();
+        trip.serialize_type = "fastjson".to_string();
         trip.args = vec![];
         for str in strs {
             trip.args.push(str.as_bytes().to_vec());
@@ -51,5 +52,25 @@ impl TripleRequestWrapper {
             res.push(String::from_utf8(str.clone()).unwrap());
         }
         return res;
+    }
+}
+
+impl TripleResponseWrapper {
+    pub fn get_respons(strs: String) -> Self {
+        let mut trip = TripleResponseWrapper::default();
+        trip.serialize_type = "fastjson".to_string();
+        trip.data = strs.as_bytes().to_vec();
+        trip.r#type = "org.apache.dubbo.springboot.demo.ResDto".to_string();
+        return trip;
+    }
+}
+
+impl TripleExceptionWrapper {
+    pub fn get_exception(strs: String) -> Self {
+        let mut trip = TripleExceptionWrapper::default();
+        trip.serialization = "fastjson2".to_string();
+        // trip.class_name = strs.as_bytes().to_vec();
+        trip.data = strs.as_bytes().to_vec();
+        return trip;
     }
 }

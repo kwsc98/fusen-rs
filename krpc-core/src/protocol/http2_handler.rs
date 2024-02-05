@@ -1,16 +1,21 @@
 use std::{collections::HashMap, io::Read, sync::Arc};
 
 use crate::{
-    filter::{Filter, KrpcFilter, KrpcRouter}, protocol::compression::{decompress, CompressionEncoding}, support::{triple::TripleRequestWrapper, TokioExecutor, TokioIo}
+    filter::{Filter, KrpcFilter, KrpcRouter},
+    protocol::compression::{decompress, CompressionEncoding},
+    support::{
+        triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
+        TokioExecutor, TokioIo,
+    },
 };
-use bytes::{buf::{self, Reader}, BufMut, Bytes, BytesMut};
-use bzip2::{read::BzDecoder, read::BzEncoder, Compression};
-use flate2::GzBuilder;
-use http_body_util::BodyExt;
+use bytes::{
+    buf::{self, Reader},
+    Buf, BufMut, Bytes, BytesMut,
+};
+use http_body_util::{BodyExt, Full};
 use hyper::{server::conn::http2, Request, Response};
-use krpc_common::{KrpcMsg, RpcServer, RpcError};
+use krpc_common::{KrpcMsg, RpcError, RpcServer};
 use prost::Message;
-use protobuf_json_mapping::parse_from_str;
 use rand::AsByteSliceMut;
 use tokio::{
     net::TcpStream,
@@ -34,7 +39,7 @@ impl StreamHandler {
             |req: Request<hyper::body::Incoming>, filter_list: Arc<Vec<Filter>>| async move {
                 let mut msg = decode_filter(req).await;
                 for idx in 0..filter_list.len() {
-                    msg =  filter_list[idx].call(msg).await.unwrap()
+                    msg = filter_list[idx].call(msg).await.unwrap()
                 }
                 return encode_filter(msg).await;
             },
@@ -62,49 +67,50 @@ impl StreamHandler {
 
 async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
     let url = req.uri().path().to_string();
-    println!("url : {:?}",url);
-    println!("header : {:?}",req.headers());
-    let mut data: Bytes  = 
-        req.body_mut()
-            .frame()
-            .await
-            .unwrap()
-            .unwrap()
-            .into_data()
-            .unwrap();
-
-
-    //  let mut trip = TripleRequestWrapper::default();
-    //  trip.serialize_type = "fastjson2".to_string();
-    //  trip.args = vec!["{\"name\":\"world\"}".as_bytes().to_vec()];
-    //  trip.arg_types = vec!["org.apache.dubbo.springboot.demo.ReqDto".to_string()];
-
-
-    println!("data : {:?}" ,data);
-
-    let mut trip: Result<TripleRequestWrapper, prost::DecodeError> = TripleRequestWrapper::decode(data);
-    println!("encode : {:?}" ,trip);
+    println!("url : {:?}", url);
+    println!("header : {:?}", req.headers());
+    let mut data: Bytes = req
+        .body_mut()
+        .frame()
+        .await
+        .unwrap()
+        .unwrap()
+        .into_data()
+        .unwrap();
+    println!("data : {:?}", data.to_vec());
+    let mut data = &data[5..];
+    let mut trip = TripleRequestWrapper::decode(data).unwrap();
+    println!("encode : {:?}", trip);
     let path: Vec<&str> = url.split("/").collect();
     return KrpcMsg::new(
         "unique_identifier".to_string(),
         "1.0.0".to_string(),
         path[1].to_string(),
         path[2].to_string(),
-        trip.unwrap().get_req(),
-        Result::Err(RpcError::Server("empty".to_string()))
+        trip.get_req(),
+        Result::Err(RpcError::Server("empty".to_string())),
     );
 }
-async fn encode_filter(msg: KrpcMsg) -> Result<Response<String>, std::convert::Infallible> {
-    let res_data= match serde_json::to_string(&msg.res) {
-        Ok(data) => data,
-        Err(err) => err.to_string(),
+async fn encode_filter(
+    msg: KrpcMsg,
+) -> Result<Response<Full<bytes::Bytes>>, std::convert::Infallible> {
+    let mut buf = bytes::BytesMut::new();
+    buf.put_u8(b'\0');
+    buf.put_u8(b'\0');
+    buf.put_u8(b'\0');
+    buf.put_u8(b'\0');
+    buf.put_u8(b'F');
+    let res_data = match msg.res {
+        Ok(data) => TripleResponseWrapper::get_respons(data)
+            .encode_to_vec()
+            .encode(&mut buf),
+        Err(err) => TripleExceptionWrapper::get_exception(err.to_string()).encode(&mut buf),
     };
+
+    println!("{:?}", buf);
     let response = Response::builder()
-        .header("unique_identifier", msg.unique_identifier)
-        .header("version", msg.version)
-        .header("class_name", msg.class_name)
-        .header("method_name", msg.method_name)
-        .body(res_data)
+        .header("content-type", "application/grpc+proto")
+        .body(Full::<bytes::Bytes>::from(buf.to_vec()))
         .unwrap();
     return Ok(response);
 }

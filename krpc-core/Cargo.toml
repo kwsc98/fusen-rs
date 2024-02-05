@@ -31,9 +31,11 @@ serde_json.workspace = true
 uuid.workspace = true
 
 prost = "0.12.3"
+prost-types = "0"
 protobuf-json-mapping = '3.3.0'
 flate2 = "1.0"
 bzip2 = "0.4.4"
+tower = "0.4.13"
 
 pin-project-lite.workspace = true 
 lazy_static.workspace = true

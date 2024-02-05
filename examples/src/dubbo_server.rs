@@ -3,7 +3,17 @@ use krpc_core::{
     server::KrpcServer,
 };
 use krpc_macro::krpc_server;
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct ReqDto {
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct ResDto {
+    res: String,
+}
 
 #[derive(Clone)]
 struct DemoService {
@@ -14,9 +24,9 @@ krpc_server! {
    "org.apache.dubbo.springboot.demo",
    DemoService,
    "1.0.0",
-   async fn sayHello(&self,name : String) -> Result<String> {
-      println!("res : {:?}" ,name);
-      return Ok("Hello ".to_owned() + &name);
+   async fn sayHello(&self,req : ReqDto) -> Result<ResDto> {
+      println!("res : {:?}" ,req);
+      return Ok(ResDto{res :  "Hello ".to_owned() + &req.name});
    }
 }
 

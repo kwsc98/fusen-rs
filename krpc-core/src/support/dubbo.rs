@@ -27,7 +27,7 @@ pub fn encode_url(resource: &Resource) -> String {
             url.push_str("tri://");
             url.push_str(&(get_path(info) + &"/"));
             url.push_str(&(info.server_name.clone() + &"?"));
-            url.push_str("application=dubbo-springboot-demo-provider&deprecated=false&dubbo=2.0.2&dynamic=true&generic=false&interface=org.apache.dubbo.springboot.demo.DemoService&methods=sayHello&prefer.serialization=fastjson2,hessian2&release=3.3.0-beta.1&service-name-mapping=true&side=provider");
+            url.push_str("application=dubbo-springboot-demo-provider&deprecated=false&dubbo=2.0.2&dynamic=true&generic=false&interface=org.apache.dubbo.springboot.demo.DemoService&methods=sayHello&prefer.serialization=fastjson&release=3.2.11&serialization=fastjson&service-name-mapping=true&side=provider&timestamp=1707098182442");
             return "/".to_string() + &krpc_common::url_util::encode_url(&url).unwrap();
         }
     }
