@@ -12,6 +12,7 @@ use bytes::{
     buf::{self, Reader},
     Buf, BufMut, Bytes, BytesMut,
 };
+use http_body::Body;
 use http_body_util::{BodyExt, Full};
 use hyper::{server::conn::http2, Request, Response};
 use krpc_common::{KrpcMsg, RpcError, RpcServer};
@@ -67,11 +68,7 @@ impl StreamHandler {
 
 async fn decode_filter(mut req: Request<hyper::body::Incoming>) -> KrpcMsg {
     let url = req.uri().path().to_string();
-    println!("url : {:?}", url);
-    println!("header : {:?}", req.headers());
-    println!("aa : {:?}", req.extensions());
-
-    let mut data: Bytes = req
+    let data: Bytes = req
         .body_mut()
         .frame()
         .await
@@ -97,11 +94,12 @@ async fn encode_filter(
         Ok(data) => TripleResponseWrapper::get_buf(data),
         Err(err) => TripleExceptionWrapper::get_buf(err.to_string())
     };
-    let response = Response::builder()
+    let body = Full::<bytes::Bytes>::from(res_data);
+    let response: Response<Full<Bytes>> = Response::builder()
         .header("content-type", "application/grpc")
         .header("te", "trailers")
-        .status(200)
-        .body(Full::<bytes::Bytes>::from(res_data))
+        .header("grpc-status", "0")
+        .body(body)
         .unwrap();
     return Ok(response);
 }

@@ -91,6 +91,5 @@ fn get_buf(data : Vec<u8>) -> Vec<u8>{
         buf.put_u8(*item);
     }
     buf.put_slice(&data);
-    println!("dsda {:?}",buf);
     return buf.to_vec();
 }

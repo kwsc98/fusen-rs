@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use krpc_core::{
     register::{RegisterBuilder, RegisterType},
     server::KrpcServer,

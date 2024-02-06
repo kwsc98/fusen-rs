@@ -46,13 +46,11 @@ impl KrpcClient {
             .send_request(req)
             .await
             .map_err(|e| RpcError::Client(e.to_string()))?;
-        println!("header {:?}",res.headers());
         let res_data = res.frame()
         .await
         .unwrap()
         .map_err(|e| RpcError::Client(e.to_string()))?
         .into_data().unwrap();
-        println!("data {:?}",res_data);
 
         let trip_res = TripleResponseWrapper::decode(&res_data.to_vec()[5..]).map_err(|e|RpcError::Client(e.to_string()))?;
         let res: Res = serde_json::from_slice(

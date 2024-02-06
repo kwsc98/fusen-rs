@@ -18,6 +18,9 @@ path = "src/dubbo_server.rs"
 [[bin]]
 name = "dubbo-client"
 path = "src/dubbo_client.rs"
+[[bin]]
+name = "dubbo-client-pt"
+path = "src/dubbo_client_pt.rs"
 
 
 [dependencies]
