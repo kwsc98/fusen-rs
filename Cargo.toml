@@ -19,6 +19,7 @@ bytes = "1"
 futures = "0.3"
 async-trait = "0.1.74"
 async-recursion = "1"
+h2 = "0.4"
 
 #日志处理
 tracing = "0.1.13"

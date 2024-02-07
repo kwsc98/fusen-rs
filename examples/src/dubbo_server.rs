@@ -27,14 +27,14 @@ krpc_server! {
    DemoService,
    "1.0.0",
    async fn sayHello(&self,req : ReqDto) -> Result<ResDto> {
-      println!("res : {:?}" ,req);
+    //   println!("res : {:?}" ,req);
       return Ok(ResDto{res :  "Hello ".to_owned() + &req.name});
    }
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    krpc_common::init_log();
+    // krpc_common::init_log();
     let server: DemoService = DemoService {
         _db: "我是一个DB数据库".to_string(),
     };

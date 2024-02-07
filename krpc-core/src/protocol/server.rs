@@ -6,7 +6,8 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, debug};
-use crate::protocol::http2_handler::StreamHandler;
+
+use crate::protocol::StreamHandler;
 
 pub struct TcpServer {
     port: String,
@@ -57,7 +58,7 @@ impl TcpServer {
                         _shutdown_complete: self.shutdown_complete_tx.clone(),
                     };
                     debug!("socket stream connect, addr: {:?}", stream.1);
-                    tokio::spawn(stream_handler.run());
+                    tokio::spawn(stream_handler.run_v2());
                 }
                 Err(err) => error!("tcp connect, err: {:?}", err),
             }

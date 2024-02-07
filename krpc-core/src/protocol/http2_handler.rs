@@ -23,14 +23,9 @@ use tokio::{
     sync::{broadcast, mpsc},
 };
 use tracing::debug;
+use super::StreamHandler;
 
-pub struct StreamHandler {
-    pub tcp_stream: TcpStream,
-    pub filter_list: Vec<Filter>,
-    pub rpc_server: HashMap<String, Arc<Box<dyn RpcServer>>>,
-    pub shutdown: broadcast::Receiver<()>,
-    pub _shutdown_complete: mpsc::Sender<()>,
-}
+
 
 impl StreamHandler {
     pub async fn run(mut self) {
