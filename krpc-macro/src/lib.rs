@@ -6,6 +6,7 @@ macro_rules! krpc_server {
     $version:expr,
     $(async fn $method:ident (&$self:ident $(,$req:ident : $reqType:ty)* ) -> Result<$resType:ty>  { $($code:tt)* })*) => {
         impl $name {
+            #[allow(non_snake_case)]
             $(async fn $method (&$self $(,$req : $reqType)* ) -> krpc_common::Response<$resType> { $($code)* })*
 
             async fn prv_invoke (&self, mut param : krpc_common::KrpcMsg) -> krpc_common::KrpcMsg {
@@ -56,6 +57,7 @@ macro_rules! krpc_client {
     $version:expr,
     $(async fn $method:ident (&$self:ident $(,$req:ident : $reqType:ty)* ) -> Result<$resType:ty> )*) => {
         impl $name {
+            #[allow(non_snake_case)]
             $(async fn $method (&$self $(,$req : $reqType)*) -> Result<$resType,krpc_common::RpcError> {
                 let mut req_vec : Vec<String> = vec![];
                 $(

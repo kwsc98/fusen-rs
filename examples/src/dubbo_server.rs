@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use krpc_core::{
     register::{RegisterBuilder, RegisterType},
     server::KrpcServer,
@@ -27,7 +25,7 @@ krpc_server! {
    DemoService,
    "1.0.0",
    async fn sayHello(&self,req : ReqDto) -> Result<ResDto> {
-    //   println!("res : {:?}" ,req);
+      //println!("res : {:?}" ,req);
       return Ok(ResDto{res :  "Hello ".to_owned() + &req.name});
    }
 }

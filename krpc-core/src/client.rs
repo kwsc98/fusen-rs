@@ -1,7 +1,6 @@
 use crate::register::RegisterBuilder;
 use crate::route::Route;
 use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
-use bytes::BufMut;
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
@@ -9,7 +8,6 @@ use krpc_common::{KrpcMsg, RpcError};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Read;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 

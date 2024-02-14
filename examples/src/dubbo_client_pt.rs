@@ -40,7 +40,7 @@ krpc_client! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    let res = DemoService.sayHello(ReqDto{name:"world".to_string()}).await;
+    let _res = DemoService.sayHello(ReqDto{name:"world".to_string()}).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let start_time = get_now_date_time_as_millis();
     let client = DemoService;

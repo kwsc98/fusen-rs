@@ -1,12 +1,10 @@
 use crate::support::dubbo::{decode_url, encode_url};
-
 use super::{Register, Resource, SocketInfo};
 use async_recursion::async_recursion;
-use krpc_common::get_uuid;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::info;
-use zk::{Client, OneshotWatcher};
+use zk::OneshotWatcher;
 use zookeeper_client as zk;
 
 static EPHEMERAL_OPEN: &zk::CreateOptions<'static> =
@@ -115,7 +113,7 @@ fn creat_resource_node(
             info
         }
     };
-    let mut node_name = encode_url(&resource);
+    let node_name = encode_url(&resource);
     let node_data = serde_json::to_string(&info).unwrap();
     tokio::spawn(async move {
         loop {

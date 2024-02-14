@@ -1,28 +1,15 @@
-use std::{collections::HashMap, io::Read, sync::Arc, time::Duration};
 
+use std::time::Duration;
 use super::StreamHandler;
 use crate::{
-    filter::{Filter, KrpcFilter, KrpcRouter},
-    protocol::compression::{decompress, CompressionEncoding},
-    support::{
-        triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
-        TokioExecutor, TokioIo,
-    },
+    filter::{Filter, KrpcFilter},
+    support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
 };
-use bytes::{
-    buf::{self, Reader},
-    Buf, BufMut, Bytes, BytesMut,
-};
-use h2::server::{self, Builder};
-use http::{HeaderMap, HeaderValue, Request, Response};
-use http_body::Body;
-use http_body_util::{BodyExt, Full};
-use krpc_common::{KrpcMsg, RpcError, RpcServer};
+use bytes::Bytes;
+use h2::server::Builder;
+use http::{Request, Response};
+use krpc_common::{KrpcMsg, RpcError};
 use prost::Message;
-use tokio::{
-    net::TcpStream,
-    sync::{broadcast, mpsc},
-};
 
 impl StreamHandler {
     pub async fn run_v2(mut self) {
@@ -136,14 +123,14 @@ const DEFAULT_SETTINGS_MAX_HEADER_LIST_SIZE: u32 = 16 << 20;
 pub(crate) const SPEC_WINDOW_SIZE: u32 = 65_535;
 #[derive(Clone, Debug)]
 pub(crate) struct Config {
-    pub(crate) adaptive_window: bool,
+    pub(crate) _adaptive_window: bool,
     pub(crate) initial_conn_window_size: u32,
     pub(crate) initial_stream_window_size: u32,
     pub(crate) max_frame_size: u32,
     pub(crate) enable_connect_protocol: bool,
     pub(crate) max_concurrent_streams: Option<u32>,
-    pub(crate) keep_alive_interval: Option<Duration>,
-    pub(crate) keep_alive_timeout: Duration,
+    pub(crate) _keep_alive_interval: Option<Duration>,
+    pub(crate) _keep_alive_timeout: Duration,
     pub(crate) max_send_buffer_size: usize,
     pub(crate) max_header_list_size: u32,
 }
@@ -151,14 +138,14 @@ pub(crate) struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            adaptive_window: false,
+            _adaptive_window: false,
             initial_conn_window_size: DEFAULT_CONN_WINDOW,
             initial_stream_window_size: DEFAULT_STREAM_WINDOW,
             max_frame_size: DEFAULT_MAX_FRAME_SIZE,
             enable_connect_protocol: false,
             max_concurrent_streams: Some(200),
-            keep_alive_interval: None,
-            keep_alive_timeout: Duration::from_secs(20),
+            _keep_alive_interval: None,
+            _keep_alive_timeout: Duration::from_secs(20),
             max_send_buffer_size: DEFAULT_MAX_SEND_BUF_SIZE,
             max_header_list_size: DEFAULT_SETTINGS_MAX_HEADER_LIST_SIZE,
         }

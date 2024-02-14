@@ -84,7 +84,7 @@ pub fn compress(
     Ok(())
 }
 
-pub fn decompress(
+pub fn _decompress(
     encoding: CompressionEncoding,
     src: &mut BytesMut,
     dst: &mut BytesMut,

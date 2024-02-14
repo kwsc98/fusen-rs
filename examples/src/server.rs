@@ -1,7 +1,3 @@
-use std::io::Read;
-
-use bytes::BufMut;
-use krpc_common::url_util::{decode_url, encode_url};
 use krpc_core::{
     register::{RegisterBuilder, RegisterType},
     server::KrpcServer,
@@ -62,24 +58,4 @@ async fn main() {
     .add_rpc_server(Box::new(server))
     .run()
     .await;
-}
-#[test]
-fn test() {
-
-    let mut len = 256;
-    let mut u8_array = [0 as u8;4];
-    for idx in 0..4 {
-        u8_array[idx] = len as u8 | 0;
-        len >>= 8;
-    }
-    let mut buf = bytes::BytesMut::default();
-    buf.put_u8(0);
-    for item in u8_array.iter().rev() {
-        buf.put_u8(*item);
-    }
-    println!("{:?}",buf.to_vec());
-    let str = "/dubbo/org.apache.dubbo.springboot.demo.DemoService/providers/tri%3A%2F%2F192.168.10.111%3A50052%2Forg.apache.dubbo.springboot.demo.DemoService%3Fapplication%3Ddubbo-springboot-demo-provider%26deprecated%3Dfalse%26dubbo%3D2.0.2%26dynamic%3Dtrue%26generic%3Dfalse%26interface%3Dorg.apache.dubbo.springboot.demo.DemoService%26methods%3DsayHello%26prefer.serialization%3Djson%26release%3D3.3.0-beta.1%26serialization%3Djson%26service-name-mapping%3Dtrue%26side%3Dprovider%26timestamp%3D1706958095974";
-    let str = decode_url(str).unwrap();
-    println!("{:?}",str);
-    println!("{:?}",encode_url(&str));
 }
