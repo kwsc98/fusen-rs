@@ -6,6 +6,7 @@ use krpc_macro::krpc_client;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tracing::info;
 
 lazy_static! {
     static ref CLI: KrpcClient = KrpcClient::build(
@@ -88,7 +89,7 @@ async fn main() {
     tokio::spawn(do_run(client.clone(), m.0.clone()));
     drop(m.0);
     let _i32 = m.1.recv().await;
-    println!("{:?}",get_now_date_time_as_millis() - start_time);
+    info!("{:?}",get_now_date_time_as_millis() - start_time);
 }
 
 async fn do_run(client : TestServer , sender : mpsc::Sender<i32>) {
@@ -97,7 +98,7 @@ async fn do_run(client : TestServer , sender : mpsc::Sender<i32>) {
         let temp_sender = sender.clone();
         tokio::spawn(async move {
             let res = temp_client.do_run2(ReqDto{str : "client say hello 1".to_string()}).await;
-            println!("{:?}",res);
+            info!("{:?}",res);
             drop(temp_sender);
         });
     }

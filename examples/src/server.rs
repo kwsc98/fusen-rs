@@ -4,6 +4,7 @@ use krpc_core::{
 };
 use krpc_macro::krpc_server;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ReqDto {
@@ -25,24 +26,17 @@ krpc_server! {
    TestServer,
    "1.0.0",
    async fn do_run1(&self,res1 : ReqDto,res2 : ResDto) -> Result<ResDto> {
-      println!("res1 : {:?} , res2 : {:?}" ,res1, res2);
+      info!("res1 : {:?} , res2 : {:?}" ,res1, res2);
       return Err("错误".to_string());
    }
    async fn do_run2(&self,res : ReqDto) -> Result<ResDto> {
-     println!("{:?}" ,res);
-     return Ok(ResDto { str : "TestServer say hello 2".to_string()});
+      info!("{:?}" ,res);
+      return Ok(ResDto { str : "TestServer say hello 2".to_string()});
     }
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    
-        prost_build::Config::new()
-            .out_dir("examples/src/proto")//设置proto输出目录
-            .compile_protos(&["examples/src/proto/triple_wrapper.proto"], &["."])//我们要处理的proto文件
-            .unwrap();
-    
-
     krpc_common::init_log();
     let server: TestServer = TestServer {
         _db: "我是一个DB数据库".to_string(),

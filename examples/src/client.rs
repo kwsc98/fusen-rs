@@ -2,6 +2,7 @@ use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
 use krpc_macro::krpc_client;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 lazy_static! {
     static ref CLI: KrpcClient = KrpcClient::build(
@@ -41,9 +42,9 @@ async fn main() {
     let res = client.do_run1(
         ReqDto{str : "client say hello 1".to_string()},
         ResDto{str : "client say hello 2".to_string()}).await;
-    println!("{:?}",res);
+    info!("{:?}",res);
     let res = client.do_run2(ReqDto{str : "client say hello 2".to_string()}).await;
-    println!("{:?}",res);
+    info!("{:?}",res);
 }
 
 

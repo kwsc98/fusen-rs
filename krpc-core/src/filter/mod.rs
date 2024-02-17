@@ -17,7 +17,7 @@ where
     S: Future,
     KF: KrpcFilter<Request = KrpcMsg, Response = KrpcMsg, Error = crate::Error>,
 {
-    pub fn new(codec_filter: F, filter_list: Vec<KF>) -> Self {
+    pub fn _new(codec_filter: F, filter_list: Vec<KF>) -> Self {
         return KrpcRouter {
             codec_filter,
             filter_list: Arc::new(filter_list),
@@ -47,17 +47,17 @@ where
 }
 
 #[derive(Clone, Default)]
-pub struct Filter {
+pub struct RpcServerRoute {
     map: HashMap<String, Arc<Box<dyn RpcServer>>>,
 }
 
-impl Filter {
+impl RpcServerRoute {
     pub fn new(map: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
-        return Filter { map };
+        return RpcServerRoute { map };
     }
 }
 
-impl KrpcFilter for Filter {
+impl KrpcFilter for RpcServerRoute {
     type Request = KrpcMsg;
 
     type Response = KrpcMsg;
@@ -66,7 +66,7 @@ impl KrpcFilter for Filter {
 
     type Future = crate::KrpcFuture<Result<Self::Response, Self::Error>>;
 
-    fn call(&self, req: Self::Response) -> Self::Future {
+    fn call(&self, req: Self::Request) -> Self::Future {
         let mut msg: KrpcMsg = req;
         let class_name = (msg.class_name.clone() + ":" + &msg.version).clone();
         match self.map.get(&class_name) {

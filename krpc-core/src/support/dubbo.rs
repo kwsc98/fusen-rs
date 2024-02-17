@@ -1,7 +1,9 @@
+use std::vec;
+
 use crate::register::{Info, Resource};
 
 pub fn decode_url(url: &str) -> Result<Resource, String> {
-    let mut url = &krpc_common::url_util::decode_url(url).unwrap()[..];
+    let mut url = &krpc_common::url_util::decode_url(url)?[..];
     if url.starts_with("tri://") {
         url = &url[6..];
         return Ok(Resource::Server(get_info(url)));
@@ -13,24 +15,28 @@ pub fn decode_url(url: &str) -> Result<Resource, String> {
 }
 
 pub fn encode_url(resource: &Resource) -> String {
+    let mut url = String::new();
     match resource {
         Resource::Client(info) => {
-            let mut url = String::new();
             url.push_str("consumer://");
             url.push_str(&(get_path(info) + &"/"));
             url.push_str(&(info.server_name.clone() + &"?"));
-            url.push_str("application=dubbo-springboot-demo-consumer&background=false&category=consumers&check=false&dubbo=2.0.2&executor-management-mode=isolation&file-cache=true&interface=org.apache.dubbo.springboot.demo.DemoService&methods=sayHello&pid=20591&release=3.3.0-beta.1&side=consumer&sticky=false&unloadClusterRelated=false");
-            return "/".to_string() + &krpc_common::url_util::encode_url(&url).unwrap();
+            url.push_str(&("interface=".to_owned() + &info.server_name));
+            url.push_str(&get_field_url("methods", &info.methods));
+            url.push_str("&dubbo=2.0.2&release=3.3.0-beta.1&side=consumer");
         }
         Resource::Server(info) => {
-            let mut url = String::new();
             url.push_str("tri://");
             url.push_str(&(get_path(info) + &"/"));
             url.push_str(&(info.server_name.clone() + &"?"));
-            url.push_str("application=dubbo-springboot-demo-provider&deprecated=false&dubbo=2.0.2&dynamic=true&generic=false&interface=org.apache.dubbo.springboot.demo.DemoService&methods=sayHello&prefer.serialization=fastjson&release=3.3.0-beta.1&serialization=fastjson&service-name-mapping=true&side=provider");
-            return "/".to_string() + &krpc_common::url_util::encode_url(&url).unwrap();
+            url.push_str(&("interface=".to_owned() + &info.server_name));
+            url.push_str(&get_field_url("methods", &info.methods));
+            url.push_str(
+                "&dubbo=2.0.2&prefer.serialization=fastjson&release=3.3.0-beta.1&side=provider",
+            );
         }
     }
+    return "/".to_string() + &krpc_common::url_util::encode_url(&url);
 }
 
 fn get_ip(path: &str) -> (String, Option<String>) {
@@ -59,8 +65,37 @@ fn get_info(url: &str) -> Info {
     let info = Info {
         server_name,
         version: "1.0.0".to_string(),
+        methods: get_field_values(info[1], "methods"),
         ip: path.0,
         port: path.1,
     };
     return info;
+}
+
+fn get_field_values(str: &str, key: &str) -> Vec<String> {
+    let fields: Vec<&str> = str.split("&").collect();
+    let mut res = vec![];
+    for field in fields {
+        let field: Vec<&str> = field.split("=").collect();
+        if field[0] == key {
+            let velues: Vec<&str> = field[1].split(",").collect();
+            res = velues.iter().fold(res, |mut res, &e| {
+                res.push(e.to_string());
+                res
+            });
+            break;
+        }
+    }
+    return res;
+}
+
+fn get_field_url(key: &str, values: &Vec<String>) -> String {
+    if values.is_empty() {
+        return String::new();
+    }
+    let mut res = String::new();
+    for value in values {
+        res.push_str(&(value.to_owned() + ","));
+    }
+    return key.to_string() + "=" + &res[..res.len() - 1];
 }

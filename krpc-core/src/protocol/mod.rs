@@ -6,18 +6,15 @@ use tokio::{
     sync::{broadcast, mpsc},
 };
 
-use crate::filter::Filter;
+use crate::filter::RpcServerRoute;
 
 pub mod server;
-
-mod http2_handler;
 mod h2_handler;
-mod compression;
 
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,
-    pub filter_list: Vec<Filter>,
+    pub filter_list: Vec<RpcServerRoute>,
     pub rpc_server: HashMap<String, Arc<Box<dyn RpcServer>>>,
     pub shutdown: broadcast::Receiver<()>,
     pub _shutdown_complete: mpsc::Sender<()>,

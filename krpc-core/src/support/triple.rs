@@ -45,13 +45,12 @@ impl TripleRequestWrapper {
         for str in strs {
             trip.args.push(str.as_bytes().to_vec());
         }
-        trip.arg_types = vec![];
         return get_buf(trip.encode_to_vec());
     }
-    pub fn get_req(&self)-> Vec<String> {
+    pub fn get_req(self)-> Vec<String> {
         let mut res = vec![];
-        for str in &self.args {
-            res.push(String::from_utf8(str.clone()).unwrap());
+        for str in self.args {
+            res.push(String::from_utf8(str).unwrap());
         }
         return res;
     }
@@ -74,6 +73,9 @@ impl TripleExceptionWrapper {
         trip.serialization = "fastjson".to_string();
         trip.data = strs.as_bytes().to_vec();
         return get_buf(trip.encode_to_vec());
+    }
+    pub fn get_err_info(&self) -> String {
+        return serde_json::from_slice(&self.data[..]).unwrap_or("rpc error".to_owned());
     }
 }
 

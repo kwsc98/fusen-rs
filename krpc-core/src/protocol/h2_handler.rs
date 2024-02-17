@@ -1,15 +1,14 @@
-
-use std::time::Duration;
 use super::StreamHandler;
 use crate::{
-    filter::{Filter, KrpcFilter},
+    filter::{KrpcFilter, RpcServerRoute},
     support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
 };
 use bytes::Bytes;
 use h2::server::Builder;
-use http::{Request, Response};
+use http::{HeaderMap, HeaderValue, Request, Response};
 use krpc_common::{KrpcMsg, RpcError};
 use prost::Message;
+use std::time::Duration;
 
 impl StreamHandler {
     pub async fn run_v2(mut self) {
@@ -17,56 +16,55 @@ impl StreamHandler {
             .handshake::<_, Bytes>(self.tcp_stream)
             .await
             .unwrap();
-        // let mut mpsc: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
-        self.filter_list.push(Filter::new(self.rpc_server));
+        self.filter_list.push(RpcServerRoute::new(self.rpc_server));
         while let Some(result) = connection.accept().await {
-            // if let Err(err) = self.shutdown.try_recv() {
-            //     if let tokio::sync::broadcast::error::TryRecvError::Closed = err {
-            //         mpsc.1.recv().await;
-            //         return;
-            //     }
-            // }
-            // let send_mpsc = mpsc.0.clone();
             let filter_list = self.filter_list.clone();
             tokio::spawn(async move {
                 let (request, mut respond) = result.unwrap();
-                let mut msg = decode_filter(request).await;
-                for idx in 0..filter_list.len() {
-                    msg = filter_list[idx].call(msg).await.unwrap()
-                }
-                let res = encode_filter(msg).await;
-                let mut send = respond.send_response(res.0, false).unwrap();
-                let _ = send.send_data(res.1, false);
-                // let mut trailers = HeaderMap::new();
-                // trailers.append("grpc-status", HeaderValue::from(0));
-                // let _ = send.send_trailers(trailers);
-                // drop(send_mpsc);
+                let mut trailers = HeaderMap::new();
+                match decode_filter(request).await {
+                    Ok(mut msg) => {
+                        for idx in 0..filter_list.len() {
+                            msg = filter_list[idx].call(msg).await.unwrap()
+                        }
+                        let res = encode_filter(msg).await;
+                        let mut send = respond.send_response(res.0, false).unwrap();
+                        let _ = send.send_data(res.1, false);
+                        trailers.insert("grpc-status", HeaderValue::from_str("0").unwrap());
+                        let _ = send.send_trailers(trailers);
+                    }
+                    Err(err) => {
+                        let response: Response<()> = Response::builder()
+                            .header("grpc-status", "99")
+                            .header("grpc-message", err.to_string())
+                            .body(())
+                            .unwrap();
+                        let _send = respond.send_response(response, true).unwrap();
+                    }
+                };
             });
         }
     }
 }
 
-async fn decode_filter(mut req: Request<h2::RecvStream>) -> KrpcMsg {
+async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<KrpcMsg> {
     let url = req.uri().path().to_string();
     let data = req.body_mut().data().await.unwrap().unwrap();
     let trip = match TripleRequestWrapper::decode(&data[5..]) {
         Ok(data) => data,
         Err(err) => {
-            println!("{:?}" ,err);
-            println!("{:?}" ,data.to_vec());
-            println!("{:?}" ,req);
-            panic!();
-        },
-    }; 
+            return Err(Box::new(err));
+        }
+    };
     let path: Vec<&str> = url.split("/").collect();
-    return KrpcMsg::new(
+    return Ok(KrpcMsg::new(
         "unique_identifier".to_string(),
         "1.0.0".to_string(),
         path[1].to_string(),
         path[2].to_string(),
         trip.get_req(),
         Result::Err(RpcError::Server("empty".to_string())),
-    );
+    ));
 }
 async fn encode_filter(msg: KrpcMsg) -> (Response<()>, bytes::Bytes) {
     let res_data = match msg.res {
@@ -82,10 +80,8 @@ async fn encode_filter(msg: KrpcMsg) -> (Response<()>, bytes::Bytes) {
     return (response, body);
 }
 
-
-
 fn get_server_builder() -> Builder {
-    let mut config : Config= Default::default();
+    let mut config: Config = Default::default();
     config.initial_conn_window_size = SPEC_WINDOW_SIZE;
     config.initial_stream_window_size = SPEC_WINDOW_SIZE;
     let mut builder = h2::server::Builder::default();
@@ -103,9 +99,6 @@ fn get_server_builder() -> Builder {
     }
     return builder;
 }
-
-
-
 
 // Our defaults are chosen for the "majority" case, which usually are not
 // resource constrained, and so the spec default of 64kb can be too limiting

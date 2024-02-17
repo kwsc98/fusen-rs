@@ -27,12 +27,12 @@ krpc_server! {
    "1.0.0",
    //实现rpc接口（错误响应）
    async fn do_run1(&self,res : ReqDto) -> Result<ResDto> {
-      println!("{:?}" ,res);
+      info!("{:?}" ,res);
       return Err("错误".to_string());
    }
    //实现rpc接口（正常响应）
    async fn do_run2(&self,res : ReqDto) -> Result<ResDto> {
-     println!("{:?}" ,res);
+     info!("{:?}" ,res);
      return Ok(ResDto { str : "TestServer say hello 1".to_string()});
     }
 }
@@ -100,9 +100,9 @@ async fn main() {
     let client = TestServer;
     //直接进行调用
     let res = client.do_run1(ReqDto{str : "client say hello 1".to_string()}).await;
-    println!("{:?}",res);
+    info!("{:?}",res);
     let res = client.do_run2(ReqDto{str : "client say hello 2".to_string()}).await;
-    println!("{:?}",res);
+    info!("{:?}",res);
 }
 ```
 
