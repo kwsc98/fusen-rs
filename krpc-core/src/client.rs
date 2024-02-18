@@ -69,6 +69,11 @@ impl KrpcClient {
                                 .map_err(|e| RpcError::Client(e.to_string()))?;
                             return Ok(res);
                         }
+                        b"98" => {
+                            let trip_res: TripleExceptionWrapper = TripleExceptionWrapper::decode(&res_body.to_vec()[5..])
+                                .map_err(|e| RpcError::Client(e.to_string()))?;
+                            return Err(RpcError::Method(String::from_utf8(trip_res.data).unwrap()));
+                        }
                         _else_status => {
                             let trip_res = TripleExceptionWrapper::decode(&res_body.to_vec()[5..])
                                 .map_err(|e| RpcError::Client(e.to_string()))?;
