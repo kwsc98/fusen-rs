@@ -53,11 +53,10 @@ impl KrpcClient {
                 .map_or(Err(RpcError::Server("error frame 1".to_owned())), |e| Ok(e))?
                 .map_err(|e| RpcError::Client(e.to_string()))?;
             if res_frame.is_trailers() {
-                match res_frame
+                let trailers = res_frame
                     .trailers_ref()
-                    .map_or(Err(RpcError::Server("error frame 2".to_owned())), |e| Ok(e))?
-                    .get("grpc-status")
-                {
+                    .map_or(Err(RpcError::Server("error frame 2".to_owned())), |e| Ok(e))?;
+                match trailers.get("grpc-status") {
                     Some(status) => match status.as_bytes() {
                         b"0" => {
                             let trip_res = TripleResponseWrapper::decode(&res_body.to_vec()[5..])
@@ -69,15 +68,28 @@ impl KrpcClient {
                                 .map_err(|e| RpcError::Client(e.to_string()))?;
                             return Ok(res);
                         }
-                        b"98" => {
-                            let trip_res: TripleExceptionWrapper = TripleExceptionWrapper::decode(&res_body.to_vec()[5..])
-                                .map_err(|e| RpcError::Client(e.to_string()))?;
-                            return Err(RpcError::Method(String::from_utf8(trip_res.data).unwrap()));
-                        }
-                        _else_status => {
-                            let trip_res = TripleExceptionWrapper::decode(&res_body.to_vec()[5..])
-                                .map_err(|e| RpcError::Client(e.to_string()))?;
-                            return Err(RpcError::Server(trip_res.get_err_info()));
+                        else_status => {
+                            if !res_body.is_empty() {
+                                let trip_res: TripleExceptionWrapper =
+                                    TripleExceptionWrapper::decode(&res_body.to_vec()[5..])
+                                        .map_err(|e| RpcError::Client(e.to_string()))?;
+                                let msg = String::from_utf8(trip_res.data).unwrap();
+                                match else_status {
+                                    b"90" => return Err(RpcError::Client(msg)),
+                                    b"91" => return Err(RpcError::Method(msg)),
+                                    _ => return Err(RpcError::Server(msg)),
+                                }
+                            }
+                            return Err(RpcError::Server(match trailers.get("grpc-message") {
+                                Some(value) => {
+                                    "grpc-message=".to_owned()
+                                        + &String::from_utf8(value.as_bytes().to_vec()).unwrap()
+                                }
+                                None => {
+                                    "grpc-status=".to_owned()
+                                        + &String::from_utf8(else_status.to_vec()).unwrap()
+                                }
+                            }));
                         }
                     },
                     None => return Err(RpcError::Server("error frame 3".to_owned())),

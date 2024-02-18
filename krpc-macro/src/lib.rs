@@ -38,8 +38,10 @@ macro_rules! krpc_server {
                             }
                         },
                         Err(info) => Err(krpc_common::RpcError::Method(info))
-                    }
+                    };
+                    return param;
                 })*
+                param.res = Err(krpc_common::RpcError::Server(format!("not find method by {}",param.method_name)));
                 return param;
             }
         }

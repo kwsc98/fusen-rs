@@ -11,7 +11,7 @@ struct ReqDto {
     str: String,
 }
 
-#[derive(Serialize, Deserialize, Default,Debug)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 struct ResDto {
     str: String,
 }
@@ -25,12 +25,12 @@ krpc_server! {
    "com.krpc",
    TestServer,
    "1.0.0",
-   async fn do_run1(&self,res1 : ReqDto,res2 : ResDto) -> Result<ResDto> {
-      info!("res1 : {:?} , res2 : {:?}" ,res1, res2);
+   async fn do_run1(&self,req1 : ReqDto,req2 : ResDto) -> Result<ResDto> {
+      info!("req1 : {:?} , req2 : {:?}" ,req1, req2);
       return Err("错误".to_string());
    }
-   async fn do_run2(&self,res : ReqDto) -> Result<ResDto> {
-      info!("{:?}" ,res);
+   async fn do_run2(&self,req : ReqDto) -> Result<ResDto> {
+      info!("{:?}" ,req);
       return Ok(ResDto { str : "TestServer say hello 2".to_string()});
     }
 }

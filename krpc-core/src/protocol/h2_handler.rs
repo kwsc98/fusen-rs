@@ -29,16 +29,8 @@ impl StreamHandler {
                         }
                         let res = encode_filter(msg).await;
                         let mut send = respond.send_response(res.0, false).unwrap();
-                        let mut status = "0";
-                        let bytes = match res.1 {
-                            Ok(bytes) => bytes,
-                            Err(bytes) => {
-                                status = "98";
-                                bytes
-                            }
-                        };
-                        let _ = send.send_data(bytes, false);
-                        trailers.insert("grpc-status", HeaderValue::from_str(status).unwrap());
+                        let _ = send.send_data(res.2, false);
+                        trailers.insert("grpc-status", HeaderValue::from_str(&res.1).unwrap());
                         let _ = send.send_trailers(trailers);
                     }
                     Err(err) => {
@@ -74,23 +66,36 @@ async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<KrpcMs
         Result::Err(RpcError::Server("empty".to_string())),
     ));
 }
-async fn encode_filter(msg: KrpcMsg) -> (Response<()>, Result<bytes::Bytes, bytes::Bytes>) {
+
+async fn encode_filter(msg: KrpcMsg) -> (Response<()>, String, bytes::Bytes) {
+    let mut status = "0";
     let res_data = match msg.res {
-        Ok(data) => Ok(bytes::Bytes::from(TripleResponseWrapper::get_buf(data))),
-        Err(err) => Err(bytes::Bytes::from(TripleExceptionWrapper::get_buf(
-            if let RpcError::Method(msg) = err {
+        Ok(data) => bytes::Bytes::from(TripleResponseWrapper::get_buf(data)),
+        Err(err) => bytes::Bytes::from(TripleExceptionWrapper::get_buf(match err {
+            RpcError::Client(msg) => {
+                status = "90";
                 msg
-            } else {
-                err.to_string()
-            },
-        ))),
+            }
+            RpcError::Method(msg) => {
+                status = "91";
+                msg
+            }
+            RpcError::Server(msg) => {
+                status = "92";
+                msg
+            }
+            RpcError::Null => {
+                status = "93";
+                "RpcError::Null".to_string()
+            }
+        })),
     };
     let response: Response<()> = Response::builder()
         .header("content-type", "application/grpc")
         .header("te", "trailers")
         .body(())
         .unwrap();
-    return (response, res_data);
+    return (response, status.to_string(), res_data);
 }
 
 fn get_server_builder() -> Builder {
