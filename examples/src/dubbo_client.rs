@@ -2,7 +2,6 @@ use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
 use krpc_macro::krpc_client;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 use tracing::info;
 
 lazy_static! {
@@ -32,8 +31,8 @@ krpc_client! {
    "org.apache.dubbo.springboot.demo",
    DemoService,
    "1.0.0",
-   async fn sayHello(&self,name : String) -> Result<String>
-   async fn sayHelloV2(&self,name : ReqDto) -> Result<ResDto>
+   async fn sayHello(&self,req : String) -> Result<String>
+   async fn sayHelloV2(&self,req : ReqDto) -> Result<ResDto>
 } 
 
 #[tokio::main(worker_threads = 512)]
@@ -44,8 +43,6 @@ async fn main() {
     info!("{:?}",res);
     let res = client.sayHelloV2(ReqDto{name:"world".to_string()}).await;
     info!("{:?}",res);
-    let mut mpsc: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
-    mpsc.1.recv().await;
 }
 
 

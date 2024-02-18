@@ -61,10 +61,11 @@ impl TripleResponseWrapper {
         let mut trip = TripleResponseWrapper::default();
         trip.serialize_type = "fastjson".to_string();
         trip.data = strs.as_bytes().to_vec();
-        trip.r#type = "org.apache.dubbo.springboot.demo.ResData".to_string();
-
         return get_buf(trip.encode_to_vec());
     }
+    pub fn is_empty_body(&self) -> bool {
+        return self.data.starts_with("null".as_bytes());
+    } 
 }
 
 impl TripleExceptionWrapper {

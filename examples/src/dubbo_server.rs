@@ -26,11 +26,11 @@ krpc_server! {
    DemoService,
    "1.0.0",
    async fn sayHello(&self,req : String) -> Result<String> {
-    //   info!("res : {:?}" ,req);
+      info!("res : {:?}" ,req);
       return Ok("Hello ".to_owned() + &req);
    }
    async fn sayHelloV2(&self,req : ReqDto) -> Result<ResDto> {
-    //   info!("res : {:?}" ,req);
+      info!("res : {:?}" ,req);
       return Ok(ResDto{res :  "Hello ".to_owned() + &req.name + " V2"});
    }
 }
