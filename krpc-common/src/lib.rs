@@ -41,7 +41,7 @@ impl std::error::Error for RpcError {}
 #[derive(Debug)]
 pub struct KrpcMsg {
     pub unique_identifier: String,
-    pub version: String,
+    pub version: Option<String>,
     pub class_name: String,
     pub method_name: String,
     pub req: Vec<String>,
@@ -52,7 +52,7 @@ impl KrpcMsg {
     pub fn new_empty() -> KrpcMsg {
         return KrpcMsg {
             unique_identifier: "".to_string(),
-            version: "".to_string(),
+            version: None,
             class_name: "".to_string(),
             method_name: "".to_string(),
             req: vec![],
@@ -62,7 +62,7 @@ impl KrpcMsg {
 
     pub fn new(
         unique_identifier: String,
-        version: String,
+        version: Option<String>,
         class_name: String,
         method_name: String,
         req: Vec<String>,
@@ -81,7 +81,7 @@ impl KrpcMsg {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
-    fn get_info(&self) -> (&str, &str, &str, Vec<String>);
+    fn get_info(&self) -> (&str, &str, Option<&str>, Vec<String>);
 }
 
 pub fn init_log() {

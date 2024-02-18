@@ -36,7 +36,7 @@ krpc_client! {
    CLI,
    "org.apache.dubbo.springboot.demo",
    DemoService,
-   "1.0.0",
+   None,
    async fn sayHello(&self,name : String) -> Result<String>
    async fn sayHelloV2(&self,name : ReqDto) -> Result<ResDto>
 }

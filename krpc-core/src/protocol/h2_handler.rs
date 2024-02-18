@@ -57,9 +57,13 @@ async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<KrpcMs
         }
     };
     let path: Vec<&str> = url.split("/").collect();
+    let version = req
+        .headers()
+        .get("tri-service-version")
+        .map(|e| String::from_utf8_lossy(e.as_bytes()).to_string());
     return Ok(KrpcMsg::new(
         "unique_identifier".to_string(),
-        "1.0.0".to_string(),
+        version,
         path[1].to_string(),
         path[2].to_string(),
         trip.get_req(),

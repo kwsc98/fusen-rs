@@ -50,7 +50,7 @@ macro_rules! krpc_server {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
-            fn get_info(&self) -> (&str , &str , &str , Vec<String>) {
+            fn get_info(&self) -> (&str , &str , Option<&str> , Vec<String>) {
                let mut methods = vec![];
                $(
                   methods.push(stringify!($method).to_string());
@@ -81,9 +81,10 @@ macro_rules! krpc_client {
                         }
                         req_vec.push(res_str.unwrap());
                     )*
+                    let version : Option<&str> = $version;
                     let msg = krpc_common::KrpcMsg::new(
                         krpc_common::get_uuid(),
-                        $version.to_string(),
+                        version.map(|e|e.to_string()),
                         $package.to_owned() + "." + stringify!($name),
                         stringify!($method).to_string(),
                         req_vec,

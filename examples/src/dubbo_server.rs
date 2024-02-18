@@ -24,7 +24,7 @@ struct DemoService {
 krpc_server! {
    "org.apache.dubbo.springboot.demo",
    DemoService,
-   "1.0.0",
+   None,
    async fn sayHello(&self,req : String) -> Result<String> {
       info!("res : {:?}" ,req);
       return Ok("Hello ".to_owned() + &req);

@@ -30,7 +30,7 @@ krpc_client! {
    CLI,
    "com.krpc",
    TestServer,
-   "1.0.0",
+   Some("1.0.0"),
    async fn do_run1(&self,res1 : ReqDto,res2 : ResDto) -> Result<ResDto>
    async fn do_run2(&self,res : ReqDto) -> Result<ResDto> 
 } 

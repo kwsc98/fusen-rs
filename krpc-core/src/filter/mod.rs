@@ -68,20 +68,26 @@ impl KrpcFilter for RpcServerRoute {
 
     fn call(&self, req: Self::Request) -> Self::Future {
         let mut msg: KrpcMsg = req;
-        let class_name = (msg.class_name.clone() + ":" + &msg.version).clone();
+        let mut class_name = msg.class_name.clone();
+        if let Some(version) = &msg.version {
+            class_name.push_str(":");
+            class_name.push_str(version);
+        }
         match self.map.get(&class_name) {
             Some(server) => {
                 let server = server.clone();
                 Box::pin(async move { Ok(server.invoke(msg).await) })
-            },
+            }
             None => Box::pin(async move {
-                msg.res = Err(RpcError::Server(format!("not find server by {}",class_name))); 
+                msg.res = Err(RpcError::Server(format!(
+                    "not find server by {}",
+                    class_name
+                )));
                 Ok(msg)
-            })
+            }),
         }
     }
 }
-
 
 pub trait KrpcFilter {
     type Request;

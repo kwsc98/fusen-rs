@@ -40,7 +40,7 @@ pub enum RegisterType {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Info {
     pub server_name: String,
-    pub version: String,
+    pub version: Option<String>,
     pub methods: Vec<String>,
     pub ip: String,
     pub port: Option<String>,

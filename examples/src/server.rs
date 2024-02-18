@@ -24,7 +24,7 @@ struct TestServer {
 krpc_server! {
    "com.krpc",
    TestServer,
-   "1.0.0",
+   Some("1.0.0"),
    async fn do_run1(&self,req1 : ReqDto,req2 : ResDto) -> Result<ResDto> {
       info!("req1 : {:?} , req2 : {:?}" ,req1, req2);
       return Err("错误".to_string());

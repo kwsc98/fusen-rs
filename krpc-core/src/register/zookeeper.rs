@@ -182,7 +182,11 @@ fn listener_resource_node_change(
                     }
                 }
             }
-            let key = info.server_name.clone() + ":" + &info.version.clone();
+            let mut key = info.server_name.clone();
+            if let Some(version) = &info.version {
+                key.push_str(":");
+                key.push_str(version);
+            }
             info!("update server cache {:?} : {:?}", key, server_list);
             let mut temp_map = map.write().await;
             temp_map.insert(key, server_list);

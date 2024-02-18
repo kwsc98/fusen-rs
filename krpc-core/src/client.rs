@@ -2,7 +2,7 @@ use crate::register::RegisterBuilder;
 use crate::route::Route;
 use crate::support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper};
 use bytes::{BufMut, BytesMut};
-use http::Request;
+use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
 use krpc_common::{KrpcMsg, RpcError};
@@ -29,17 +29,20 @@ impl KrpcClient {
     pub async fn invoke<Res>(&self, msg: KrpcMsg) -> Result<Res, RpcError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
-    {
+    {   
         let mut sender: SendRequest<Full<bytes::Bytes>> = self
             .route
-            .get_socket_sender(&msg.class_name, &msg.version)
+            .get_socket_sender(&msg.class_name, msg.version.as_deref())
             .await
             .map_err(|e| RpcError::Client(e.to_string()))?;
         let buf = TripleRequestWrapper::get_buf(msg.req);
-        let req = Request::builder()
+        let mut builder = Request::builder()
             .uri("/".to_owned() + &msg.class_name + "/" + &msg.method_name)
-            .header("content-type", "application/grpc+proto")
-            .body(Full::<bytes::Bytes>::from(buf))
+            .header("content-type", "application/grpc+proto");
+        if let Some(version) = msg.version {
+            builder.headers_mut().unwrap().insert("tri-service-version", HeaderValue::from_str(&version).unwrap());
+        }
+        let req = builder.body(Full::<bytes::Bytes>::from(buf))
             .map_err(|e| RpcError::Client(e.to_string()))?;
         let mut response = sender
             .send_request(req)
