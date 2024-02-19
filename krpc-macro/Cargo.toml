@@ -1,10 +1,13 @@
 [package]
 name = "krpc-macro"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
+license.workspace = true
+description.workspace = true
 
 [dependencies]
-krpc-common = { path = "../krpc-common"}
+krpc-common.workspace = true
 serde_json.workspace = true
 quote = "1"
 syn = "2"

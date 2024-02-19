@@ -93,10 +93,8 @@ pub fn init_log() {
         .init();
 }
 
-use uuid::Uuid;
-
 pub fn get_uuid() -> String {
-    Uuid::new_v4().to_string()
+    uuid::Uuid::new_v4().to_string()
 }
 
 pub fn get_network_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {

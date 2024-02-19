@@ -1,14 +1,21 @@
 [workspace]
-members = ["krpc-common", "krpc-core", "krpc-macro", "examples"]
+members = ["krpc-common","krpc-macro","krpc-core", "examples"]
 resolver = "2"
 
 [workspace.package]
 name = "krpc-rust"
 version = "0.2.0"
+authors = ["kwsc98 <kwsc98@gmail.com>"]
 edition = "2021"
+license = "Apache-2.0"
+description = "RPC framework for service registration and discovery through API exposure, compatible with Dubbo3 protocol, intertunable with Java projects"
 
 
 [workspace.dependencies]
+krpc-common = { path = "krpc-common" ,version = "0.2.0" }
+krpc-core = { path = "krpc-core" ,version = "0.2.0"}
+krpc-macro = { path = "krpc-macro" ,version = "0.2.0"}
+
 #网络协议处理
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["full"] }
@@ -30,7 +37,7 @@ pretty_env_logger = "0.5"
 #json序列化
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-uuid = "1"
+uuid = { version = "1", features = ["v4"] }
 
 percent-encoding = "2"
 
