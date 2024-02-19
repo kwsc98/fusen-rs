@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "examples"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -608,7 +608,7 @@ checksum = "b1a46d1a171d865aa5f83f92695765caa047a9b4cbae2cbf37dbd613a793fd4c"
 
 [[package]]
 name = "krpc-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "percent-encoding",
  "pretty_env_logger",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "krpc-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "krpc-macro"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "krpc-common",
  "proc-macro2",

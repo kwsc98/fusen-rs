@@ -1,6 +1,6 @@
 [package]
 name = "examples"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 
 [[bin]]
