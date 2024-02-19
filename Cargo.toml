@@ -1,5 +1,5 @@
 [workspace]
-members = ["krpc-common", "krpc-core", "krpc-macro", "examples"]
+members = ["krpc-core", "examples"]
 resolver = "2"
 
 [workspace.package]

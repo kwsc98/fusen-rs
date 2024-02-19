@@ -37,11 +37,6 @@ krpc_server! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    println!("{:?}",krpc_common::get_uuid());
-    println!("{:?}",krpc_common::get_uuid());
-    println!("{:?}",krpc_common::get_uuid());
-    println!("{:?}",krpc_common::get_uuid());
-
     krpc_common::init_log();
     let server: DemoService = DemoService {
         _db: "我是一个DB数据库".to_string(),
