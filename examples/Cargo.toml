@@ -28,9 +28,9 @@ path = "src/dubbo_client_pt.rs"
 
 
 [dependencies]
-krpc-common = { path = "../krpc-common" }
-krpc-core = { path = "../krpc-core"}
-krpc-macro = { path = "../krpc-macro" }
+krpc-common = { path = "../krpc-common" ,version = "0.2.0" }
+krpc-core = { path = "../krpc-core" ,version = "0.2.0"}
+krpc-macro = { path = "../krpc-macro" ,version = "0.2.0"}
 
 #网络协议处理
 tokio.workspace = true
