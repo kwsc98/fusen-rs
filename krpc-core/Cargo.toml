@@ -1,7 +1,9 @@
 [package]
 name = "krpc-core"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 krpc-common = { path = "../krpc-common"}

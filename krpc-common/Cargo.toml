@@ -1,7 +1,9 @@
 [package]
 name = "krpc-common"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 #json序列化
