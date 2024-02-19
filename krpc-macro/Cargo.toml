@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-krpc-common = { path = "../krpc-common"}
+krpc-common = { path = "../krpc-common" , version = "*"}
 serde_json.workspace = true
 quote = "1"
 syn = "2"
