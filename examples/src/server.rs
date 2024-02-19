@@ -27,7 +27,7 @@ krpc_server! {
    Some("1.0.0"),
    async fn do_run1(&self,req1 : ReqDto,req2 : ResDto) -> Result<ResDto> {
       info!("req1 : {:?} , req2 : {:?}" ,req1, req2);
-      return Err("错误".to_string());
+      return Err(krpc_common::RpcError::Method("error msg".to_string()));
    }
    async fn do_run2(&self,req : ReqDto) -> Result<ResDto> {
       info!("{:?}" ,req);

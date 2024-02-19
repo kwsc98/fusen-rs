@@ -8,7 +8,7 @@ macro_rules! krpc_server {
         impl $name {
             $(
                 #[allow(non_snake_case)]
-                async fn $method (&$self $(,$req : $reqType)* ) -> krpc_common::Response<$resType> { $($code)* }
+                async fn $method (&$self $(,$req : $reqType)* ) -> Result<$resType,krpc_common::RpcError> { $($code)* }
             )*
 
             async fn prv_invoke (&self, mut param : krpc_common::KrpcMsg) -> krpc_common::KrpcMsg {
@@ -37,7 +37,7 @@ macro_rules! krpc_server {
                                 Err(err) => Err(krpc_common::RpcError::Server(err.to_string()))
                             }
                         },
-                        Err(info) => Err(krpc_common::RpcError::Method(info))
+                        Err(info) => Err(info)
                     };
                     return param;
                 })*
