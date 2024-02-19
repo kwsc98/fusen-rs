@@ -84,13 +84,13 @@ async fn encode_filter(msg: KrpcMsg) -> (Response<()>, String, bytes::Bytes) {
                 status = "91";
                 msg
             }
-            RpcError::Server(msg) => {
-                status = "92";
-                msg
-            }
             RpcError::Null => {
-                status = "93";
+                status = "92";
                 "RpcError::Null".to_string()
+            }
+            RpcError::Server(msg) => {
+                status = "93";
+                msg
             }
         })),
     };

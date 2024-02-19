@@ -29,7 +29,7 @@ impl KrpcClient {
     pub async fn invoke<Res>(&self, msg: KrpcMsg) -> Result<Res, RpcError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
-    {   
+    {
         let mut sender: SendRequest<Full<bytes::Bytes>> = self
             .route
             .get_socket_sender(&msg.class_name, msg.version.as_deref())
@@ -40,9 +40,13 @@ impl KrpcClient {
             .uri("/".to_owned() + &msg.class_name + "/" + &msg.method_name)
             .header("content-type", "application/grpc+proto");
         if let Some(version) = msg.version {
-            builder.headers_mut().unwrap().insert("tri-service-version", HeaderValue::from_str(&version).unwrap());
+            builder.headers_mut().unwrap().insert(
+                "tri-service-version",
+                HeaderValue::from_str(&version).unwrap(),
+            );
         }
-        let req = builder.body(Full::<bytes::Bytes>::from(buf))
+        let req = builder
+            .body(Full::<bytes::Bytes>::from(buf))
             .map_err(|e| RpcError::Client(e.to_string()))?;
         let mut response = sender
             .send_request(req)
@@ -65,7 +69,7 @@ impl KrpcClient {
                             let trip_res = TripleResponseWrapper::decode(&res_body.to_vec()[5..])
                                 .map_err(|e| RpcError::Client(e.to_string()))?;
                             if trip_res.is_empty_body() {
-                                return Err(RpcError::Server("null".to_string()));
+                                return Err(RpcError::Null);
                             }
                             let res: Res = serde_json::from_slice(&trip_res.data)
                                 .map_err(|e| RpcError::Client(e.to_string()))?;
@@ -80,6 +84,7 @@ impl KrpcClient {
                                 match else_status {
                                     b"90" => return Err(RpcError::Client(msg)),
                                     b"91" => return Err(RpcError::Method(msg)),
+                                    b"92" => return Err(RpcError::Null),
                                     _ => return Err(RpcError::Server(msg)),
                                 }
                             }

@@ -172,13 +172,15 @@ fn listener_resource_node_change(
                 };
             let mut server_list = vec![];
             for node in watcher.0 {
-                let info = decode_url(&node);
-                if let Ok(response) = info {
-                    if let Resource::Server(info) = response {
-                        server_list.push(SocketInfo {
-                            info,
-                            sender: Arc::new(RwLock::new(None)),
-                        });
+                let resource = decode_url(&node);
+                if let Ok(resource) = resource {
+                    if let Resource::Server(resource_info) = resource {
+                        if &info.version == &resource_info.version  {
+                            server_list.push(SocketInfo {
+                                info : resource_info,
+                                sender: Arc::new(RwLock::new(None)),
+                            });
+                        }
                     }
                 }
             }
