@@ -1,6 +1,6 @@
 [package]
 name = "examples"
-version = "0.0.1"
+version.workspace = true
 edition.workspace = true
 
 [[bin]]
@@ -12,6 +12,15 @@ path = "src/client.rs"
 [[bin]]
 name = "client-pt"
 path = "src/client_pt.rs"
+[[bin]]
+name = "dubbo-server"
+path = "src/dubbo_server.rs"
+[[bin]]
+name = "dubbo-client"
+path = "src/dubbo_client.rs"
+[[bin]]
+name = "dubbo-client-pt"
+path = "src/dubbo_client_pt.rs"
 
 
 [dependencies]
@@ -39,6 +48,9 @@ pretty_env_logger.workspace = true
 serde.workspace = true 
 serde_json.workspace = true 
 uuid.workspace = true
+
+prost = "0.12.3"
+prost-build = "0"
 
 pin-project-lite.workspace = true 
 lazy_static.workspace = true

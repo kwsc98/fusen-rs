@@ -16,34 +16,32 @@ lazy_static! {
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ReqDto {
-    str: String,
+    name: String,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ResDto {
-    str: String,
+    res : String,
 }
 
-struct TestServer;
+struct DemoService;
 
 krpc_client! {
    CLI,
-   "com.krpc",
-   TestServer,
-   Some("1.0.0"),
-   async fn do_run1(&self,res1 : ReqDto,res2 : ResDto) -> Result<ResDto>
-   async fn do_run2(&self,res : ReqDto) -> Result<ResDto> 
+   "org.apache.dubbo.springboot.demo",
+   DemoService,
+   None,
+   async fn sayHello(&self,req : String) -> Result<String>
+   async fn sayHelloV2(&self,req : ReqDto) -> Result<ResDto>
 } 
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     krpc_common::init_log();
-    let client = TestServer;
-    let res = client.do_run1(
-        ReqDto{str : "client say hello 1".to_string()},
-        ResDto{str : "client say hello 2".to_string()}).await;
+    let client = DemoService;
+    let res = client.sayHello("world".to_string()).await;
     info!("{:?}",res);
-    let res = client.do_run2(ReqDto{str : "client say hello 2".to_string()}).await;
+    let res = client.sayHelloV2(ReqDto{name:"world".to_string()}).await;
     info!("{:?}",res);
 }
 

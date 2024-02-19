@@ -24,10 +24,16 @@ impl KrpcServer {
 
     pub fn add_rpc_server(mut self, server: Box<dyn RpcServer>) -> KrpcServer {
         let info = server.get_info();
-        let key = info.0.to_string() + ":" + &info.1.to_string();
+        let server_name = info.0.to_string() + "." + &info.1.to_string();
+        let mut key = server_name.clone();
+        if let Some(version) = info.2 {
+            key.push_str(":");
+            key.push_str(version);
+        }
         self.register.add_resource(Resource::Server(Info {
-            server_name: info.0.to_string(),
-            version: info.1.to_string(),
+            server_name,
+            version: info.2.map(|e| e.to_string()),
+            methods: info.3,
             ip: krpc_common::get_ip(),
             port: Some(self.port.clone()),
         }));

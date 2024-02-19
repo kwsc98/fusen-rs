@@ -8,37 +8,37 @@ use tracing::info;
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ReqDto {
-    str: String,
+    name: String,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ResDto {
-    str: String,
+    res: String,
 }
 
 #[derive(Clone)]
-struct TestServer {
+struct DemoService {
     _db: String,
 }
 
 krpc_server! {
-   "com.krpc",
-   TestServer,
-   Some("1.0.0"),
-   async fn do_run1(&self,req1 : ReqDto,req2 : ResDto) -> Result<ResDto> {
-      info!("req1 : {:?} , req2 : {:?}" ,req1, req2);
-      return Err(krpc_common::RpcError::Method("error msg".to_string()));
+   "org.apache.dubbo.springboot.demo",
+   DemoService,
+   None,
+   async fn sayHello(&self,req : String) -> Result<String> {
+      info!("res : {:?}" ,req);
+      return Ok("Hello ".to_owned() + &req);
    }
-   async fn do_run2(&self,req : ReqDto) -> Result<ResDto> {
-      info!("{:?}" ,req);
-      return Ok(ResDto { str : "TestServer say hello 2".to_string()});
-    }
+   async fn sayHelloV2(&self,req : ReqDto) -> Result<ResDto> {
+      info!("res : {:?}" ,req);
+      return Ok(ResDto{res :  "Hello ".to_owned() + &req.name + " V2"});
+   }
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     krpc_common::init_log();
-    let server: TestServer = TestServer {
+    let server: DemoService = DemoService {
         _db: "我是一个DB数据库".to_string(),
     };
     KrpcServer::build(

@@ -1,7 +1,6 @@
 use super::{Register, Resource, SocketInfo};
-use crate::register::Info;
+use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
-use krpc_common::get_uuid;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::info;
@@ -35,10 +34,10 @@ impl Register for KrpcZookeeper {
 impl KrpcZookeeper {
     pub fn init(
         addr: &str,
-        name_space: &str,
+        _name_space: &str,
         map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
     ) -> Self {
-        let root_path = "/krpc/".to_string() + name_space;
+        let root_path = "/dubbo".to_string();
         let krpc_zookeeper = KrpcZookeeper {
             addr: addr.to_string(),
             root_path,
@@ -98,7 +97,7 @@ fn creat_resource_node(
     map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
 ) {
     let mut path = root.to_string();
-    let info = match resource {
+    let info = match &resource {
         Resource::Client(info) => {
             listener_resource_node_change(
                 cluster.clone(),
@@ -106,22 +105,15 @@ fn creat_resource_node(
                 Resource::Client(info.clone()),
                 map,
             );
-            path.push_str(&("/".to_owned() + &info.server_name + "/client/"));
+            path.push_str(&("/".to_owned() + &info.server_name + "/consumers"));
             info
         }
         Resource::Server(info) => {
-            path.push_str(&("/".to_owned() + &info.server_name + "/server/"));
+            path.push_str(&("/".to_owned() + &info.server_name + "/providers"));
             info
         }
     };
-    path.push_str(&info.version);
-    let mut node_name = "/".to_owned() + &info.ip.clone();
-    match info.port.clone() {
-        Some(port) => node_name.push_str(&(":".to_owned() + &port.to_string())),
-        None => {
-            node_name.push_str(&(":".to_owned() + &get_uuid()));
-        }
-    };
+    let node_name = encode_url(&resource);
     let node_data = serde_json::to_string(&info).unwrap();
     tokio::spawn(async move {
         loop {
@@ -131,7 +123,8 @@ fn creat_resource_node(
                 .await
             {
                 Ok(_) => {}
-                Err(_err) => {
+                Err(err) => {
+                    info!("create node err {:?}", err);
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
@@ -159,12 +152,11 @@ fn listener_resource_node_change(
     let mut path = root;
     let info = match resource {
         Resource::Client(info) => {
-            path.push_str(&("/".to_owned() + &info.server_name + "/server/"));
+            path.push_str(&("/".to_owned() + &info.server_name + "/providers"));
             info
         }
         Resource::Server(_) => return,
     };
-    path.push_str(&info.version);
     tokio::spawn(async move {
         let mut client = connect(&cluster.clone(), &path).await;
         let map = map;
@@ -180,16 +172,23 @@ fn listener_resource_node_change(
                 };
             let mut server_list = vec![];
             for node in watcher.0 {
-                let server_info: Vec<&str> = node.split(":").collect();
-                let info = Info {
-                    server_name: info.server_name.clone(),
-                    version: info.version.clone(),
-                    ip: server_info[0].to_string(),
-                    port: Some(server_info[1].to_string()),
-                };
-                server_list.push(SocketInfo { info, sender: Arc::new(RwLock::new(None))});
+                let resource = decode_url(&node);
+                if let Ok(resource) = resource {
+                    if let Resource::Server(resource_info) = resource {
+                        if &info.version == &resource_info.version  {
+                            server_list.push(SocketInfo {
+                                info : resource_info,
+                                sender: Arc::new(RwLock::new(None)),
+                            });
+                        }
+                    }
+                }
             }
-            let key = info.server_name.clone() + ":" + &info.version.clone();
+            let mut key = info.server_name.clone();
+            if let Some(version) = &info.version {
+                key.push_str(":");
+                key.push_str(version);
+            }
             info!("update server cache {:?} : {:?}", key, server_list);
             let mut temp_map = map.write().await;
             temp_map.insert(key, server_list);

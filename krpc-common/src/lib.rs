@@ -12,6 +12,7 @@ pub type Response<T> = std::result::Result<T, String>;
 pub type KrpcFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 
 pub mod date_util;
+pub mod url_util;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RpcError {
@@ -40,10 +41,10 @@ impl std::error::Error for RpcError {}
 #[derive(Debug)]
 pub struct KrpcMsg {
     pub unique_identifier: String,
-    pub version: String,
+    pub version: Option<String>,
     pub class_name: String,
     pub method_name: String,
-    pub req: String,
+    pub req: Vec<String>,
     pub res: core::result::Result<String, RpcError>,
 }
 
@@ -51,20 +52,20 @@ impl KrpcMsg {
     pub fn new_empty() -> KrpcMsg {
         return KrpcMsg {
             unique_identifier: "".to_string(),
-            version: "".to_string(),
+            version: None,
             class_name: "".to_string(),
             method_name: "".to_string(),
-            req: "".to_string(),
+            req: vec![],
             res: Err(RpcError::Null),
         };
     }
 
     pub fn new(
         unique_identifier: String,
-        version: String,
+        version: Option<String>,
         class_name: String,
         method_name: String,
-        req: String,
+        req: Vec<String>,
         res: core::result::Result<String, RpcError>,
     ) -> KrpcMsg {
         return KrpcMsg {
@@ -80,7 +81,7 @@ impl KrpcMsg {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
-    fn get_info(&self) -> (&str, &str);
+    fn get_info(&self) -> (&str, &str, Option<&str>, Vec<String>);
 }
 
 pub fn init_log() {

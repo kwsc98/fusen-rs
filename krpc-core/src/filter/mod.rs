@@ -17,7 +17,7 @@ where
     S: Future,
     KF: KrpcFilter<Request = KrpcMsg, Response = KrpcMsg, Error = crate::Error>,
 {
-    pub fn new(codec_filter: F, filter_list: Vec<KF>) -> Self {
+    pub fn _new(codec_filter: F, filter_list: Vec<KF>) -> Self {
         return KrpcRouter {
             codec_filter,
             filter_list: Arc::new(filter_list),
@@ -47,17 +47,17 @@ where
 }
 
 #[derive(Clone, Default)]
-pub struct Filter {
+pub struct RpcServerRoute {
     map: HashMap<String, Arc<Box<dyn RpcServer>>>,
 }
 
-impl Filter {
+impl RpcServerRoute {
     pub fn new(map: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
-        return Filter { map };
+        return RpcServerRoute { map };
     }
 }
 
-impl KrpcFilter for Filter {
+impl KrpcFilter for RpcServerRoute {
     type Request = KrpcMsg;
 
     type Response = KrpcMsg;
@@ -66,22 +66,28 @@ impl KrpcFilter for Filter {
 
     type Future = crate::KrpcFuture<Result<Self::Response, Self::Error>>;
 
-    fn call(&self, req: Self::Response) -> Self::Future {
+    fn call(&self, req: Self::Request) -> Self::Future {
         let mut msg: KrpcMsg = req;
-        let class_name = (msg.class_name.clone() + ":" + &msg.version).clone();
+        let mut class_name = msg.class_name.clone();
+        if let Some(version) = &msg.version {
+            class_name.push_str(":");
+            class_name.push_str(version);
+        }
         match self.map.get(&class_name) {
             Some(server) => {
                 let server = server.clone();
                 Box::pin(async move { Ok(server.invoke(msg).await) })
-            },
+            }
             None => Box::pin(async move {
-                msg.res = Err(RpcError::Server(format!("not find server by {}",class_name))); 
+                msg.res = Err(RpcError::Server(format!(
+                    "not find server by {}",
+                    class_name
+                )));
                 Ok(msg)
-            })
+            }),
         }
     }
 }
-
 
 pub trait KrpcFilter {
     type Request;

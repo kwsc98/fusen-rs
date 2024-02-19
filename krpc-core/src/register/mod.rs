@@ -1,9 +1,10 @@
-use self::zookeeper::KrpcZookeeper;
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+
+use self::zookeeper::KrpcZookeeper;
 pub mod zookeeper;
 
 pub struct RegisterBuilder {
@@ -39,14 +40,19 @@ pub enum RegisterType {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Info {
     pub server_name: String,
-    pub version: String,
+    pub version: Option<String>,
+    pub methods: Vec<String>,
     pub ip: String,
     pub port: Option<String>,
 }
 
 impl Info {
     pub fn get_addr(&self) -> String {
-        self.ip.clone() + ":" + &self.port.clone().unwrap()
+        let mut ip = self.ip.clone();
+        if let Some(port) = &self.port {
+            ip.push_str(&(":".to_owned() + port));
+        }
+        return ip;
     }
 }
 
