@@ -8,8 +8,8 @@ description.workspace = true
 
 
 [dependencies]
-krpc-common = { path = "../krpc-common" }
-krpc-macro = { path = "../krpc-macro" }
+krpc-common = { path = "../krpc-common" ,version = "*"}
+krpc-macro = { path = "../krpc-macro" ,version = "*"}
 
 
 #网络协议处理
