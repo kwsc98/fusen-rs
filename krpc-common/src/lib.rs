@@ -5,7 +5,6 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
-use uuid::Uuid;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -95,7 +94,7 @@ pub fn init_log() {
 }
 
 pub fn get_uuid() -> String {
-    Uuid::new_v4().to_string()
+    uuid::Uuid::new_v4().to_string()
 }
 
 pub fn get_network_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
