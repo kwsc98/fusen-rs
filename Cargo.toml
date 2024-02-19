@@ -7,7 +7,7 @@ name = "krpc-rust"
 version = "0.2.0"
 authors = ["kwsc98 <kwsc98@gmail.com>"]
 edition = "2021"
-license = "Apache-2.0 license"
+license = "Apache-2.0"
 description = "RPC framework for service registration and discovery through API exposure, compatible with Dubbo3 protocol, intertunable with Java projects"
 
 
