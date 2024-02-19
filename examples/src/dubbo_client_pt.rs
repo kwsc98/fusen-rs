@@ -101,9 +101,7 @@ async fn do_run(client: DemoService, sender: mpsc::Sender<i32>) {
         tokio::spawn(async move {
             let uuid = krpc_common::get_uuid();
             let res = temp_client.sayHello(uuid.clone()).await;
-            if res.is_err() {
-                info!("req {:?} res {:?}", uuid, res);
-            }
+            info!("req {:?} res {:?}", uuid, res);
             drop(temp_sender);
         });
     }

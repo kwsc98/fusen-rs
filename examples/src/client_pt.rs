@@ -99,9 +99,7 @@ async fn do_run(client : TestServer , sender : mpsc::Sender<i32>) {
         let temp_sender = sender.clone();
         tokio::spawn(async move {
             let res = temp_client.do_run2(ReqDto{str : "client say hello 1".to_string()}).await;
-            if res.is_err() {
-                info!("{:?}",res);
-            }
+            info!("{:?}",res);
             drop(temp_sender);
         });
     }
