@@ -1,8 +1,6 @@
 use krpc_core::{
-    register::{RegisterBuilder, RegisterType},
-    server::KrpcServer,
+    krpc_server, register::{RegisterBuilder, RegisterType}, server::KrpcServer
 };
-use krpc_macro::krpc_server;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 

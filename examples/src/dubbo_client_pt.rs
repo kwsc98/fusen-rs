@@ -2,10 +2,8 @@ use std::time::Duration;
 
 use krpc_common::date_util::get_now_date_time_as_millis;
 use krpc_core::{
-    client::KrpcClient,
-    register::{RegisterBuilder, RegisterType},
+    client::KrpcClient, krpc_client, register::{RegisterBuilder, RegisterType}
 };
-use krpc_macro::krpc_client;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;

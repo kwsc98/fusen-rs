@@ -1,5 +1,6 @@
 pub mod client;
 mod filter;
+pub mod r#macro;
 pub mod protocol;
 pub mod server;
 pub mod support;

@@ -1,5 +1,4 @@
-use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
-use krpc_macro::krpc_client;
+use krpc_core::{client::KrpcClient, krpc_client, register::{RegisterBuilder, RegisterType}};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use tracing::info;
