@@ -13,5 +13,5 @@ proc-macro = true
 krpc-common.workspace = true
 serde_json.workspace = true
 quote = "1"
-syn = "2"
+syn = { version = "2", features = ["full"] }
 proc-macro2.workspace = true
