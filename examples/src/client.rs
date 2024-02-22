@@ -2,8 +2,8 @@ use krpc_core::{client::KrpcClient, register::{RegisterBuilder, RegisterType}};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use examples::{ReqDto, ResDto, TestServer, TestServerImpl};
 use krpc_common::RpcError;
-use krpc_macro::rpc_resources;
 
 lazy_static! {
     static ref CLI: KrpcClient = KrpcClient::build(
@@ -15,25 +15,9 @@ lazy_static! {
     );
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ReqDto {
-    str: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ResDto {
-    str: String,
-}
-
-#[rpc_resources(package = "com.krpc", version = "1.0.0")]
-trait TestServer {
-    async fn do_run1(&self, res1: ReqDto, res2: ResDto) -> ResDto;
-    async fn do_run2(&self, res: ReqDto) -> ResDto;
-}
-
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    let de = TestServer { client: &CLI };
+let de = TestServerImpl { client: &CLI };
     krpc_common::init_log();
     let client = de;
     let res = client.do_run1(

@@ -1,20 +1,14 @@
-
 use proc_macro::TokenStream;
 use std::collections::HashMap;
+use proc_macro::Ident;
 use quote::{quote, ToTokens};
-use syn::{self, FnArg, ItemTrait, parse_macro_input, ReturnType, TraitItem};
-
+use syn::{self, parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem, ItemFn, Item, ItemImpl};
 
 #[proc_macro_attribute]
-pub fn rpc_resources(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let map = parse_attr(attr);
-    let package = map.get("package").map_or("krpc",|e|e);
-    let package = quote!(#package);
-    let version = match map.get("version").map(|e| e.to_string()) {
-        None => quote!(None),
-        Some(version) => quote!(Some(&#version))
-    };
+pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let (package, version) = parse_attr(attr);
     let input = parse_macro_input!(item as ItemTrait);
+    let item_trait = input.clone();
     let trait_ident = &input.ident;
     let vis = &input.vis;
     let items = &input.items;
@@ -37,13 +31,15 @@ pub fn rpc_resources(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
         let output = item.output;
         let output_type = match &output {
-            ReturnType::Default => { quote! {()} }
-            ReturnType::Type(_, res_type) => { res_type.to_token_stream() }
+            ReturnType::Default => {
+                quote! {()}
+            }
+            ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
         fn_quote.push(
             quote! {
                      #[allow(non_snake_case)]
-                     #asyncable fn #ident (#inputs) -> Result<#output_type,krpc_common::RpcError> {
+                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,krpc_common::RpcError> {
                     let mut req_vec : Vec<String> = vec![];
                     #(
                         let mut res_str = serde_json::to_string(&#req);
@@ -67,16 +63,16 @@ pub fn rpc_resources(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         );
     }
-
-
-    // 生成结构体的代码
+    let rpc_client = syn::Ident::new(&format!("{}Impl", trait_ident), trait_ident.span());
     let expanded = quote! {
-        #vis struct #trait_ident {
-            client : &'static krpc_core::client::KrpcClient
+        #item_trait
+
+        #vis struct #rpc_client {
+            pub client : &'static krpc_core::client::KrpcClient
         }
-        impl #trait_ident {
+        impl #rpc_client {
         #(
-                #fn_quote
+            #fn_quote
         )*
        }
 
@@ -85,14 +81,57 @@ pub fn rpc_resources(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 
-fn parse_attr(attr: TokenStream) -> HashMap<String, String> {
+#[proc_macro_attribute]
+pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let (package, version) = parse_attr(attr);
+    let item = parse_macro_input!(item as ItemImpl);
+    let item_trait = item.trait_.unwrap();
+    let item_self = item.self_ty;
+    let items_fn = item.items;
+    eprintln!("{:?}", item);
+    let expanded = quote! {
+        #item
+
+        impl krpc_common::RpcServer for #item_self {
+            fn invoke (&self, param : krpc_common::KrpcMsg) -> krpc_common::KrpcFuture<krpc_common::KrpcMsg> {
+                let rpc = self.clone();
+                Box::pin(async move {
+
+                    rpc.prv_invoke(param).await
+
+                })
+            }
+            fn get_info(&self) -> (&str , &str , Option<&str> , Vec<String>) {
+               let mut methods = vec![];
+               #(
+                  methods.push(stringify!($method).to_string());
+               )*
+               (#package ,stringify!(#item_self) , #version ,methods)
+            }
+        }
+    };
+    // eprintln!("{:?}", item);
+    expanded.into()
+}
+
+
+fn parse_attr(attr: TokenStream) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let mut map = HashMap::new();
     let attr = attr.clone().to_string();
     let args: Vec<&str> = attr.split(",").collect();
     for arg in args {
         let arg = arg.replace(" ", "");
         let item: Vec<&str> = arg.split("=").collect();
-        map.insert(item[0].to_string().clone(), item[1].replace("\"", "").to_string().clone());
+        map.insert(
+            item[0].to_string().clone(),
+            item[1].replace("\"", "").to_string().clone(),
+        );
     }
-    return map;
+    let package = map.get("package").map_or("krpc", |e| e);
+    let package = quote!(#package);
+    let version = match map.get("version").map(|e| e.to_string()) {
+        None => quote!(None),
+        Some(version) => quote!(Some(&#version)),
+    };
+    return (package, version);
 }
