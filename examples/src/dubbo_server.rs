@@ -1,44 +1,35 @@
+use examples::{DemoService, ReqDto, ResDto};
+use krpc_common::RpcResult;
 use krpc_core::{
     register::{RegisterBuilder, RegisterType},
     server::KrpcServer,
 };
-use krpc_macro::krpc_server;
-use serde::{Deserialize, Serialize};
+use krpc_macro::rpc_server;
 use tracing::info;
 
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ReqDto {
-    name: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ResDto {
-    res: String,
-}
-
 #[derive(Clone)]
-struct DemoService {
+struct DemoServiceImpl {
     _db: String,
 }
 
-krpc_server! {
-   "org.apache.dubbo.springboot.demo",
-   DemoService,
-   None,
-   async fn sayHello(&self,req : String) -> Result<String> {
-      info!("res : {:?}" ,req);
-      return Ok("Hello ".to_owned() + &req);
-   }
-   async fn sayHelloV2(&self,req : ReqDto) -> Result<ResDto> {
-      info!("res : {:?}" ,req);
-      return Ok(ResDto{res :  "Hello ".to_owned() + &req.name + " V2"});
-   }
+#[rpc_server(package = "org.apache.dubbo.springboot.demo")]
+impl DemoService for DemoServiceImpl {
+    async fn sayHello(&self, req: String) -> RpcResult<String> {
+        info!("res : {:?}", req);
+        return Ok("Hello ".to_owned() + &req);
+    }
+    async fn sayHelloV2(&self, req: ReqDto) -> RpcResult<ResDto> {
+        info!("res : {:?}", req);
+        return Ok(ResDto {
+            str: "Hello ".to_owned() + &req.str + " V2",
+        });
+    }
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     krpc_common::init_log();
-    let server: DemoService = DemoService {
+    let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
     KrpcServer::build(
