@@ -67,12 +67,15 @@ pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
         #item_trait
 
         #vis struct #rpc_client {
-            pub client : &'static krpc_core::client::KrpcClient
+            client : &'static krpc_core::client::KrpcClient
         }
         impl #rpc_client {
         #(
             #fn_quote
         )*
+        pub fn new(client : &'static krpc_core::client::KrpcClient) -> #rpc_client {
+            #rpc_client {client}
+        }
        }
 
     };

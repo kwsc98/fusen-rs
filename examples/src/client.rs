@@ -17,7 +17,7 @@ lazy_static! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    let de = TestServerRpc { client: &CLI };
+    let de = TestServerRpc::new(&CLI);
     krpc_common::init_log();
     let client = de;
     let res = client

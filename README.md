@@ -5,111 +5,97 @@ krpc-rust是一个高性能，轻量级的rpc框架，通过使用Rust宏来解�
 
 ## 快速开始
 
+### Common InterFace
+```rust
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct ReqDto {
+    pub str: String,
+}
+
+//#[rpc_trait(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
+#[rpc_trait(package = "org.apache.dubbo.springboot.demo")]
+pub trait DemoService {
+
+    async fn sayHello(&self, name: String) -> String;
+
+    async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
+
+}
+```
+
 
 ### Server
 ```rust
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ReqDto {
-    name: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ResDto {
-    res: String,
-}
-
 #[derive(Clone)]
-struct DemoService {
+struct DemoServiceImpl {
     _db: String,
 }
 
-krpc_server! {
-   //设置包路径
-   "org.apache.dubbo.springboot.demo",
-   //设置service-name
-   DemoService,
-   //设置service-versions
-   None,
-   async fn sayHello(&self,req : String) -> Result<String> {
-      info!("res : {:?}" ,req);
-      return Ok("Hello ".to_owned() + &req);
-   }
-   async fn sayHelloV2(&self,req : ReqDto) -> Result<ResDto> {
-      info!("res : {:?}" ,req);
-      return Ok(ResDto{res :  "Hello ".to_owned() + &req.name + " V2"});
-   }
+//#[rpc_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
+//设置包路径和版本
+#[rpc_server(package = "org.apache.dubbo.springboot.demo")]
+impl DemoService for DemoServiceImpl {
+    async fn sayHello(&self, req: String) -> RpcResult<String> {
+        info!("res : {:?}", req);
+        return Ok("Hello ".to_owned() + &req);
+    }
+    async fn sayHelloV2(&self, req: ReqDto) -> RpcResult<ResDto> {
+        info!("res : {:?}", req);
+        return Ok(ResDto {
+            str: "Hello ".to_owned() + &req.str + " V2",
+        });
+    }
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     krpc_common::init_log();
-    let server: DemoService = DemoService {
+    let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
     KrpcServer::build(
-        //配置注册中心
+        //设置注册中心配置
         RegisterBuilder::new(
             &format!("127.0.0.1:{}", "2181"),
             "default",
             RegisterType::ZooKeeper,
         ),
-        //设置监听端口
         "8081",
     )
+    //注册rpc服务
     .add_rpc_server(Box::new(server))
     .run()
     .await;
 }
-
 ```
 
 ### Client
 ```rust
-//初始化KrpcClient
+//初始化RpcClient
 lazy_static! {
     static ref CLI: KrpcClient = KrpcClient::build(
-        //配置注册中心
+        //设置注册中心配置
         RegisterBuilder::new(
-            &format!("127.0.0.1:{}", "2181"),
-            "default",
-            RegisterType::ZooKeeper,
-        )
-    );
+        &format!("127.0.0.1:{}", "2181"),
+        "default",
+        RegisterType::ZooKeeper,
+    ));
 }
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ReqDto {
-    name: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ResDto {
-    res : String,
-}
-
-struct DemoService;
-//声明Rpc接口
-krpc_client! {
-   CLI,
-   //设置API包路径
-   "org.apache.dubbo.springboot.demo",
-   //设置service-name
-   DemoService,
-   //设置service-versions
-   None,
-   async fn sayHello(&self,req : String) -> Result<String>
-   async fn sayHelloV2(&self,req : ReqDto) -> Result<ResDto>
-} 
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     krpc_common::init_log();
-    let client = DemoService;
+    let client = DemoServiceRpc::new(&CLI);
     let res = client.sayHello("world".to_string()).await;
-    info!("{:?}",res);
-    let res = client.sayHelloV2(ReqDto{name:"world".to_string()}).await;
-    info!("{:?}",res);
+    info!("{:?}", res);
+    let res = client
+        .sayHelloV2(ReqDto {
+            str: "world".to_string(),
+        })
+        .await;
+    info!("{:?}", res);
 }
+
 ```
 
 ### Dubbo3
