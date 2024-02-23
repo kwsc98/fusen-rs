@@ -1,20 +1,11 @@
+use examples::{ReqDto, ResDto, TestServer};
+use krpc_common::RpcResult;
 use krpc_core::{
-    krpc_server, register::{RegisterBuilder, RegisterType}, server::KrpcServer
+    register::{RegisterBuilder, RegisterType},
+    server::KrpcServer,
 };
-use serde::{Deserialize, Serialize};
+use krpc_macro::rpc_server;
 use tracing::info;
-use examples::TestServer;
-use krpc_macro::{rpc_resources, rpc_server};
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ReqDto {
-    str: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ResDto {
-    str: String,
-}
 
 #[derive(Clone)]
 struct TestServerImpl {
@@ -23,12 +14,18 @@ struct TestServerImpl {
 
 #[rpc_server(package = "com.krpc", version = "1.0.0")]
 impl TestServer for TestServerImpl {
-    async fn do_run1(&self, res1: examples::ReqDto, res2: examples::ResDto) -> examples::ResDto {
-        todo!()
+    async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> RpcResult<ResDto> {
+        info!("req1 : {:?} , req1 : {:?}", req1, req2);
+        return Ok(ResDto {
+            str: "Hello ".to_owned() + &req1.str + " " + &req2.str + " V1",
+        });
     }
 
-    async fn do_run2(&self, res: examples::ReqDto) -> examples::ResDto {
-        todo!()
+    async fn doRun2(&self, req: ReqDto) -> RpcResult<ResDto> {
+        info!("res : {:?}", req);
+        return Ok(ResDto {
+            str: "Hello ".to_owned() + &req.str + " V2",
+        });
     }
 }
 
