@@ -41,11 +41,11 @@ pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
                     pub #asyncable fn #ident (#inputs) -> Result<#output_type,krpc_common::RpcError> {
                     let mut req_vec : Vec<String> = vec![];
                     #(
-                        let mut res_str = serde_json::to_string(&#req);
-                        if let Err(err) = res_str {
+                        let mut res_poi_str = serde_json::to_string(&#req);
+                        if let Err(err) = res_poi_str {
                             return Err(krpc_common::RpcError::Client(err.to_string()));
                         }
-                        req_vec.push(res_str.unwrap());
+                        req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
                     let msg = krpc_common::KrpcMsg::new(
@@ -87,6 +87,7 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (package, version) = parse_attr(attr);
     let org_item = parse_macro_input!(item as ItemImpl);
     let item = org_item.clone();
+    let org_item = get_server_item(org_item);
     let item_trait = &item.trait_.unwrap().1.segments[0].ident;
     let item_self = item.self_ty;
     let items_ident_fn = item.items.iter().fold(vec![], |mut vec, e| {
@@ -104,12 +105,12 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let req = &input.pat;
                     let req_type = &input.ty;
                     let token = quote! {
-                     let result : Result<#req_type,_>  = serde_json::from_slice(req[idx].as_bytes());
+                     let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
                         param.res = Err(krpc_common::RpcError::Server(err.to_string()));
                         return param;
                     }
-                    let #req : #req_type = serde_json::from_slice(req[idx].as_bytes()).unwrap();
+                    let #req : #req_type = result.unwrap();
                     idx += 1;
                     };
                     req_pat.push(req);
@@ -120,7 +121,7 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
             );
             vec.push(quote! {
                 if &param.method_name[..] == stringify!(#method) {
-                let req = &param.req;
+                let req_poi_param = &param.req;
                 let mut idx = 0;
                 #(
                     #req
@@ -194,6 +195,26 @@ fn parse_attr(attr: TokenStream) -> (proc_macro2::TokenStream, proc_macro2::Toke
         Some(version) => quote!(Some(&#version)),
     };
     return (package, version);
+}
+
+fn get_server_item(item: ItemImpl) -> proc_macro2::TokenStream {
+    let impl_item = item.impl_token;
+    let trait_ident = item.trait_.unwrap().1;
+    let ident = item.self_ty.to_token_stream();
+    let fn_items = item.items.iter().fold(vec![], |mut vec, e| {
+        if let ImplItem::Fn(fn_item) = e {
+            vec.push(fn_item);
+        }
+        vec
+    });
+    quote! {
+        #impl_item #trait_ident for #ident {
+            #(
+                #[allow(non_snake_case)]
+                #fn_items
+            )*
+        }
+    }
 }
 
 fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
