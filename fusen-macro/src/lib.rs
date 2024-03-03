@@ -1,10 +1,10 @@
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use std::collections::HashMap;
-use syn::{self, parse_macro_input, FnArg, ImplItem, ItemImpl, ItemTrait, ReturnType, TraitItem};
+use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ItemTrait, ReturnType, TraitItem};
 
 #[proc_macro_attribute]
-pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (package, version) = parse_attr(attr);
     let input = parse_macro_input!(item as ItemTrait);
     let item_trait = get_item_trait(input.clone());
@@ -38,25 +38,25 @@ pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
-                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_common::RpcError> {
+                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen::fusen_common::RpcError> {
                     let mut req_vec : Vec<String> = vec![];
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
-                            return Err(fusen_common::RpcError::Client(err.to_string()));
+                            return Err(fusen::fusen_common::RpcError::Client(err.to_string()));
                         }
                         req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
-                    let msg = fusen_common::FusenMsg::new(
-                        fusen_common::get_uuid(),
+                    let msg = fusen::fusen_common::FusenMsg::new(
+                        fusen::fusen_common::get_uuid(),
                         version.map(|e|e.to_string()),
                         #package.to_owned() + "." + stringify!(#trait_ident),
                         stringify!(#ident).to_string(),
                         req_vec,
-                        Err(fusen_common::RpcError::Null)
+                        Err(fusen::fusen_common::RpcError::Null)
                     );
-                    let res : Result<#output_type,fusen_common::RpcError> = self.client.invoke::<#output_type>(msg).await;
+                    let res : Result<#output_type,fusen::fusen_common::RpcError> = self.client.invoke::<#output_type>(msg).await;
                     return res;
                 }
             }
@@ -76,6 +76,13 @@ pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
         pub fn new(client : &'static fusen::client::FusenClient) -> #rpc_client {
             #rpc_client {client}
         }
+
+        pub fn get_info(&self) -> (&str,Vec<&str>) {
+            let mut vec : Vec<&str> = vec![];
+            
+            (stringify!(#trait_ident),vec)
+        }
+
        }
 
     };
@@ -83,7 +90,7 @@ pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (package, version) = parse_attr(attr);
     let org_item = parse_macro_input!(item as ItemImpl);
     let item = org_item.clone();
@@ -107,7 +114,7 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let token = quote! {
                      let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
-                        param.res = Err(fusen_common::RpcError::Server(err.to_string()));
+                        param.res = Err(fusen::fusen_common::RpcError::Server(err.to_string()));
                         return param;
                     }
                     let #req : #req_type = result.unwrap();
@@ -136,7 +143,7 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
                         let res = serde_json::to_string(&res);
                         match res {
                             Ok(res) => Ok(res),
-                            Err(err) => Err(fusen_common::RpcError::Server(err.to_string()))
+                            Err(err) => Err(fusen::fusen_common::RpcError::Server(err.to_string()))
                         }
                     },
                     Err(info) => Err(info)
@@ -151,8 +158,8 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #org_item
 
-        impl fusen_common::RpcServer for #item_self {
-            fn invoke (&self, param : fusen_common::FusenMsg) -> fusen_common::FusenFuture<fusen_common::FusenMsg> {
+        impl fusen::fusen_common::RpcServer for #item_self {
+            fn invoke (&self, param : fusen::fusen_common::FusenMsg) -> fusen::fusen_common::FusenFuture<fusen::fusen_common::FusenMsg> {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
@@ -166,9 +173,9 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #item_self {
-            async fn prv_invoke (&self, mut param : fusen_common::FusenMsg) -> fusen_common::FusenMsg {
+            async fn prv_invoke (&self, mut param : fusen::fusen_common::FusenMsg) -> fusen::fusen_common::FusenMsg {
                 #(#items_fn)*
-                param.res = Err(fusen_common::RpcError::Server(format!("not find method by {}",param.method_name)));
+                param.res = Err(fusen::fusen_common::RpcError::Server(format!("not find method by {}",param.method_name)));
                 return param;
             }
         }
@@ -219,7 +226,7 @@ fn get_server_item(item: ItemImpl) -> proc_macro2::TokenStream {
 
 fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     let trait_ident = &item.ident;
-    let item_fn= item.items.iter().fold(vec![], |mut vec, e| {
+    let item_fn = item.items.iter().fold(vec![], |mut vec, e| {
         if let TraitItem::Fn(item_fn) = e {
             let asyncable = &item_fn.sig.asyncness;
             let ident = &item_fn.sig.ident;
@@ -231,19 +238,23 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
                 ReturnType::Type(_, res_type) => res_type.to_token_stream(),
             };
             vec.push(quote!(
-               #asyncable fn #ident (#inputs) -> fusen_common::RpcResult<#output_type>;
+               #asyncable fn #ident (#inputs) -> fusen::fusen_common::RpcResult<#output_type>;
             ));
         }
         vec
-    },
-    );
+    });
     quote! {
         pub trait #trait_ident {
-           #(  
+           #(
                #[allow(async_fn_in_trait)]
                #[allow(non_snake_case)]
                #item_fn
             )*
         }
     }
+}
+
+#[proc_macro_attribute]
+pub fn path(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
 }

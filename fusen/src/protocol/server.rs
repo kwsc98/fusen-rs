@@ -11,18 +11,18 @@ use crate::protocol::StreamHandler;
 
 pub struct TcpServer {
     port: String,
-    rpc_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
+    fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
     notify_shutdown: broadcast::Sender<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
     shutdown_complete_rx: mpsc::Receiver<()>,
 }
 
 impl TcpServer {
-    pub fn init(port: &str,rpc_servers: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
+    pub fn init(port: &str,fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         return TcpServer {
             port: port.to_string(),
-            rpc_servers,
+            fusen_servers,
             notify_shutdown: broadcast::channel(1).0,
             shutdown_complete_tx,
             shutdown_complete_rx,
@@ -53,7 +53,7 @@ impl TcpServer {
                     let stream_handler = StreamHandler {
                         tcp_stream: stream.0,
                         filter_list,
-                        rpc_server : self.rpc_servers.clone(),
+                        fusen_server : self.fusen_servers.clone(),
                         shutdown: self.notify_shutdown.subscribe(),
                         _shutdown_complete: self.shutdown_complete_tx.clone(),
                     };

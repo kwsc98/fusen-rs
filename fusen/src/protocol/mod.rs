@@ -15,7 +15,7 @@ mod h2_handler;
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,
     pub filter_list: Vec<RpcServerRoute>,
-    pub rpc_server: HashMap<String, Arc<Box<dyn RpcServer>>>,
+    pub fusen_server: HashMap<String, Arc<Box<dyn RpcServer>>>,
     pub shutdown: broadcast::Receiver<()>,
     pub _shutdown_complete: mpsc::Sender<()>,
 }

@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 pub struct FusenServer {
     port: String,
-    rpc_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
+    fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
     register: Box<dyn Register>,
 }
 
@@ -18,11 +18,11 @@ impl FusenServer {
         return FusenServer {
             port: port.to_string(),
             register: register_builder.init(map),
-            rpc_servers: HashMap::new(),
+            fusen_servers: HashMap::new(),
         };
     }
 
-    pub fn add_rpc_server(mut self, server: Box<dyn RpcServer>) -> FusenServer {
+    pub fn add_fusen_server(mut self, server: Box<dyn RpcServer>) -> FusenServer {
         let info = server.get_info();
         let server_name = info.0.to_string() + "." + &info.1.to_string();
         let mut key = server_name.clone();
@@ -37,13 +37,13 @@ impl FusenServer {
             ip: fusen_common::get_ip(),
             port: Some(self.port.clone()),
         }));
-        self.rpc_servers.insert(key, Arc::new(server));
+        self.fusen_servers.insert(key, Arc::new(server));
         return self;
     }
 
     pub async fn run(&mut self) {
         let port = self.port.clone();
-        let tcp_server = TcpServer::init(&port[..], self.rpc_servers.clone());
+        let tcp_server = TcpServer::init(&port[..], self.fusen_servers.clone());
         let _ = tcp_server.run().await;
     }
 }

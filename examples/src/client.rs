@@ -1,5 +1,6 @@
 use examples::ReqDto;
 use examples::TestServerRpc;
+use fusen::fusen_common;
 use fusen::{
     client::FusenClient,
     register::{RegisterBuilder, RegisterType},

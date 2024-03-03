@@ -8,6 +8,9 @@ pub mod handler;
 pub mod register;
 pub mod route;
 
+pub use fusen_common;
+pub use fusen_macro;
+
 pub type Error = fusen_common::Error;
 pub type Result<T> = fusen_common::Result<T>;
 pub type FusenFuture<T> = fusen_common::FusenFuture<T>;

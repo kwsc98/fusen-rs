@@ -31,9 +31,9 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-//#[rpc_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
+//#[fusen_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
 //设置包路径和版本
-#[rpc_server(package = "org.apache.dubbo.springboot.demo")]
+#[fusen_server(package = "org.apache.dubbo.springboot.demo")]
 impl DemoService for DemoServiceImpl {
     async fn sayHello(&self, req: String) -> RpcResult<String> {
         info!("res : {:?}", req);
@@ -63,7 +63,7 @@ async fn main() {
         "8081",
     )
     //注册rpc服务
-    .add_rpc_server(Box::new(server))
+    .add_fusen_server(Box::new(server))
     .run()
     .await;
 }

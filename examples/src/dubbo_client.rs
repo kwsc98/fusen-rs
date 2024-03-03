@@ -1,7 +1,6 @@
 use examples::{DemoServiceRpc, ReqDto};
 use fusen::{
-    client::FusenClient,
-    register::{RegisterBuilder, RegisterType},
+    client::FusenClient, fusen_common, register::{RegisterBuilder, RegisterType}
 };
 use lazy_static::lazy_static;
 use tracing::info;

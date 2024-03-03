@@ -1,10 +1,8 @@
 use examples::{ReqDto, ResDto, TestServer};
 use fusen_common::RpcResult;
 use fusen::{
-    register::{RegisterBuilder, RegisterType},
-    server::FusenServer,
+    fusen_common, fusen_macro::fusen_server, register::{RegisterBuilder, RegisterType}, server::FusenServer
 };
-use fusen_macro::rpc_server;
 use tracing::info;
 
 #[derive(Clone)]
@@ -12,7 +10,7 @@ struct TestServerImpl {
     _db: String,
 }
 
-#[rpc_server(package = "com.fusen", version = "1.0.0")]
+#[fusen_server(package = "com.fusen", version = "1.0.0")]
 impl TestServer for TestServerImpl {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> RpcResult<ResDto> {
         info!("req1 : {:?} , req1 : {:?}", req1, req2);
@@ -43,7 +41,7 @@ async fn main() {
         ),
         "8081",
     )
-    .add_rpc_server(Box::new(server))
+    .add_fusen_server(Box::new(server))
     .run()
     .await;
 }

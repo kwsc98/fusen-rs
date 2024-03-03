@@ -16,7 +16,7 @@ impl StreamHandler {
             .handshake::<_, Bytes>(self.tcp_stream)
             .await
             .unwrap();
-        self.filter_list.push(RpcServerRoute::new(self.rpc_server));
+        self.filter_list.push(RpcServerRoute::new(self.fusen_server));
         while let Some(result) = connection.accept().await {
             let filter_list = self.filter_list.clone();
             tokio::spawn(async move {

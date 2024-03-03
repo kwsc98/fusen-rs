@@ -1,10 +1,9 @@
 use examples::{DemoService, ReqDto, ResDto};
 use fusen_common::RpcResult;
 use fusen::{
-    register::{RegisterBuilder, RegisterType},
-    server::FusenServer,
+    fusen_common, fusen_macro, register::{RegisterBuilder, RegisterType}, server::FusenServer
 };
-use fusen_macro::rpc_server;
+use fusen_macro::fusen_server;
 use tracing::info;
 
 #[derive(Clone)]
@@ -12,7 +11,7 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[rpc_server(package = "org.apache.dubbo.springboot.demo")]
+#[fusen_server(package = "org.apache.dubbo.springboot.demo")]
 impl DemoService for DemoServiceImpl {
     async fn sayHello(&self, req: String) -> RpcResult<String> {
         info!("res : {:?}", req);
@@ -40,7 +39,7 @@ async fn main() {
         ),
         "8081",
     )
-    .add_rpc_server(Box::new(server))
+    .add_fusen_server(Box::new(server))
     .run()
     .await;
 }
