@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
-use self::zookeeper::KrpcZookeeper;
+use self::zookeeper::FusenZookeeper;
 pub mod zookeeper;
 
 pub struct RegisterBuilder {
@@ -25,7 +25,7 @@ impl RegisterBuilder {
     pub fn init(&self, map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>) -> Box<dyn Register> {
         match self.register_type {
             RegisterType::ZooKeeper => {
-                Box::new(KrpcZookeeper::init(&self.addr, &self.name_space, map))
+                Box::new(FusenZookeeper::init(&self.addr, &self.name_space, map))
             }
             RegisterType::Nacos => panic!("not support"),
         }

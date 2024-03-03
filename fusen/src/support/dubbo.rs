@@ -2,7 +2,7 @@ use std::vec;
 use crate::register::{Info, Resource};
 
 pub fn decode_url(url: &str) -> Result<Resource, String> {
-    let mut url = &krpc_common::url_util::decode_url(url)?[..];
+    let mut url = &fusen_common::url_util::decode_url(url)?[..];
     if url.starts_with("tri://") {
         url = &url[6..];
         return Ok(Resource::Server(get_info(url)));
@@ -43,7 +43,7 @@ pub fn encode_url(resource: &Resource) -> String {
             );
         }
     }
-    return "/".to_string() + &krpc_common::url_util::encode_url(&url);
+    return "/".to_string() + &fusen_common::url_util::encode_url(&url);
 }
 
 fn get_ip(path: &str) -> (String, Option<String>) {

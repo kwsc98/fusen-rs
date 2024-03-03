@@ -1,5 +1,5 @@
 [package]
-name = "krpc-core"
+name = "fusen"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -8,8 +8,8 @@ description.workspace = true
 
 
 [dependencies]
-krpc-common.workspace = true
-krpc-macro.workspace = true
+fusen-common.workspace = true
+fusen-macro.workspace = true
 
 
 #网络协议处理

@@ -52,7 +52,7 @@ impl Route {
                         server_name: class_name.to_string(),
                         version: version.map(|e|e.to_string()),
                         methods: vec![],
-                        ip: krpc_common::get_ip(),
+                        ip: fusen_common::get_ip(),
                         port: None,
                     });
                     let read_lock = self.client_resource.read().await;

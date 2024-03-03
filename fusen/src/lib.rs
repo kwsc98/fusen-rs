@@ -8,6 +8,6 @@ pub mod handler;
 pub mod register;
 pub mod route;
 
-pub type Error = krpc_common::Error;
-pub type Result<T> = krpc_common::Result<T>;
-pub type KrpcFuture<T> = krpc_common::KrpcFuture<T>;
+pub type Error = fusen_common::Error;
+pub type Result<T> = fusen_common::Result<T>;
+pub type FusenFuture<T> = fusen_common::FusenFuture<T>;

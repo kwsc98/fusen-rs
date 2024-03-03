@@ -5,28 +5,28 @@ use bytes::{BufMut, BytesMut};
 use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
-use krpc_common::{KrpcMsg, RpcError};
+use fusen_common::{FusenMsg, RpcError};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub struct KrpcClient {
+pub struct FusenClient {
     route: Route,
 }
 
-impl KrpcClient {
-    pub fn build(register_builder: RegisterBuilder) -> KrpcClient {
+impl FusenClient {
+    pub fn build(register_builder: RegisterBuilder) -> FusenClient {
         let map = Arc::new(RwLock::new(HashMap::new()));
         let register = register_builder.init(map.clone());
-        let cli = KrpcClient {
+        let cli = FusenClient {
             route: Route::new(map, register),
         };
         return cli;
     }
 
-    pub async fn invoke<Res>(&self, msg: KrpcMsg) -> Result<Res, RpcError>
+    pub async fn invoke<Res>(&self, msg: FusenMsg) -> Result<Res, RpcError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {

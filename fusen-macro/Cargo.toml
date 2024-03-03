@@ -1,5 +1,5 @@
 [package]
-name = "krpc-macro"
+name = "fusen-macro"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,7 +10,7 @@ description.workspace = true
 proc-macro = true
 
 [dependencies]
-krpc-common.workspace = true
+fusen-common.workspace = true
 serde_json.workspace = true
 quote = "1"
 syn = { version = "2", features = ["full"] }

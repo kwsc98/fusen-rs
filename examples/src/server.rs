@@ -1,10 +1,10 @@
 use examples::{ReqDto, ResDto, TestServer};
-use krpc_common::RpcResult;
-use krpc_core::{
+use fusen_common::RpcResult;
+use fusen::{
     register::{RegisterBuilder, RegisterType},
-    server::KrpcServer,
+    server::FusenServer,
 };
-use krpc_macro::rpc_server;
+use fusen_macro::rpc_server;
 use tracing::info;
 
 #[derive(Clone)]
@@ -12,7 +12,7 @@ struct TestServerImpl {
     _db: String,
 }
 
-#[rpc_server(package = "com.krpc", version = "1.0.0")]
+#[rpc_server(package = "com.fusen", version = "1.0.0")]
 impl TestServer for TestServerImpl {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> RpcResult<ResDto> {
         info!("req1 : {:?} , req1 : {:?}", req1, req2);
@@ -31,11 +31,11 @@ impl TestServer for TestServerImpl {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    krpc_common::init_log();
+    fusen_common::init_log();
     let server: TestServerImpl = TestServerImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    KrpcServer::build(
+    FusenServer::build(
         RegisterBuilder::new(
             &format!("127.0.0.1:{}", "2181"),
             "default",

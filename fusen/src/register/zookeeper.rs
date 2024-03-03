@@ -12,7 +12,7 @@ static EPHEMERAL_OPEN: &zk::CreateOptions<'static> =
 static CONTAINER_OPEN: &zk::CreateOptions<'static> =
     &zk::CreateMode::Container.with_acls(zk::Acls::anyone_all());
 
-pub struct KrpcZookeeper {
+pub struct FusenZookeeper {
     addr: String,
 
     root_path: String,
@@ -20,7 +20,7 @@ pub struct KrpcZookeeper {
     map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
 }
 
-impl Register for KrpcZookeeper {
+impl Register for FusenZookeeper {
     fn add_resource(&self, resource: Resource) {
         creat_resource_node(
             self.addr.clone(),
@@ -31,19 +31,19 @@ impl Register for KrpcZookeeper {
     }
 }
 
-impl KrpcZookeeper {
+impl FusenZookeeper {
     pub fn init(
         addr: &str,
         _name_space: &str,
         map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
     ) -> Self {
         let root_path = "/dubbo".to_string();
-        let krpc_zookeeper = KrpcZookeeper {
+        let fusen_zookeeper = FusenZookeeper {
             addr: addr.to_string(),
             root_path,
             map,
         };
-        return krpc_zookeeper;
+        return fusen_zookeeper;
     }
 }
 

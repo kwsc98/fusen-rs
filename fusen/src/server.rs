@@ -2,27 +2,27 @@ use crate::{
     protocol::server::TcpServer,
     register::{Info, Register, RegisterBuilder, Resource},
 };
-use krpc_common::RpcServer;
+use fusen_common::RpcServer;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
-pub struct KrpcServer {
+pub struct FusenServer {
     port: String,
     rpc_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
     register: Box<dyn Register>,
 }
 
-impl KrpcServer {
-    pub fn build(register_builder: RegisterBuilder, port: &str) -> KrpcServer {
+impl FusenServer {
+    pub fn build(register_builder: RegisterBuilder, port: &str) -> FusenServer {
         let map = Arc::new(RwLock::new(HashMap::new()));
-        return KrpcServer {
+        return FusenServer {
             port: port.to_string(),
             register: register_builder.init(map),
             rpc_servers: HashMap::new(),
         };
     }
 
-    pub fn add_rpc_server(mut self, server: Box<dyn RpcServer>) -> KrpcServer {
+    pub fn add_rpc_server(mut self, server: Box<dyn RpcServer>) -> FusenServer {
         let info = server.get_info();
         let server_name = info.0.to_string() + "." + &info.1.to_string();
         let mut key = server_name.clone();
@@ -34,7 +34,7 @@ impl KrpcServer {
             server_name,
             version: info.2.map(|e| e.to_string()),
             methods: info.3,
-            ip: krpc_common::get_ip(),
+            ip: fusen_common::get_ip(),
             port: Some(self.port.clone()),
         }));
         self.rpc_servers.insert(key, Arc::new(server));

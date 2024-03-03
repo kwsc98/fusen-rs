@@ -38,25 +38,25 @@ pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
-                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,krpc_common::RpcError> {
+                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_common::RpcError> {
                     let mut req_vec : Vec<String> = vec![];
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
-                            return Err(krpc_common::RpcError::Client(err.to_string()));
+                            return Err(fusen_common::RpcError::Client(err.to_string()));
                         }
                         req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
-                    let msg = krpc_common::KrpcMsg::new(
-                        krpc_common::get_uuid(),
+                    let msg = fusen_common::FusenMsg::new(
+                        fusen_common::get_uuid(),
                         version.map(|e|e.to_string()),
                         #package.to_owned() + "." + stringify!(#trait_ident),
                         stringify!(#ident).to_string(),
                         req_vec,
-                        Err(krpc_common::RpcError::Null)
+                        Err(fusen_common::RpcError::Null)
                     );
-                    let res : Result<#output_type,krpc_common::RpcError> = self.client.invoke::<#output_type>(msg).await;
+                    let res : Result<#output_type,fusen_common::RpcError> = self.client.invoke::<#output_type>(msg).await;
                     return res;
                 }
             }
@@ -67,13 +67,13 @@ pub fn rpc_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
         #item_trait
 
         #vis struct #rpc_client {
-            client : &'static krpc_core::client::KrpcClient
+            client : &'static fusen::client::FusenClient
         }
         impl #rpc_client {
         #(
             #fn_quote
         )*
-        pub fn new(client : &'static krpc_core::client::KrpcClient) -> #rpc_client {
+        pub fn new(client : &'static fusen::client::FusenClient) -> #rpc_client {
             #rpc_client {client}
         }
        }
@@ -107,7 +107,7 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let token = quote! {
                      let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
-                        param.res = Err(krpc_common::RpcError::Server(err.to_string()));
+                        param.res = Err(fusen_common::RpcError::Server(err.to_string()));
                         return param;
                     }
                     let #req : #req_type = result.unwrap();
@@ -136,7 +136,7 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
                         let res = serde_json::to_string(&res);
                         match res {
                             Ok(res) => Ok(res),
-                            Err(err) => Err(krpc_common::RpcError::Server(err.to_string()))
+                            Err(err) => Err(fusen_common::RpcError::Server(err.to_string()))
                         }
                     },
                     Err(info) => Err(info)
@@ -151,8 +151,8 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #org_item
 
-        impl krpc_common::RpcServer for #item_self {
-            fn invoke (&self, param : krpc_common::KrpcMsg) -> krpc_common::KrpcFuture<krpc_common::KrpcMsg> {
+        impl fusen_common::RpcServer for #item_self {
+            fn invoke (&self, param : fusen_common::FusenMsg) -> fusen_common::FusenFuture<fusen_common::FusenMsg> {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
@@ -166,9 +166,9 @@ pub fn rpc_server(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #item_self {
-            async fn prv_invoke (&self, mut param : krpc_common::KrpcMsg) -> krpc_common::KrpcMsg {
+            async fn prv_invoke (&self, mut param : fusen_common::FusenMsg) -> fusen_common::FusenMsg {
                 #(#items_fn)*
-                param.res = Err(krpc_common::RpcError::Server(format!("not find method by {}",param.method_name)));
+                param.res = Err(fusen_common::RpcError::Server(format!("not find method by {}",param.method_name)));
                 return param;
             }
         }
@@ -188,7 +188,7 @@ fn parse_attr(attr: TokenStream) -> (proc_macro2::TokenStream, proc_macro2::Toke
             item[1].replace("\"", "").to_string().clone(),
         );
     }
-    let package = map.get("package").map_or("krpc", |e| e);
+    let package = map.get("package").map_or("fusen", |e| e);
     let package = quote!(#package);
     let version = match map.get("version").map(|e| e.to_string()) {
         None => quote!(None),
@@ -231,7 +231,7 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
                 ReturnType::Type(_, res_type) => res_type.to_token_stream(),
             };
             vec.push(quote!(
-               #asyncable fn #ident (#inputs) -> krpc_common::RpcResult<#output_type>;
+               #asyncable fn #ident (#inputs) -> fusen_common::RpcResult<#output_type>;
             ));
         }
         vec

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use krpc_common::RpcServer;
+use fusen_common::RpcServer;
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},

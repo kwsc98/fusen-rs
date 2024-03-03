@@ -1,12 +1,12 @@
 use super::StreamHandler;
 use crate::{
-    filter::{KrpcFilter, RpcServerRoute},
+    filter::{FusenFilter, RpcServerRoute},
     support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
 };
 use bytes::Bytes;
 use h2::server::Builder;
 use http::{HeaderMap, HeaderValue, Request, Response};
-use krpc_common::{KrpcMsg, RpcError};
+use fusen_common::{FusenMsg, RpcError};
 use prost::Message;
 use std::time::Duration;
 
@@ -47,7 +47,7 @@ impl StreamHandler {
     }
 }
 
-async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<KrpcMsg> {
+async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<FusenMsg> {
     let url = req.uri().path().to_string();
     let data = req.body_mut().data().await.unwrap().unwrap();
     let trip = match TripleRequestWrapper::decode(&data[5..]) {
@@ -61,7 +61,7 @@ async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<KrpcMs
         .headers()
         .get("tri-service-version")
         .map(|e| String::from_utf8_lossy(e.as_bytes()).to_string());
-    return Ok(KrpcMsg::new(
+    return Ok(FusenMsg::new(
         "unique_identifier".to_string(),
         version,
         path[1].to_string(),
@@ -71,7 +71,7 @@ async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<KrpcMs
     ));
 }
 
-async fn encode_filter(msg: KrpcMsg) -> (Response<()>, String, bytes::Bytes) {
+async fn encode_filter(msg: FusenMsg) -> (Response<()>, String, bytes::Bytes) {
     let mut status = "0";
     let res_data = match msg.res {
         Ok(data) => bytes::Bytes::from(TripleResponseWrapper::get_buf(data)),

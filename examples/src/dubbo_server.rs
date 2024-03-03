@@ -1,10 +1,10 @@
 use examples::{DemoService, ReqDto, ResDto};
-use krpc_common::RpcResult;
-use krpc_core::{
+use fusen_common::RpcResult;
+use fusen::{
     register::{RegisterBuilder, RegisterType},
-    server::KrpcServer,
+    server::FusenServer,
 };
-use krpc_macro::rpc_server;
+use fusen_macro::rpc_server;
 use tracing::info;
 
 #[derive(Clone)]
@@ -28,11 +28,11 @@ impl DemoService for DemoServiceImpl {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    krpc_common::init_log();
+    fusen_common::init_log();
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    KrpcServer::build(
+    FusenServer::build(
         RegisterBuilder::new(
             &format!("127.0.0.1:{}", "2181"),
             "default",

@@ -9,7 +9,7 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
-pub type KrpcFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output=T> + Send>>;
+pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output=T> + Send>>;
 pub type RpcResult<T> = std::result::Result<T, RpcError>;
 
 pub mod date_util;
@@ -41,7 +41,7 @@ impl Display for RpcError {
 impl std::error::Error for RpcError {}
 
 #[derive(Debug)]
-pub struct KrpcMsg {
+pub struct FusenMsg {
     pub unique_identifier: String,
     pub version: Option<String>,
     pub class_name: String,
@@ -50,9 +50,9 @@ pub struct KrpcMsg {
     pub res: core::result::Result<String, RpcError>,
 }
 
-impl KrpcMsg {
-    pub fn new_empty() -> KrpcMsg {
-        return KrpcMsg {
+impl FusenMsg {
+    pub fn new_empty() -> FusenMsg {
+        return FusenMsg {
             unique_identifier: "".to_string(),
             version: None,
             class_name: "".to_string(),
@@ -69,8 +69,8 @@ impl KrpcMsg {
         method_name: String,
         req: Vec<String>,
         res: core::result::Result<String, RpcError>,
-    ) -> KrpcMsg {
-        return KrpcMsg {
+    ) -> FusenMsg {
+        return FusenMsg {
             unique_identifier,
             version,
             class_name,
@@ -82,7 +82,7 @@ impl KrpcMsg {
 }
 
 pub trait RpcServer: Send + Sync {
-    fn invoke(&self, msg: KrpcMsg) -> KrpcFuture<KrpcMsg>;
+    fn invoke(&self, msg: FusenMsg) -> FusenFuture<FusenMsg>;
     fn get_info(&self) -> (&str, &str, Option<&str>, Vec<String>);
 }
 

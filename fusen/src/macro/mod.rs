@@ -1,5 +1,5 @@
 #[macro_export]
-macro_rules! krpc_server {
+macro_rules! fusen_server {
     (
     $package:expr,
     $name:ident,
@@ -8,17 +8,17 @@ macro_rules! krpc_server {
         impl $name {
             $(
                 #[allow(non_snake_case)]
-                async fn $method (&$self $(,$req : $reqType)* ) -> Result<$resType,krpc_common::RpcError> { $($code)* }
+                async fn $method (&$self $(,$req : $reqType)* ) -> Result<$resType,fusen_common::RpcError> { $($code)* }
             )*
 
-            async fn prv_invoke (&self, mut param : krpc_common::KrpcMsg) -> krpc_common::KrpcMsg {
+            async fn prv_invoke (&self, mut param : fusen_common::FusenMsg) -> fusen_common::FusenMsg {
                 $(if &param.method_name[..] == stringify!($method) {
                     let req = &param.req;
                     let mut idx = 0;
                     $(
                         let result : Result<$reqType,_>  = serde_json::from_slice(req[idx].as_bytes());
                         if let Err(err) = result {
-                            param.res = Err(krpc_common::RpcError::Server(err.to_string()));
+                            param.res = Err(fusen_common::RpcError::Server(err.to_string()));
                             return param;
                         }
                         let $req : $reqType = serde_json::from_slice(req[idx].as_bytes()).unwrap();
@@ -34,19 +34,19 @@ macro_rules! krpc_server {
                             let res = serde_json::to_string(&res);
                             match res {
                                 Ok(res) => Ok(res),
-                                Err(err) => Err(krpc_common::RpcError::Server(err.to_string()))
+                                Err(err) => Err(fusen_common::RpcError::Server(err.to_string()))
                             }
                         },
                         Err(info) => Err(info)
                     };
                     return param;
                 })*
-                param.res = Err(krpc_common::RpcError::Server(format!("not find method by {}",param.method_name)));
+                param.res = Err(fusen_common::RpcError::Server(format!("not find method by {}",param.method_name)));
                 return param;
             }
         }
-        impl krpc_common::RpcServer for $name {
-            fn invoke (&self, param : krpc_common::KrpcMsg) -> krpc_common::KrpcFuture<krpc_common::KrpcMsg> {
+        impl fusen_common::RpcServer for $name {
+            fn invoke (&self, param : fusen_common::FusenMsg) -> fusen_common::FusenFuture<fusen_common::FusenMsg> {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
@@ -62,7 +62,7 @@ macro_rules! krpc_server {
 }
 
 #[macro_export]
-macro_rules! krpc_client {
+macro_rules! fusen_client {
     (
     $cli:ident,
     $package:expr,
@@ -72,25 +72,25 @@ macro_rules! krpc_client {
         impl $name {
             $(
                 #[allow(non_snake_case)]
-                async fn $method (&$self $(,$req : $reqType)*) -> Result<$resType,krpc_common::RpcError> {
+                async fn $method (&$self $(,$req : $reqType)*) -> Result<$resType,fusen_common::RpcError> {
                     let mut req_vec : Vec<String> = vec![];
                     $(
                         let mut res_str = serde_json::to_string(&$req);
                         if let Err(err) = res_str {
-                            return Err(krpc_common::RpcError::Client(err.to_string()));
+                            return Err(fusen_common::RpcError::Client(err.to_string()));
                         }
                         req_vec.push(res_str.unwrap());
                     )*
                     let version : Option<&str> = $version;
-                    let msg = krpc_common::KrpcMsg::new(
-                        krpc_common::get_uuid(),
+                    let msg = fusen_common::FusenMsg::new(
+                        fusen_common::get_uuid(),
                         version.map(|e|e.to_string()),
                         $package.to_owned() + "." + stringify!($name),
                         stringify!($method).to_string(),
                         req_vec,
-                        Err(krpc_common::RpcError::Null)
+                        Err(fusen_common::RpcError::Null)
                     );
-                    let res : Result<$resType,krpc_common::RpcError> = $cli.invoke::<$resType>(msg).await;
+                    let res : Result<$resType,fusen_common::RpcError> = $cli.invoke::<$resType>(msg).await;
                     return res;
                 }
             )*

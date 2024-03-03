@@ -1,14 +1,14 @@
 use std::time::Duration;
 
-use krpc_common::date_util::get_now_date_time_as_millis;
-use krpc_core::{client::KrpcClient, krpc_client, register::{RegisterBuilder, RegisterType}};
+use fusen_common::date_util::get_now_date_time_as_millis;
+use fusen::{client::FusenClient, fusen_client, register::{RegisterBuilder, RegisterType}};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::info;
 
 lazy_static! {
-    static ref CLI: KrpcClient = KrpcClient::build(
+    static ref CLI: FusenClient = FusenClient::build(
         RegisterBuilder::new(
             &format!("127.0.0.1:{}", "2181"),
             "default",
@@ -30,9 +30,9 @@ struct ResDto {
 #[derive(Clone)]
 struct TestServer;
 
-krpc_client! {
+fusen_client! {
    CLI,
-   "com.krpc",
+   "com.fusen",
    TestServer,
    Some("1.0.0"),
    async fn do_run1(&self,req1 : ReqDto,req2 : ResDto) -> Result<ResDto>
@@ -41,7 +41,7 @@ krpc_client! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    krpc_common::init_log();
+    fusen_common::init_log();
     let _res = TestServer.doRun2(ReqDto{str : "client say hello 2".to_string()}).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let start_time = get_now_date_time_as_millis();

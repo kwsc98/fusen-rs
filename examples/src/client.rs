@@ -1,14 +1,14 @@
 use examples::ReqDto;
 use examples::TestServerRpc;
-use krpc_core::{
-    client::KrpcClient,
+use fusen::{
+    client::FusenClient,
     register::{RegisterBuilder, RegisterType},
 };
 use lazy_static::lazy_static;
 use tracing::info;
 
 lazy_static! {
-    static ref CLI: KrpcClient = KrpcClient::build(RegisterBuilder::new(
+    static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(
         &format!("127.0.0.1:{}", "2181"),
         "default",
         RegisterType::ZooKeeper,
@@ -18,7 +18,7 @@ lazy_static! {
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     let de = TestServerRpc::new(&CLI);
-    krpc_common::init_log();
+    fusen_common::init_log();
     let client = de;
     let res = client
         .do_run1(

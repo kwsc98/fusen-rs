@@ -1,9 +1,9 @@
 [workspace]
-members = ["krpc-common","krpc-macro","krpc-core", "examples"]
+members = ["fusen-common","fusen-macro","fusen", "examples"]
 resolver = "2"
 
 [workspace.package]
-name = "krpc-rust"
+name = "fusen"
 version = "0.2.0"
 authors = ["kwsc98 <kwsc98@gmail.com>"]
 edition = "2021"
@@ -12,9 +12,9 @@ description = "RPC framework for service registration and discovery through API 
 
 
 [workspace.dependencies]
-krpc-common = { path = "krpc-common" ,version = "0.2.0" }
-krpc-core = { path = "krpc-core" ,version = "0.2.0"}
-krpc-macro = { path = "krpc-macro" ,version = "0.2.0"}
+fusen-common = { path = "fusen-common" ,version = "0.2.0" }
+fusen = { path = "fusen" ,version = "0.2.0"}
+fusen-macro = { path = "fusen-macro" ,version = "0.2.0"}
 
 #网络协议处理
 tokio = { version = "1", features = ["full"] }

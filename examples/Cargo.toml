@@ -28,9 +28,9 @@ path = "src/dubbo_client_pt.rs"
 
 
 [dependencies]
-krpc-common.workspace = true
-krpc-core.workspace = true
-krpc-macro.workspace = true
+fusen-common.workspace = true
+fusen.workspace = true
+fusen-macro.workspace = true
 
 #网络协议处理
 tokio.workspace = true

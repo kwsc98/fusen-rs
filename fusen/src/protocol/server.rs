@@ -1,7 +1,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use krpc_common::RpcServer;
+use fusen_common::RpcServer;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
@@ -42,7 +42,7 @@ impl TcpServer {
                     drop(notify_shutdown);
                     drop(shutdown_complete_tx);
                     let _ = shutdown_complete_rx.recv().await;
-                    tracing::info!("krpc server shut");
+                    tracing::info!("fusen server shut");
                     return Ok(());
                 },
                 res = listener.accept() => res

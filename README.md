@@ -1,6 +1,6 @@
 
-# `krpc-rust` 一个最像RPC框架的Rust-RPC框架
-krpc-rust是一个高性能，轻量级的rpc框架，通过使用Rust宏来解决目前主流rpc框架使用复杂，性能低等问题，不需要通过脚本和脚手架生成rpc调用代码，通过宏来进行编译期"反射"来实现高性能的调用，来满足rpc调用的简易性，同时支持Dubbo3服务的注册发现和互相调用;
+# `fusen-rust` 一个最像RPC框架的Rust-RPC框架
+fusen-rust是一个高性能，轻量级的rpc框架，通过使用Rust宏来解决目前主流rpc框架使用复杂，性能低等问题，不需要通过脚本和脚手架生成rpc调用代码，通过宏来进行编译期"反射"来实现高性能的调用，来满足rpc调用的简易性，同时支持Dubbo3服务的注册发现和互相调用;
 
 
 ## 快速开始
@@ -49,11 +49,11 @@ impl DemoService for DemoServiceImpl {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    krpc_common::init_log();
+    fusen_common::init_log();
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    KrpcServer::build(
+    FusenServer::build(
         //设置注册中心配置
         RegisterBuilder::new(
             &format!("127.0.0.1:{}", "2181"),
@@ -73,7 +73,7 @@ async fn main() {
 ```rust
 //初始化RpcClient
 lazy_static! {
-    static ref CLI: KrpcClient = KrpcClient::build(
+    static ref CLI: FusenClient = FusenClient::build(
         //设置注册中心配置
         RegisterBuilder::new(
         &format!("127.0.0.1:{}", "2181"),
@@ -84,7 +84,7 @@ lazy_static! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    krpc_common::init_log();
+    fusen_common::init_log();
     let client = DemoServiceRpc::new(&CLI);
     let res = client.sayHello("world".to_string()).await;
     info!("{:?}", res);
