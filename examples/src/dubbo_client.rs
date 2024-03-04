@@ -5,6 +5,7 @@ use fusen::{
 use lazy_static::lazy_static;
 use tracing::info;
 
+
 lazy_static! {
     static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(
         &format!("127.0.0.1:{}", "2181"),
@@ -17,6 +18,7 @@ lazy_static! {
 async fn main() {
     fusen_common::init_log();
     let client = DemoServiceRpc::new(&CLI);
+    let ds = client.get_info();
     let res = client.sayHello("world".to_string()).await;
     info!("{:?}", res);
     let res = client
@@ -24,5 +26,6 @@ async fn main() {
             str: "world".to_string(),
         })
         .await;
+
     info!("{:?}", res);
 }

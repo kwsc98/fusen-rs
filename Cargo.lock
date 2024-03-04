@@ -349,6 +349,7 @@ dependencies = [
 name = "fusen-macro"
 version = "0.2.0"
 dependencies = [
+ "fusen-common",
  "proc-macro2",
  "quote",
  "syn 2.0.50",

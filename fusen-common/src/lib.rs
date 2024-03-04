@@ -81,7 +81,7 @@ impl FusenMsg {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone,Debug, Serialize, Deserialize)]
 pub struct MethodResource {
     id: String,
     path: String,
@@ -90,12 +90,8 @@ pub struct MethodResource {
 }
 
 impl MethodResource {
-    pub fn new(id: &str, path: &str, method: &str) -> Self {
-        Self {
-            id: id.to_string(),
-            path: path.to_string(),
-            method: method.to_string(),
-        }
+    pub fn new(id: String, path: String, method: String) -> Self {
+        Self { id, path, method }
     }
     pub fn form_json_str(str: &str) -> Self {
         serde_json::from_str(str).unwrap()
