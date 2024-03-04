@@ -9,7 +9,7 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
-pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output=T> + Send>>;
+pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 pub type RpcResult<T> = std::result::Result<T, RpcError>;
 
 pub mod date_util;
@@ -78,6 +78,30 @@ impl FusenMsg {
             req,
             res,
         };
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MethodResource {
+    id: String,
+    path: String,
+    //get ot post
+    method: String,
+}
+
+impl MethodResource {
+    pub fn new(id: &str, path: &str, method: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            path: path.to_string(),
+            method: method.to_string(),
+        }
+    }
+    pub fn form_json_str(str: &str) -> Self {
+        serde_json::from_str(str).unwrap()
+    }
+    pub fn to_json_str(&self) -> String {
+        serde_json::to_string(self).unwrap()
     }
 }
 

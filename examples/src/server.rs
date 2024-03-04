@@ -1,8 +1,13 @@
+use std::borrow::Borrow;
+
 use examples::{ReqDto, ResDto, TestServer};
-use fusen_common::RpcResult;
 use fusen::{
-    fusen_common, fusen_macro::fusen_server, register::{RegisterBuilder, RegisterType}, server::FusenServer
+    fusen_common,
+    fusen_macro::{fusen_server, resource},
+    register::{RegisterBuilder, RegisterType},
+    server::FusenServer,
 };
+use fusen_common::RpcResult;
 use tracing::info;
 
 #[derive(Clone)]
@@ -10,15 +15,17 @@ struct TestServerImpl {
     _db: String,
 }
 
+#[resource(path = "/server/TestServer/test" , method = POST)]
 #[fusen_server(package = "com.fusen", version = "1.0.0")]
 impl TestServer for TestServerImpl {
+    #[resource(path = "/serverdoRun1" , method = POST)]
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> RpcResult<ResDto> {
         info!("req1 : {:?} , req1 : {:?}", req1, req2);
         return Ok(ResDto {
             str: "Hello ".to_owned() + &req1.str + " " + &req2.str + " V1",
         });
     }
-
+    #[resource(path = "/serverdoRun2" , method = POST)]
     async fn doRun2(&self, req: ReqDto) -> RpcResult<ResDto> {
         info!("res : {:?}", req);
         return Ok(ResDto {
