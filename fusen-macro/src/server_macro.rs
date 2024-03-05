@@ -5,25 +5,29 @@ use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl};
 
-use crate::{get_resource_by_attrs, parse_attr};
+use crate::get_resource_by_attrs;
 
-pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_attr(attr);
-    let version = match attr.get("version") {
+pub fn fusen_server(
+    package: Option<String>,
+    version: Option<String>,
+    item: TokenStream,
+) -> TokenStream {
+    let version = match version {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
     };
-    let package = match attr.get("package") {
+    let package = match package {
         Some(package) => quote!(#package),
         None => quote!("fusen"),
     };
     let org_item = parse_macro_input!(item as ItemImpl);
-    let methods_info = get_resource_by_server(org_item.clone())
-        .iter()
-        .fold(vec![], |mut vec, e| {
-            vec.push(e.1.to_json_str());
-            vec
-        });
+    let methods_info =
+        get_resource_by_server(org_item.clone())
+            .iter()
+            .fold(vec![], |mut vec, e| {
+                vec.push(e.1.to_json_str());
+                vec
+            });
     let item = org_item.clone();
     let org_item = get_server_item(org_item);
     let item_trait = &item.trait_.unwrap().1.segments[0].ident;
@@ -95,7 +99,7 @@ pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
             fn get_info(&self) -> (&str , &str , Option<&str> , Vec<#temp_method>) {
-               
+
                let mut methods : Vec<#temp_method> = vec![];
                #(
                 methods.push(#temp_method::form_json_str(#methods_info));

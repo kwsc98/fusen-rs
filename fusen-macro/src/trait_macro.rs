@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 
-use crate::{get_resource_by_attrs, parse_attr};
+use crate::{get_resource_by_attrs};
 use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
 
-pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_attr(attr);
-    let version = match attr.get("version") {
+pub fn fusen_trait(package:Option<String>,version:Option<String>, item: TokenStream) -> TokenStream {
+    let version = match version {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
     };
-    let package = match attr.get("package") {
+    let package = match package {
         Some(package) => quote!(#package),
         None => quote!("fusen"),
     };
@@ -176,6 +175,5 @@ fn get_resource_by_trait(item: ItemTrait) -> HashMap<String, MethodResource> {
             map.insert(id.clone(), MethodResource::new(id, parent_path, method));
         }
     }
-
     return map;
 }
