@@ -1,3 +1,4 @@
+use fusen_common::MethodResource;
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use serde::{Deserialize, Serialize};
@@ -41,7 +42,7 @@ pub enum RegisterType {
 pub struct Info {
     pub server_name: String,
     pub version: Option<String>,
-    pub methods: Vec<String>,
+    pub methods: Vec<MethodResource>,
     pub ip: String,
     pub port: Option<String>,
 }

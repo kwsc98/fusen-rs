@@ -1,30 +1,33 @@
+use std::collections::HashMap;
+
+use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl};
 
-use crate::parse_attr;
+use crate::{get_resource_by_attrs, parse_attr};
 
 pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = parse_attr(attr);
-    let version = match attr.get("version"){
+    let version = match attr.get("version") {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
     };
-    let package = match attr.get("package"){
+    let package = match attr.get("package") {
         Some(package) => quote!(#package),
         None => quote!("fusen"),
     };
     let org_item = parse_macro_input!(item as ItemImpl);
+    let methods_info = get_resource_by_server(org_item.clone())
+        .iter()
+        .fold(vec![], |mut vec, e| {
+            vec.push(e.1.to_json_str());
+            vec
+        });
     let item = org_item.clone();
     let org_item = get_server_item(org_item);
     let item_trait = &item.trait_.unwrap().1.segments[0].ident;
     let item_self = item.self_ty;
-    let items_ident_fn = item.items.iter().fold(vec![], |mut vec, e| {
-        if let ImplItem::Fn(fn_item) = e {
-            vec.push(fn_item.sig.ident.clone())
-        }
-        vec
-    });
     let items_fn = item.items.iter().fold(vec![], |mut vec, e| {
         if let ImplItem::Fn(fn_item) = e {
             let method = &fn_item.sig.ident;
@@ -77,7 +80,13 @@ pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
         vec
     });
+    let temp_method = syn::Ident::new(
+        &format!("{}MethodResourceServer", item_trait),
+        item_trait.span(),
+    );
     let expanded = quote! {
+        use fusen::fusen_common::MethodResource as #temp_method;
+
         #org_item
 
         impl fusen::fusen_common::RpcServer for #item_self {
@@ -85,10 +94,11 @@ pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
-            fn get_info(&self) -> (&str , &str , Option<&str> , Vec<String>) {
-               let mut methods = vec![];
+            fn get_info(&self) -> (&str , &str , Option<&str> , Vec<#temp_method>) {
+               
+               let mut methods : Vec<#temp_method> = vec![];
                #(
-                  methods.push(stringify!(#items_ident_fn).to_string());
+                methods.push(#temp_method::form_json_str(#methods_info));
                )*
                (#package ,stringify!(#item_trait) , #version ,methods)
             }
@@ -123,4 +133,37 @@ fn get_server_item(item: ItemImpl) -> proc_macro2::TokenStream {
             )*
         }
     }
+}
+
+fn get_resource_by_server(item: ItemImpl) -> HashMap<String, MethodResource> {
+    let mut map = HashMap::new();
+    let attrs = &item.attrs;
+    let (parent_path, parent_method) = get_resource_by_attrs(attrs);
+    let parent_path = match parent_path {
+        Some(path) => path,
+        None => "/".to_owned() + &item.trait_.unwrap().1.segments[0].ident.to_string(),
+    };
+    let parent_method = match parent_method {
+        Some(method) => method,
+        None => "POST".to_string(),
+    };
+
+    for fn_item in item.items.iter() {
+        if let ImplItem::Fn(item_fn) = fn_item {
+            let id = item_fn.sig.ident.to_string();
+            let (path, method) = get_resource_by_attrs(&item_fn.attrs);
+            let path = match path {
+                Some(path) => path,
+                None => "/".to_owned() + &id.clone(),
+            };
+            let method = match method {
+                Some(method) => method,
+                None => parent_method.clone(),
+            };
+            let mut parent_path = parent_path.clone();
+            parent_path.push_str(&path);
+            map.insert(id.clone(), MethodResource::new(id, parent_path, method));
+        }
+    }
+    return map;
 }

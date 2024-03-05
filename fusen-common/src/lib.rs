@@ -81,7 +81,7 @@ impl FusenMsg {
     }
 }
 
-#[derive(Clone,Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MethodResource {
     id: String,
     path: String,
@@ -90,6 +90,9 @@ pub struct MethodResource {
 }
 
 impl MethodResource {
+    pub fn get_id(&self) -> String {
+        return self.id.to_string();
+    }
     pub fn new(id: String, path: String, method: String) -> Self {
         Self { id, path, method }
     }
@@ -103,7 +106,7 @@ impl MethodResource {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: FusenMsg) -> FusenFuture<FusenMsg>;
-    fn get_info(&self) -> (&str, &str, Option<&str>, Vec<String>);
+    fn get_info(&self) -> (&str, &str, Option<&str>, Vec<MethodResource>);
 }
 
 pub fn init_log() {

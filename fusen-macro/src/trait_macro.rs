@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::parse_attr;
+use crate::{get_resource_by_attrs, parse_attr};
 use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, Attribute, FnArg, ItemTrait, Meta, ReturnType, TraitItem};
+use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
 
 pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = parse_attr(attr);
@@ -81,7 +81,7 @@ pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
     let rpc_client = syn::Ident::new(&format!("{}Rpc", trait_ident), trait_ident.span());
     let temp_method = syn::Ident::new(
-        &format!("{}MethodResource", trait_ident),
+        &format!("{}MethodResourceTrait", trait_ident),
         trait_ident.span(),
     );
 
@@ -178,25 +178,4 @@ fn get_resource_by_trait(item: ItemTrait) -> HashMap<String, MethodResource> {
     }
 
     return map;
-}
-
-fn get_resource_by_attrs(attrs: &Vec<Attribute>) -> (Option<String>, Option<String>) {
-    let mut parent_path = None;
-    let mut parent_method = None;
-    for attr in attrs {
-        if let Meta::List(list) = &attr.meta {
-            if let Some(segment) = list.path.segments.first() {
-                if &segment.ident.to_string() == &"resource" {
-                    let temp_map = parse_attr(list.tokens.clone().into());
-                    if let Some(path) = temp_map.get("path") {
-                        parent_path.insert(path.to_string());
-                    }
-                    if let Some(method) = temp_map.get("method") {
-                        let _ = parent_method.insert(method.to_string());
-                    }
-                }
-            }
-        }
-    }
-    (parent_path, parent_method)
 }

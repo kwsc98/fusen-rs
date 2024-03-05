@@ -1,5 +1,7 @@
-use std::vec;
+use fusen_common::MethodResource;
+
 use crate::register::{Info, Resource};
+use std::vec;
 
 pub fn decode_url(url: &str) -> Result<Resource, String> {
     let mut url = &fusen_common::url_util::decode_url(url)?[..];
@@ -21,7 +23,13 @@ pub fn encode_url(resource: &Resource) -> String {
             url.push_str(&(get_path(info) + &"/"));
             url.push_str(&(info.server_name.clone() + &"?"));
             url.push_str(&("interface=".to_owned() + &info.server_name));
-            url.push_str(&get_field_url("&methods", &info.methods));
+            url.push_str(&get_field_url(
+                "&methods",
+                &info.methods.iter().fold(vec![], |mut vec, e| {
+                    vec.push(e.get_id());
+                    vec
+                }),
+            ));
             if let Some(version) = &info.version {
                 let value = vec![version.clone()];
                 url.push_str(&get_field_url("&version", &value));
@@ -33,7 +41,13 @@ pub fn encode_url(resource: &Resource) -> String {
             url.push_str(&(get_path(info) + &"/"));
             url.push_str(&(info.server_name.clone() + &"?"));
             url.push_str(&("interface=".to_owned() + &info.server_name));
-            url.push_str(&get_field_url("&methods", &info.methods));
+            url.push_str(&get_field_url(
+                "&methods",
+                &info.methods.iter().fold(vec![], |mut vec, e| {
+                    vec.push(e.get_id());
+                    vec
+                }),
+            ));
             if let Some(version) = &info.version {
                 let value = vec![version.clone()];
                 url.push_str(&get_field_url("&version", &value));
@@ -71,13 +85,22 @@ fn get_info(url: &str) -> Info {
     let server_name = info[0].to_string();
     let vision = get_field_values(info[1], "version");
     let mut revision = None;
-    if !vision.is_empty(){
+    if !vision.is_empty() {
         let _ = revision.insert(vision[0].clone());
     }
     let info = Info {
         server_name,
         version: revision,
-        methods: get_field_values(info[1], "methods"),
+        methods: get_field_values(info[1], "methods")
+            .iter()
+            .fold(vec![], |mut vec, e| {
+                vec.push(MethodResource::new(
+                    e.to_string(),
+                    "/".to_owned() + e,
+                    "POST".to_owned(),
+                ));
+                vec
+            }),
         ip: path.0,
         port: path.1,
     };

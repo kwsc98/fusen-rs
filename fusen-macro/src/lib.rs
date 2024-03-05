@@ -1,4 +1,5 @@
 use proc_macro::TokenStream;
+use syn::{Attribute, Meta};
 use std::collections::HashMap;
 
 mod trait_macro;
@@ -13,6 +14,11 @@ pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
    server_macro::fusen_server(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn resource(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
 }
 
 fn parse_attr(attr: TokenStream) -> HashMap<String,String> {
@@ -30,7 +36,23 @@ fn parse_attr(attr: TokenStream) -> HashMap<String,String> {
     return map;
 }
 
-#[proc_macro_attribute]
-pub fn resource(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
+fn get_resource_by_attrs(attrs: &Vec<Attribute>) -> (Option<String>, Option<String>) {
+    let mut parent_path = None;
+    let mut parent_method = None;
+    for attr in attrs {
+        if let Meta::List(list) = &attr.meta {
+            if let Some(segment) = list.path.segments.first() {
+                if &segment.ident.to_string() == &"resource" {
+                    let temp_map = parse_attr(list.tokens.clone().into());
+                    if let Some(path) = temp_map.get("path") {
+                        let _ = parent_path.insert(path.to_string());
+                    }
+                    if let Some(method) = temp_map.get("method") {
+                        let _ = parent_method.insert(method.to_string());
+                    }
+                }
+            }
+        }
+    }
+    (parent_path, parent_method)
 }
