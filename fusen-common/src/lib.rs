@@ -10,7 +10,7 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
-pub type RpcResult<T> = std::result::Result<T, RpcError>;
+pub type FusenResult<T> = std::result::Result<T, RpcError>;
 
 pub mod date_util;
 pub mod url_util;

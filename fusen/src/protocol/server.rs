@@ -1,11 +1,10 @@
-
+use fusen_common::RpcServer;
 use std::collections::HashMap;
 use std::sync::Arc;
-use fusen_common::RpcServer;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{error, debug};
+use tracing::{debug, error};
 
 use crate::protocol::StreamHandler;
 
@@ -18,7 +17,7 @@ pub struct TcpServer {
 }
 
 impl TcpServer {
-    pub fn init(port: &str,fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
+    pub fn init(port: &str, fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         return TcpServer {
             port: port.to_string(),
@@ -53,7 +52,7 @@ impl TcpServer {
                     let stream_handler = StreamHandler {
                         tcp_stream: stream.0,
                         filter_list,
-                        fusen_server : self.fusen_servers.clone(),
+                        fusen_server: self.fusen_servers.clone(),
                         shutdown: self.notify_shutdown.subscribe(),
                         _shutdown_complete: self.shutdown_complete_tx.clone(),
                     };
@@ -65,4 +64,3 @@ impl TcpServer {
         }
     }
 }
-

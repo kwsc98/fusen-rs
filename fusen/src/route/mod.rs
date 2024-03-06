@@ -50,7 +50,7 @@ impl Route {
                     drop(map);
                     let resource_client = Resource::Client(Info {
                         server_name: class_name.to_string(),
-                        version: version.map(|e|e.to_string()),
+                        version: version.map(|e| e.to_string()),
                         methods: vec![],
                         ip: fusen_common::get_ip(),
                         port: None,

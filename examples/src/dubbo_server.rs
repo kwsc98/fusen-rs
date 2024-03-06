@@ -1,9 +1,9 @@
-use std::sync::Arc;
-
 use examples::{DemoService, ReqDto, ResDto};
-use fusen_common::RpcResult;
 use fusen::{
-    fusen_common::{self, RpcServer}, fusen_macro::{self, resource}, register::{RegisterBuilder, RegisterType}, server::FusenServer
+    fusen_common::{self, FusenResult, RpcServer},
+    fusen_macro::{self, resource},
+    register::{RegisterBuilder, RegisterType},
+    server::FusenServer,
 };
 use fusen_macro::fusen_server;
 use tracing::info;
@@ -13,17 +13,16 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[fusen_server(package = "org.apache.dubbo.springboot.demo" ,version = "1.0.0")]
+#[fusen_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
 #[resource(path="/DemoService3",method = GET)]
 impl DemoService for DemoServiceImpl {
-
     #[resource(path="/sayHello3",method = POST)]
-    async fn sayHello(&self, req: String) -> RpcResult<String> {
+    async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
         return Ok("Hello ".to_owned() + &req);
     }
 
-    async fn sayHelloV2(&self, req: ReqDto) -> RpcResult<ResDto> {
+    async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
         info!("res : {:?}", req);
         return Ok(ResDto {
             str: "Hello ".to_owned() + &req.str + " V2",
@@ -38,7 +37,7 @@ async fn main() {
         _db: "我是一个DB数据库".to_string(),
     };
     let ds = server.get_info();
-    println!("{:?}",ds);
+    println!("{:?}", ds);
     FusenServer::build(
         RegisterBuilder::new(
             &format!("127.0.0.1:{}", "2181"),

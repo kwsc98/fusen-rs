@@ -1,7 +1,7 @@
+use fusen_common::{FusenMsg, RpcError, RpcServer};
 use futures::Future;
 use http_body::Body;
 use hyper::{service::Service, Request, Response};
-use fusen_common::{FusenMsg, RpcError, RpcServer};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 pub struct FusenRouter<F, KF, ReqBody, Err> {

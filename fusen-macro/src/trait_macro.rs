@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
-use crate::{get_resource_by_attrs};
+use crate::get_resource_by_attrs;
 use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
 
-pub fn fusen_trait(package:Option<String>,version:Option<String>, item: TokenStream) -> TokenStream {
+pub fn fusen_trait(
+    package: Option<String>,
+    version: Option<String>,
+    item: TokenStream,
+) -> TokenStream {
     let version = match version {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
@@ -16,13 +20,13 @@ pub fn fusen_trait(package:Option<String>,version:Option<String>, item: TokenStr
         None => quote!("fusen"),
     };
     let input = parse_macro_input!(item as ItemTrait);
-    let methods_info: Vec<String> =
-        get_resource_by_trait(input.clone())
-            .iter()
-            .fold(vec![], |mut vec, e| {
-                vec.push(e.1.to_json_str());
-                vec
-            });
+    let methods_info = match get_resource_by_trait(input.clone()) {
+        Ok(methods_info) => methods_info.iter().fold(vec![], |mut vec, e| {
+            vec.push(e.1.to_json_str());
+            vec
+        }),
+        Err(err) => return err.into_compile_error().into(),
+    };
     let item_trait = get_item_trait(input.clone());
     let trait_ident = &input.ident;
     let vis = &input.vis;
@@ -129,7 +133,7 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
             };
             vec.push(quote! {
                    #(#attrs)*
-                   #asyncable fn #ident (#inputs) -> fusen::fusen_common::RpcResult<#output_type>;
+                   #asyncable fn #ident (#inputs) -> fusen::fusen_common::FusenResult<#output_type>;
             });
         }
         vec
@@ -145,10 +149,10 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_trait(item: ItemTrait) -> HashMap<String, MethodResource> {
+fn get_resource_by_trait(item: ItemTrait) -> Result<HashMap<String, MethodResource>, syn::Error> {
     let mut map = HashMap::new();
     let attrs = &item.attrs;
-    let (parent_path, parent_method) = get_resource_by_attrs(attrs);
+    let (parent_path, parent_method) = get_resource_by_attrs(attrs)?;
     let parent_path = match parent_path {
         Some(path) => path,
         None => "/".to_owned() + &item.ident.to_string(),
@@ -161,7 +165,7 @@ fn get_resource_by_trait(item: ItemTrait) -> HashMap<String, MethodResource> {
     for fn_item in item.items.iter() {
         if let TraitItem::Fn(item_fn) = fn_item {
             let id = item_fn.sig.ident.to_string();
-            let (path, method) = get_resource_by_attrs(&item_fn.attrs);
+            let (path, method) = get_resource_by_attrs(&item_fn.attrs)?;
             let path = match path {
                 Some(path) => path,
                 None => "/".to_owned() + &id.clone(),
@@ -175,5 +179,5 @@ fn get_resource_by_trait(item: ItemTrait) -> HashMap<String, MethodResource> {
             map.insert(id.clone(), MethodResource::new(id, parent_path, method));
         }
     }
-    return map;
+    return Ok(map);
 }

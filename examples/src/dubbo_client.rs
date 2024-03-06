@@ -1,10 +1,11 @@
 use examples::{DemoServiceRpc, ReqDto};
 use fusen::{
-    client::FusenClient, fusen_common, register::{RegisterBuilder, RegisterType}
+    client::FusenClient,
+    fusen_common,
+    register::{RegisterBuilder, RegisterType},
 };
 use lazy_static::lazy_static;
 use tracing::info;
-
 
 lazy_static! {
     static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(

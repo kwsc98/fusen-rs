@@ -175,9 +175,9 @@ fn listener_resource_node_change(
                 let resource = decode_url(&node);
                 if let Ok(resource) = resource {
                     if let Resource::Server(resource_info) = resource {
-                        if &info.version == &resource_info.version  {
+                        if &info.version == &resource_info.version {
                             server_list.push(SocketInfo {
-                                info : resource_info,
+                                info: resource_info,
                                 sender: Arc::new(RwLock::new(None)),
                             });
                         }

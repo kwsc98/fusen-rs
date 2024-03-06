@@ -36,9 +36,8 @@ pub struct TripleExceptionWrapper {
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
 
-
 impl TripleRequestWrapper {
-    pub fn get_buf(strs: Vec<String>) -> Vec<u8> {        
+    pub fn get_buf(strs: Vec<String>) -> Vec<u8> {
         let mut trip = TripleRequestWrapper::default();
         trip.serialize_type = "fastjson".to_string();
         trip.args = vec![];
@@ -47,7 +46,7 @@ impl TripleRequestWrapper {
         }
         return get_buf(trip.encode_to_vec());
     }
-    pub fn get_req(self)-> Vec<String> {
+    pub fn get_req(self) -> Vec<String> {
         let mut res = vec![];
         for str in self.args {
             res.push(String::from_utf8(str).unwrap());
@@ -65,7 +64,7 @@ impl TripleResponseWrapper {
     }
     pub fn is_empty_body(&self) -> bool {
         return self.data.starts_with("null".as_bytes());
-    } 
+    }
 }
 
 impl TripleExceptionWrapper {
@@ -80,10 +79,9 @@ impl TripleExceptionWrapper {
     }
 }
 
-
-fn get_buf(data : Vec<u8>) -> Vec<u8>{
+fn get_buf(data: Vec<u8>) -> Vec<u8> {
     let mut len = data.len();
-    let mut u8_array = [0 as u8;4];
+    let mut u8_array = [0 as u8; 4];
     for idx in 0..4 {
         u8_array[idx] = len as u8 | 0;
         len >>= 8;

@@ -8,9 +8,8 @@ use tokio::{
 
 use crate::filter::RpcServerRoute;
 
-pub mod server;
 mod h2_handler;
-
+pub mod server;
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,

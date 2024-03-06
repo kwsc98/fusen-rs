@@ -1,9 +1,11 @@
 use std::time::Duration;
 
-use fusen_common::date_util::get_now_date_time_as_millis;
 use fusen::{
-    client::FusenClient, fusen_client, fusen_common, register::{RegisterBuilder, RegisterType}
+    client::FusenClient,
+    fusen_client, fusen_common,
+    register::{RegisterBuilder, RegisterType},
 };
+use fusen_common::date_util::get_now_date_time_as_millis;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;

@@ -21,13 +21,13 @@ pub fn fusen_server(
         None => quote!("fusen"),
     };
     let org_item = parse_macro_input!(item as ItemImpl);
-    let methods_info =
-        get_resource_by_server(org_item.clone())
-            .iter()
-            .fold(vec![], |mut vec, e| {
-                vec.push(e.1.to_json_str());
-                vec
-            });
+    let methods_info = match get_resource_by_server(org_item.clone()) {
+        Ok(methods_info) => methods_info.iter().fold(vec![], |mut vec, e| {
+            vec.push(e.1.to_json_str());
+            vec
+        }),
+        Err(err) => return err.into_compile_error().into(),
+    };
     let item = org_item.clone();
     let org_item = get_server_item(org_item);
     let item_trait = &item.trait_.unwrap().1.segments[0].ident;
@@ -139,10 +139,10 @@ fn get_server_item(item: ItemImpl) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_server(item: ItemImpl) -> HashMap<String, MethodResource> {
+fn get_resource_by_server(item: ItemImpl) -> Result<HashMap<String, MethodResource>, syn::Error> {
     let mut map = HashMap::new();
     let attrs = &item.attrs;
-    let (parent_path, parent_method) = get_resource_by_attrs(attrs);
+    let (parent_path, parent_method) = get_resource_by_attrs(attrs)?;
     let parent_path = match parent_path {
         Some(path) => path,
         None => "/".to_owned() + &item.trait_.unwrap().1.segments[0].ident.to_string(),
@@ -155,7 +155,7 @@ fn get_resource_by_server(item: ItemImpl) -> HashMap<String, MethodResource> {
     for fn_item in item.items.iter() {
         if let ImplItem::Fn(item_fn) = fn_item {
             let id = item_fn.sig.ident.to_string();
-            let (path, method) = get_resource_by_attrs(&item_fn.attrs);
+            let (path, method) = get_resource_by_attrs(&item_fn.attrs)?;
             let path = match path {
                 Some(path) => path,
                 None => "/".to_owned() + &id.clone(),
@@ -169,5 +169,5 @@ fn get_resource_by_server(item: ItemImpl) -> HashMap<String, MethodResource> {
             map.insert(id.clone(), MethodResource::new(id, parent_path, method));
         }
     }
-    return map;
+    return Ok(map);
 }

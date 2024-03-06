@@ -4,9 +4,9 @@ use crate::{
     support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
 };
 use bytes::Bytes;
+use fusen_common::{FusenMsg, RpcError};
 use h2::server::Builder;
 use http::{HeaderMap, HeaderValue, Request, Response};
-use fusen_common::{FusenMsg, RpcError};
 use prost::Message;
 use std::time::Duration;
 
@@ -16,7 +16,8 @@ impl StreamHandler {
             .handshake::<_, Bytes>(self.tcp_stream)
             .await
             .unwrap();
-        self.filter_list.push(RpcServerRoute::new(self.fusen_server));
+        self.filter_list
+            .push(RpcServerRoute::new(self.fusen_server));
         while let Some(result) = connection.accept().await {
             let filter_list = self.filter_list.clone();
             tokio::spawn(async move {
