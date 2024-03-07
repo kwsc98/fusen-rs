@@ -11,9 +11,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 pub type FusenResult<T> = std::result::Result<T, RpcError>;
-
 pub mod date_util;
 pub mod url_util;
+pub mod r#macro;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RpcError {

@@ -13,15 +13,15 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[fusen_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
-#[resource(path="/DemoService3",method = GET)]
+#[fusen_server(package = "org.apache.dubbo.springboot.demo")]
+#[resource(id = "DemoService333" ,method = GET)]
 impl DemoService for DemoServiceImpl {
-    #[resource(path="/sayHello3",method = POST)]
+    #[resource(path="/sayHello2",method = POST)]
     async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
         return Ok("Hello ".to_owned() + &req);
     }
-
+    #[resource(id="dasd")]
     async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
         info!("res : {:?}", req);
         return Ok(ResDto {

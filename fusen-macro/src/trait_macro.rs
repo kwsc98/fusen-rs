@@ -1,30 +1,31 @@
-use std::collections::HashMap;
 
-use crate::get_resource_by_attrs;
+use crate::{get_resource_by_attrs, FusenAttr};
 use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
 
 pub fn fusen_trait(
-    package: Option<String>,
-    version: Option<String>,
+    attr:FusenAttr,
     item: TokenStream,
 ) -> TokenStream {
-    let version = match version {
+    let version = match attr.version {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
     };
-    let package = match package {
+    let package = match attr.package {
         Some(package) => quote!(#package),
         None => quote!("fusen"),
     };
     let input = parse_macro_input!(item as ItemTrait);
-    let methods_info = match get_resource_by_trait(input.clone()) {
-        Ok(methods_info) => methods_info.iter().fold(vec![], |mut vec, e| {
-            vec.push(e.1.to_json_str());
-            vec
-        }),
+    let (id,methods_info) = match get_resource_by_trait(input.clone()) {
+        Ok(methods_info) => {
+            let methods = methods_info.1.iter().fold(vec![], |mut vec, e| {
+                vec.push(e.to_json_str());
+                vec
+            });
+            (methods_info.0,methods)
+        },
         Err(err) => return err.into_compile_error().into(),
     };
     let item_trait = get_item_trait(input.clone());
@@ -71,7 +72,7 @@ pub fn fusen_trait(
                     let msg = fusen::fusen_common::FusenMsg::new(
                         fusen::fusen_common::get_uuid(),
                         version.map(|e|e.to_string()),
-                        #package.to_owned() + "." + stringify!(#trait_ident),
+                        #package.to_owned() + "." + &#id,
                         stringify!(#ident).to_string(),
                         req_vec,
                         Err(fusen::fusen_common::RpcError::Null)
@@ -108,7 +109,7 @@ pub fn fusen_trait(
             #(
                vec.push(#temp_method::form_json_str(#methods_info));
             )*
-            (stringify!(#trait_ident),vec)
+            (&#id,vec)
         }
 
        }
@@ -149,35 +150,42 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_trait(item: ItemTrait) -> Result<HashMap<String, MethodResource>, syn::Error> {
-    let mut map = HashMap::new();
+fn get_resource_by_trait(item: ItemTrait) -> Result<(String, Vec<MethodResource>), syn::Error> {
+    let mut res = vec![];
     let attrs = &item.attrs;
-    let (parent_path, parent_method) = get_resource_by_attrs(attrs)?;
-    let parent_path = match parent_path {
-        Some(path) => path,
-        None => "/".to_owned() + &item.ident.to_string(),
+    let resource = get_resource_by_attrs(attrs)?;
+    let parent_id = match resource.id {
+        Some(id) => id,
+        None => item.ident.to_string(),
     };
-    let parent_method = match parent_method {
+    let parent_path = match resource.path {
+        Some(path) => path,
+        None => "/".to_owned() + &parent_id,
+    };
+    let parent_method = match resource.method {
         Some(method) => method,
         None => "POST".to_string(),
     };
 
     for fn_item in item.items.iter() {
         if let TraitItem::Fn(item_fn) = fn_item {
-            let id = item_fn.sig.ident.to_string();
-            let (path, method) = get_resource_by_attrs(&item_fn.attrs)?;
-            let path = match path {
+            let resource = get_resource_by_attrs(&item_fn.attrs)?;
+            let id = match resource.id {
+                Some(id) => id,
+                None => item_fn.sig.ident.to_string(),
+            };
+            let path = match resource.path {
                 Some(path) => path,
                 None => "/".to_owned() + &id.clone(),
             };
-            let method = match method {
+            let method = match resource.method {
                 Some(method) => method,
                 None => parent_method.clone(),
             };
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
-            map.insert(id.clone(), MethodResource::new(id, parent_path, method));
+            res.push(MethodResource::new(id, parent_path, method));
         }
     }
-    return Ok(map);
+    return Ok((parent_id, res));
 }
