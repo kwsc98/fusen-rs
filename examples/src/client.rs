@@ -19,6 +19,7 @@ lazy_static! {
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     let de = TestServerRpc::new(&CLI);
+    println!("{:?}",de.get_info());
     fusen_common::init_log();
     let client = de;
     let res = client

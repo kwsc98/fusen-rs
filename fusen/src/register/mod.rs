@@ -1,4 +1,4 @@
-use fusen_common::MethodResource;
+use fusen_common::{server::Protocol, MethodResource};
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,8 @@ impl RegisterBuilder {
         };
     }
 
-    pub fn init(&self, map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>) -> Box<dyn Register> {
+    pub fn init(&self) -> Box<dyn Register> {
+        let map = Arc::new(RwLock::new(HashMap::new()));
         match self.register_type {
             RegisterType::ZooKeeper => {
                 Box::new(FusenZookeeper::init(&self.addr, &self.name_space, map))
@@ -71,4 +72,6 @@ pub enum Resource {
 
 pub trait Register: Send + Sync {
     fn add_resource(&self, resource: Resource);
+
+    fn check(&self, protocol: &Vec<Protocol>) -> bool;
 }

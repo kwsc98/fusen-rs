@@ -11,23 +11,20 @@ use prost::Message;
 use std::time::Duration;
 
 impl StreamHandler {
-    pub async fn run_v2(mut self) {
+    pub async fn run_v2(self) {
         let mut connection = get_server_builder()
             .handshake::<_, Bytes>(self.tcp_stream)
             .await
             .unwrap();
-        self.filter_list
-            .push(RpcServerRoute::new(self.fusen_server));
+        let route = RpcServerRoute::new(self.fusen_server);
         while let Some(result) = connection.accept().await {
-            let filter_list = self.filter_list.clone();
+            let route = route.clone();
             tokio::spawn(async move {
                 let (request, mut respond) = result.unwrap();
                 let mut trailers = HeaderMap::new();
                 match decode_filter(request).await {
                     Ok(mut msg) => {
-                        for idx in 0..filter_list.len() {
-                            msg = filter_list[idx].call(msg).await.unwrap()
-                        }
+                        msg = route.call(msg).await.unwrap();
                         let res = encode_filter(msg).await;
                         let mut send = respond.send_response(res.0, false).unwrap();
                         let _ = send.send_data(res.2, false);

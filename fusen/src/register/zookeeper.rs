@@ -1,6 +1,7 @@
 use super::{Register, Resource, SocketInfo};
 use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
+use fusen_common::server::Protocol;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::info;
@@ -22,12 +23,21 @@ pub struct FusenZookeeper {
 
 impl Register for FusenZookeeper {
     fn add_resource(&self, resource: Resource) {
-        creat_resource_node(
+        creat_resource_node (
             self.addr.clone(),
             self.root_path.clone(),
             resource,
             self.map.clone(),
         )
+    }
+
+    fn check(&self,protocol: &Vec<Protocol>) -> bool {
+        for protocol in protocol {
+            if let Protocol::HTTP2(_) = protocol {
+                return true;
+            }
+        }
+        return false;
     }
 }
 

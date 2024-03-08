@@ -19,7 +19,7 @@ pub trait TestServer {
 }
 
 #[fusen_trait(package = "org.apache.dubbo.springboot.demo")]
-#[resource(path="/DemoService1",method = POST)]
+#[resource(id = "dasdsad" ,method = POST)]
 pub trait DemoService {
     #[resource(path="/sayHello11",method = POST)]
     async fn sayHello(&self, name: String) -> String;

@@ -1,25 +1,26 @@
-use crate::{
-    protocol::server::TcpServer,
-    register::{Info, Register, RegisterBuilder, Resource},
-};
-use fusen_common::RpcServer;
+use crate::{protocol::server::TcpServer, register::{self, RegisterBuilder}};
+use fusen_common::{server::Protocol, RpcServer};
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
 
 pub struct FusenServer {
-    port: String,
+    protocol: Vec<Protocol>,
     fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
-    register: Box<dyn Register>,
+    register: Vec<RegisterBuilder>,
 }
 
 impl FusenServer {
-    pub fn build(register_builder: RegisterBuilder, port: &str) -> FusenServer {
-        let map = Arc::new(RwLock::new(HashMap::new()));
+    pub fn build() -> FusenServer {
         return FusenServer {
-            port: port.to_string(),
-            register: register_builder.init(map),
+            protocol: vec![],
+            register: vec![],
             fusen_servers: HashMap::new(),
         };
+    }
+    pub fn add_protocol(&mut self, protocol: Protocol) {
+        self.protocol.push(protocol);
+    }
+    pub fn add_register(&mut self, register_builder: RegisterBuilder) {
+        self.register.push(register_builder);
     }
 
     pub fn add_fusen_server(mut self, server: Box<dyn RpcServer>) -> FusenServer {
@@ -30,20 +31,18 @@ impl FusenServer {
             key.push_str(":");
             key.push_str(version);
         }
-        self.register.add_resource(Resource::Server(Info {
-            server_name,
-            version: info.2.map(|e| e.to_string()),
-            methods: info.3,
-            ip: fusen_common::get_ip(),
-            port: Some(self.port.clone()),
-        }));
         self.fusen_servers.insert(key, Arc::new(server));
         return self;
     }
 
     pub async fn run(&mut self) {
-        let port = self.port.clone();
-        let tcp_server = TcpServer::init(&port[..], self.fusen_servers.clone());
+        let tcp_server = TcpServer::init(self.protocol.clone(), self.fusen_servers.clone());
         let _ = tcp_server.run().await;
+        for register_builder in &self.register {
+            let register = register_builder.init();
+            if register.check(&self.protocol) {
+                  
+            }
+        }
     }
 }

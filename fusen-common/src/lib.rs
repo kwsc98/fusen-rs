@@ -14,6 +14,7 @@ pub type FusenResult<T> = std::result::Result<T, RpcError>;
 pub mod date_util;
 pub mod url_util;
 pub mod r#macro;
+pub mod server;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RpcError {
