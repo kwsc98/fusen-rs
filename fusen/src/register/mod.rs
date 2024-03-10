@@ -60,7 +60,6 @@ impl Info {
 
 #[derive(Debug, Clone)]
 pub struct SocketInfo {
-    pub info: Info,
     pub sender: Arc<RwLock<Option<SendRequest<Full<bytes::Bytes>>>>>,
 }
 
@@ -71,7 +70,10 @@ pub enum Resource {
 }
 
 pub trait Register: Send + Sync {
+
     fn add_resource(&self, resource: Resource);
+
+    fn get_resource<'a>(&'a self, key : &str) -> fusen_common::FusenFuture<Option<&'a Vec<Resource>>>;
 
     fn check(&self, protocol: &Vec<Protocol>) -> bool;
 }

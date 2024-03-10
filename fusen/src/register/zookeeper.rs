@@ -18,12 +18,12 @@ pub struct FusenZookeeper {
 
     root_path: String,
 
-    map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
+    map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
 }
 
 impl Register for FusenZookeeper {
     fn add_resource(&self, resource: Resource) {
-        creat_resource_node (
+        creat_resource_node(
             self.addr.clone(),
             self.root_path.clone(),
             resource,
@@ -31,7 +31,7 @@ impl Register for FusenZookeeper {
         )
     }
 
-    fn check(&self,protocol: &Vec<Protocol>) -> bool {
+    fn check(&self, protocol: &Vec<Protocol>) -> bool {
         for protocol in protocol {
             if let Protocol::HTTP2(_) = protocol {
                 return true;
@@ -39,13 +39,24 @@ impl Register for FusenZookeeper {
         }
         return false;
     }
+
+    fn get_resource<'a>(
+        &'a self,
+        key: &str,
+    ) -> fusen_common::FusenFuture<Option<&'a Vec<Resource>>> {
+        Box::pin(async move {
+            let map = self.map.read().await;
+            let res = map.get(key);
+            res
+        })
+    }
 }
 
 impl FusenZookeeper {
     pub fn init(
         addr: &str,
         _name_space: &str,
-        map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
+        map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
     ) -> Self {
         let root_path = "/dubbo".to_string();
         let fusen_zookeeper = FusenZookeeper {
@@ -104,7 +115,7 @@ fn creat_resource_node(
     cluster: String,
     root: String,
     resource: Resource,
-    map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
+    map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
 ) {
     let mut path = root.to_string();
     let info = match &resource {
@@ -157,7 +168,7 @@ fn listener_resource_node_change(
     cluster: String,
     root: String,
     resource: Resource,
-    map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
+    map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
 ) {
     let mut path = root;
     let info = match resource {
@@ -186,10 +197,7 @@ fn listener_resource_node_change(
                 if let Ok(resource) = resource {
                     if let Resource::Server(resource_info) = resource {
                         if &info.version == &resource_info.version {
-                            server_list.push(SocketInfo {
-                                info: resource_info,
-                                sender: Arc::new(RwLock::new(None)),
-                            });
+                            server_list.push(Resource::Server(resource_info));
                         }
                     }
                 }

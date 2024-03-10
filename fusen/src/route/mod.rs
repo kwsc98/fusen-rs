@@ -4,26 +4,20 @@ use crate::{register::SocketInfo, support::TokioIo};
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use rand::seq::SliceRandom;
-use std::collections::HashSet;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::{HashMap, HashSet};
 use tokio::{net::TcpStream, sync::RwLock};
 
 pub struct Route {
     register: Box<dyn Register>,
-    map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
-    client_resource: RwLock<HashSet<String>>,
+    socket_map: RwLock<HashMap<String, SocketInfo>>,
 }
 
 impl Route {
-    pub fn new(
-        map: Arc<RwLock<HashMap<String, Vec<SocketInfo>>>>,
-        register: Box<dyn Register>,
-    ) -> Self {
-        let client_resource = RwLock::new(HashSet::new());
+    pub fn new(register: Box<dyn Register>) -> Self {
+        let socket_map = RwLock::new(HashMap::new());
         Route {
-            map,
             register,
-            client_resource,
+            socket_map,
         }
     }
 
@@ -32,22 +26,20 @@ impl Route {
         class_name: &str,
         version: Option<&str>,
     ) -> crate::Result<SendRequest<Full<bytes::Bytes>>> {
-        let vec_info: Vec<SocketInfo>;
+        let mut vec_info: &Vec<Resource>;
         loop {
-            let map = self.map.read().await;
             let mut key = String::from(class_name);
             if let Some(version) = version {
                 key.push_str(":");
                 key.push_str(version);
             }
-            let value = map.get(&key);
-            match value {
+            let vec_server: Option<&Vec<Resource>> = self.register.get_resource(&key).await;
+            match vec_server {
                 Some(value) => {
-                    vec_info = value.clone();
+                    vec_info = value;
                     break;
                 }
                 None => {
-                    drop(map);
                     let resource_client = Resource::Client(Info {
                         server_name: class_name.to_string(),
                         version: version.map(|e| e.to_string()),
@@ -55,17 +47,7 @@ impl Route {
                         ip: fusen_common::get_ip(),
                         port: None,
                     });
-                    let read_lock = self.client_resource.read().await;
-                    let value = read_lock.get(&key);
-                    if let None = value {
-                        drop(read_lock);
-                        let mut write_lock = self.client_resource.write().await;
-                        if let None = write_lock.get(&key) {
-                            self.register.add_resource(resource_client);
-                            write_lock.insert(key);
-                            drop(write_lock);
-                        }
-                    }
+                    self.register.add_resource(resource_client);
                 }
             }
         }

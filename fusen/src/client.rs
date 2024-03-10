@@ -8,9 +8,6 @@ use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub struct FusenClient {
     route: Route,
@@ -18,10 +15,9 @@ pub struct FusenClient {
 
 impl FusenClient {
     pub fn build(register_builder: RegisterBuilder) -> FusenClient {
-        let map = Arc::new(RwLock::new(HashMap::new()));
-        let register = register_builder.init(map.clone());
+        let register = register_builder.init();
         let cli = FusenClient {
-            route: Route::new(map, register),
+            route: Route::new(register),
         };
         return cli;
     }
