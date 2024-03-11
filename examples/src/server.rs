@@ -1,6 +1,6 @@
 use examples::{ReqDto, ResDto, TestServer};
 use fusen::{
-    fusen_common::{self, FusenResult},
+    fusen_common::{self, server::Protocol, FusenResult},
     fusen_macro::fusen_server,
     register::{RegisterBuilder, RegisterType},
     server::FusenServer,
@@ -34,15 +34,14 @@ async fn main() {
     let server: TestServerImpl = TestServerImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    FusenServer::build(
-        RegisterBuilder::new(
+    FusenServer::build()
+        .add_register_builder(RegisterBuilder::new(
             &format!("127.0.0.1:{}", "2181"),
             "default",
             RegisterType::ZooKeeper,
-        ),
-        "8081",
-    )
-    .add_fusen_server(Box::new(server))
-    .run()
-    .await;
+        ))
+        .add_protocol(Protocol::HTTP2("8081".to_owned()))
+        .add_fusen_server(Box::new(server))
+        .run()
+        .await;
 }

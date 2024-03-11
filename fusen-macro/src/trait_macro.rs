@@ -59,12 +59,12 @@ pub fn fusen_trait(
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
-                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen::fusen_common::RpcError> {
+                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen::fusen_common::FusenError> {
                     let mut req_vec : Vec<String> = vec![];
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
-                            return Err(fusen::fusen_common::RpcError::Client(err.to_string()));
+                            return Err(fusen::fusen_common::FusenError::Client(err.to_string()));
                         }
                         req_vec.push(res_poi_str.unwrap());
                     )*
@@ -75,9 +75,9 @@ pub fn fusen_trait(
                         #package.to_owned() + "." + &#id,
                         stringify!(#ident).to_string(),
                         req_vec,
-                        Err(fusen::fusen_common::RpcError::Null)
+                        Err(fusen::fusen_common::FusenError::Null)
                     );
-                    let res : Result<#output_type,fusen::fusen_common::RpcError> = self.client.invoke::<#output_type>(msg).await;
+                    let res : Result<#output_type,fusen::fusen_common::FusenError> = self.client.invoke::<#output_type>(msg).await;
                     return res;
                 }
             }

@@ -23,8 +23,7 @@ impl RegisterBuilder {
         };
     }
 
-    pub fn init(&self) -> Box<dyn Register> {
-        let map = Arc::new(RwLock::new(HashMap::new()));
+    pub fn init(&self, map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>) -> Box<dyn Register> {
         match self.register_type {
             RegisterType::ZooKeeper => {
                 Box::new(FusenZookeeper::init(&self.addr, &self.name_space, map))
@@ -52,7 +51,8 @@ impl Info {
     pub fn get_addr(&self) -> String {
         let mut ip = self.ip.clone();
         if let Some(port) = &self.port {
-            ip.push_str(&(":".to_owned() + port));
+            ip.push(':');
+            ip.push_str(port);
         }
         return ip;
     }
@@ -70,10 +70,7 @@ pub enum Resource {
 }
 
 pub trait Register: Send + Sync {
-
     fn add_resource(&self, resource: Resource);
 
-    fn get_resource<'a>(&'a self, key : &str) -> fusen_common::FusenFuture<Option<&'a Vec<Resource>>>;
-
-    fn check(&self, protocol: &Vec<Protocol>) -> bool;
+    fn check(&self, protocol: &Vec<Protocol>) -> crate::Result<String>;
 }

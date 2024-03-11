@@ -1,17 +1,41 @@
 use super::StreamHandler;
 use crate::{
-    filter::{FusenFilter, RpcServerRoute},
-    support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
+    filter::{FusenFilter, FusenRouter, RpcServerRoute},
+    support::{
+        triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper}, TokioExecutor, TokioIo
+    },
 };
 use bytes::Bytes;
-use fusen_common::{FusenMsg, RpcError};
+use fusen_common::{FusenError, FusenMsg};
 use h2::server::Builder;
 use http::{HeaderMap, HeaderValue, Request, Response};
+use hyper::server::conn::http2;
 use prost::Message;
 use std::time::Duration;
+use tracing::debug;
 
 impl StreamHandler {
-    pub async fn run_v2(self) {
+    pub async fn run_http1(mut self) {
+        let hyper_io = TokioIo::new(self.tcp_stream);
+        let route = RpcServerRoute::new(self.fusen_server);
+        let route = FusenRouter::new(route);
+        let future = http2::Builder::new(TokioExecutor).serve_connection(hyper_io, route);
+        let err_info = tokio::select! {
+                res = future =>
+                    match res {
+                        Ok(_) => "client close".to_string(),
+                        Err(err) => err.to_string(),
+                    }
+                 ,
+                res2 = self.shutdown.recv() => match res2 {
+                    Ok(_) => "shutdown error".to_string(),
+                    Err(_) => "server shutdown".to_string(),
+                }
+        };
+        debug!("connect close by {}", err_info);
+    }
+
+    pub async fn run_http2(self) {
         let mut connection = get_server_builder()
             .handshake::<_, Bytes>(self.tcp_stream)
             .await
@@ -65,7 +89,7 @@ async fn decode_filter(mut req: Request<h2::RecvStream>) -> crate::Result<FusenM
         path[1].to_string(),
         path[2].to_string(),
         trip.get_req(),
-        Result::Err(RpcError::Server("empty".to_string())),
+        Result::Err(FusenError::Server("empty".to_string())),
     ));
 }
 
@@ -74,19 +98,19 @@ async fn encode_filter(msg: FusenMsg) -> (Response<()>, String, bytes::Bytes) {
     let res_data = match msg.res {
         Ok(data) => bytes::Bytes::from(TripleResponseWrapper::get_buf(data)),
         Err(err) => bytes::Bytes::from(TripleExceptionWrapper::get_buf(match err {
-            RpcError::Client(msg) => {
+            FusenError::Client(msg) => {
                 status = "90";
                 msg
             }
-            RpcError::Method(msg) => {
+            FusenError::Method(msg) => {
                 status = "91";
                 msg
             }
-            RpcError::Null => {
+            FusenError::Null => {
                 status = "92";
-                "RpcError::Null".to_string()
+                "FusenError::Null".to_string()
             }
-            RpcError::Server(msg) => {
+            FusenError::Server(msg) => {
                 status = "93";
                 msg
             }

@@ -26,16 +26,24 @@ impl TcpServer {
         };
     }
     pub async fn run(self) {
+        let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
         for protocol in self.protocol {
-            tokio::spawn(Self::monitor(protocol, self.fusen_servers.clone()));
+            tokio::spawn(Self::monitor(
+                protocol,
+                self.fusen_servers.clone(),
+                shutdown_complete_tx.clone(),
+            ));
         }
+        drop(shutdown_complete_tx);
+        let _ = shutdown_complete_rx.recv().await;
+        tracing::info!("fusen server shut");
     }
 
     async fn monitor(
         protocol: Protocol,
         fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
+        shutdown_complete_tx: mpsc::Sender<()>,
     ) -> crate::Result<()> {
-        let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
         let notify_shutdown = broadcast::channel(1).0;
         let port = match &protocol {
             Protocol::HTTP(port) => port,
@@ -47,7 +55,6 @@ impl TcpServer {
                 _ = signal::ctrl_c() => {
                     drop(notify_shutdown);
                     drop(shutdown_complete_tx);
-                    let _ = shutdown_complete_rx.recv().await;
                     tracing::info!("fusen server shut");
                     return Ok(());
                 },
@@ -62,7 +69,10 @@ impl TcpServer {
                         _shutdown_complete: shutdown_complete_tx.clone(),
                     };
                     debug!("socket stream connect, addr: {:?}", stream.1);
-                    tokio::spawn(stream_handler.run_v2());
+                    match &protocol {
+                        Protocol::HTTP(_) => tokio::spawn(stream_handler.run_http2()),
+                        Protocol::HTTP2(_) => tokio::spawn(stream_handler.run_http1()),
+                    };
                 }
                 Err(err) => error!("tcp connect, err: {:?}", err),
             }

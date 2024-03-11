@@ -19,13 +19,11 @@ lazy_static! {
 async fn main() {
     fusen_common::init_log();
     let client = DemoServiceRpc::new(&CLI);
-    let res = client.sayHello("world".to_string()).await;
     info!("{:?}", client.get_info());
     let res = client
         .sayHelloV2(ReqDto {
             str: "world".to_string(),
         })
         .await;
-
     info!("{:?}", res);
 }

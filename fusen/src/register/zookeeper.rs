@@ -1,4 +1,4 @@
-use super::{Register, Resource, SocketInfo};
+use super::{Register, Resource};
 use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
 use fusen_common::server::Protocol;
@@ -18,7 +18,7 @@ pub struct FusenZookeeper {
 
     root_path: String,
 
-    map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
+    map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
 }
 
 impl Register for FusenZookeeper {
@@ -31,24 +31,13 @@ impl Register for FusenZookeeper {
         )
     }
 
-    fn check(&self, protocol: &Vec<Protocol>) -> bool {
+    fn check(&self, protocol: &Vec<Protocol>) -> crate::Result<String> {
         for protocol in protocol {
-            if let Protocol::HTTP2(_) = protocol {
-                return true;
+            if let Protocol::HTTP2(port) = protocol {
+                return Ok(port.clone());
             }
         }
-        return false;
-    }
-
-    fn get_resource<'a>(
-        &'a self,
-        key: &str,
-    ) -> fusen_common::FusenFuture<Option<&'a Vec<Resource>>> {
-        Box::pin(async move {
-            let map = self.map.read().await;
-            let res = map.get(key);
-            res
-        })
+        return Err("need monitor Http2".into());
     }
 }
 
@@ -56,7 +45,7 @@ impl FusenZookeeper {
     pub fn init(
         addr: &str,
         _name_space: &str,
-        map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
+        map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
     ) -> Self {
         let root_path = "/dubbo".to_string();
         let fusen_zookeeper = FusenZookeeper {
@@ -115,7 +104,7 @@ fn creat_resource_node(
     cluster: String,
     root: String,
     resource: Resource,
-    map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
+    map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
 ) {
     let mut path = root.to_string();
     let info = match &resource {
@@ -168,7 +157,7 @@ fn listener_resource_node_change(
     cluster: String,
     root: String,
     resource: Resource,
-    map: Arc<RwLock<HashMap<String, Vec<Resource>>>>,
+    map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
 ) {
     let mut path = root;
     let info = match resource {
@@ -209,7 +198,7 @@ fn listener_resource_node_change(
             }
             info!("update server cache {:?} : {:?}", key, server_list);
             let mut temp_map = map.write().await;
-            temp_map.insert(key, server_list);
+            temp_map.insert(key, Arc::new(server_list));
             drop(temp_map);
             let event: zk::WatchedEvent = watcher.2.changed().await;
             if let zk::EventType::NodeChildrenChanged = event.event_type {

@@ -43,7 +43,7 @@ pub fn fusen_server(
                     let token = quote! {
                      let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
-                        param.res = Err(fusen::fusen_common::RpcError::Server(err.to_string()));
+                        param.res = Err(fusen::fusen_common::FusenError::Server(err.to_string()));
                         return param;
                     }
                     let #req : #req_type = result.unwrap();
@@ -72,7 +72,7 @@ pub fn fusen_server(
                         let res = serde_json::to_string(&res);
                         match res {
                             Ok(res) => Ok(res),
-                            Err(err) => Err(fusen::fusen_common::RpcError::Server(err.to_string()))
+                            Err(err) => Err(fusen::fusen_common::FusenError::Server(err.to_string()))
                         }
                     },
                     Err(info) => Err(info)
@@ -111,7 +111,7 @@ pub fn fusen_server(
         impl #item_self {
             async fn prv_invoke (&self, mut param : fusen::fusen_common::FusenMsg) -> fusen::fusen_common::FusenMsg {
                 #(#items_fn)*
-                param.res = Err(fusen::fusen_common::RpcError::Server(format!("not find method by {}",param.method_name)));
+                param.res = Err(fusen::fusen_common::FusenError::Server(format!("not find method by {}",param.method_name)));
                 return param;
             }
         }

@@ -10,36 +10,36 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
-pub type FusenResult<T> = std::result::Result<T, RpcError>;
+pub type FusenResult<T> = std::result::Result<T, FusenError>;
 pub mod date_util;
 pub mod url_util;
 pub mod r#macro;
 pub mod server;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum RpcError {
+pub enum FusenError {
     Null,
     Client(String),
     Server(String),
     Method(String),
 }
 
-unsafe impl Send for RpcError {}
+unsafe impl Send for FusenError {}
 
-unsafe impl Sync for RpcError {}
+unsafe impl Sync for FusenError {}
 
-impl Display for RpcError {
+impl Display for FusenError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            RpcError::Null => write!(f, "Bad value"),
-            RpcError::Client(msg) => write!(f, "RpcError::Client {}", msg),
-            RpcError::Server(msg) => write!(f, "RpcError::Server {}", msg),
-            RpcError::Method(msg) => write!(f, "RpcError::Method {}", msg),
+            FusenError::Null => write!(f, "Bad value"),
+            FusenError::Client(msg) => write!(f, "FusenError::Client {}", msg),
+            FusenError::Server(msg) => write!(f, "FusenError::Server {}", msg),
+            FusenError::Method(msg) => write!(f, "FusenError::Method {}", msg),
         }
     }
 }
 
-impl std::error::Error for RpcError {}
+impl std::error::Error for FusenError {}
 
 #[derive(Debug)]
 pub struct FusenMsg {
@@ -48,7 +48,7 @@ pub struct FusenMsg {
     pub class_name: String,
     pub method_name: String,
     pub req: Vec<String>,
-    pub res: core::result::Result<String, RpcError>,
+    pub res: core::result::Result<String, FusenError>,
 }
 
 impl FusenMsg {
@@ -59,7 +59,7 @@ impl FusenMsg {
             class_name: "".to_string(),
             method_name: "".to_string(),
             req: vec![],
-            res: Err(RpcError::Null),
+            res: Err(FusenError::Null),
         };
     }
 
@@ -69,7 +69,7 @@ impl FusenMsg {
         class_name: String,
         method_name: String,
         req: Vec<String>,
-        res: core::result::Result<String, RpcError>,
+        res: core::result::Result<String, FusenError>,
     ) -> FusenMsg {
         return FusenMsg {
             unique_identifier,
