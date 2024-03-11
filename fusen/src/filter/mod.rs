@@ -1,12 +1,17 @@
+use bytes::Bytes;
 use fusen_common::{FusenError, FusenFuture, FusenMsg, RpcServer};
 use futures::Future;
-use http_body_util::{BodyExt, Full};
+use http::{HeaderMap, HeaderValue};
+use http_body::{Body, Frame};
+use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::{service::Service, Request, Response};
 use prost::Message;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 use crate::support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper};
-
+type TrailersBody = futures_util::stream::Iter<
+    std::vec::IntoIter<std::result::Result<http_body::Frame<bytes::Bytes>, Infallible>>,
+>;
 pub struct FusenRouter<KF> {
     fusen_filter: KF,
 }
@@ -27,7 +32,7 @@ where
         + Send
         + 'static,
 {
-    type Response = Response<Full<bytes::Bytes>>;
+    type Response = Response<StreamBody<TrailersBody>>;
     type Error = FusenError;
     type Future = FusenFuture<Result<Self::Response, Self::Error>>;
 
@@ -112,19 +117,39 @@ where
                         }
                     })),
                 };
+                let mut trailers = HeaderMap::new();
+                trailers.insert("grpc-status", HeaderValue::from_str(&status).unwrap());
+                let chunks: Vec<Result<_, Infallible>> =
+                    vec![Ok(Frame::data(res_data)), Ok(Frame::trailers(trailers))];
+                let stream = futures_util::stream::iter(chunks);
+                let stream_body = http_body_util::StreamBody::new(stream);
                 response
-                    .header("grpc-status", status)
-                    .body(Full::new(res_data))
+                    .header("content-type", "application/grpc")
+                    .header("te", "trailers")
+                    .body(stream_body)
                     .map_err(|e| FusenError::Server(e.to_string()))
             } else {
                 match msg.res {
-                    Ok(data) => response
-                        .body(Full::new(bytes::Bytes::from(data)))
-                        .map_err(|e| FusenError::Server(e.to_string())),
-                    Err(_err) => response
-                        .status(504)
-                        .body(Full::new(bytes::Bytes::new()))
-                        .map_err(|e| FusenError::Server(e.to_string())),
+                    Ok(data) => {
+                        let chunks: Vec<Result<_, Infallible>> = vec![Ok(Frame::data(data.into()))];
+                        let stream = futures_util::stream::iter(chunks);
+                        let stream_body = http_body_util::StreamBody::new(stream);
+                        response
+                            .body(stream_body)
+                            .map_err(|e| FusenError::Server(e.to_string()))
+                    }
+                    Err(_err) => {
+                        let mut trailers = HeaderMap::new();
+                        trailers.insert("grpc-status", HeaderValue::from_str("93").unwrap());
+                        let chunks: Vec<Result<_, Infallible>> =
+                            vec![Ok(Frame::trailers(trailers))];
+                        let stream = futures_util::stream::iter(chunks);
+                        let stream_body = http_body_util::StreamBody::new(stream);
+                        response
+                            .status(504)
+                            .body(stream_body)
+                            .map_err(|e| FusenError::Server(e.to_string()))
+                    }
                 }
             }
         })

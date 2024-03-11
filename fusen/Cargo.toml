@@ -23,6 +23,7 @@ futures.workspace = true
 async-trait.workspace = true
 async-recursion.workspace = true
 h2.workspace = true
+futures-util.workspace = true
 
 #日志处理
 tracing.workspace = true

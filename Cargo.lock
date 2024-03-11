@@ -308,6 +308,7 @@ dependencies = [
  "fusen-common",
  "fusen-macro",
  "futures",
+ "futures-util",
  "h2",
  "http",
  "http-body",
