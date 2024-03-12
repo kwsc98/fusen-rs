@@ -13,7 +13,7 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[fusen_server(package = "org.apache.dubbo.springboot.demo")]
+#[fusen_server(package = "org.apache.dubbo.springboot.demo",version = "1.0.0")]
 #[resource(id = "DemoService" ,method = GET)]
 impl DemoService for DemoServiceImpl {
     #[resource(path="/sayHello2",method = POST)]

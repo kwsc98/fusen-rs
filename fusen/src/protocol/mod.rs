@@ -1,16 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
-
-use fusen_common::RpcServer;
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc},
 };
-mod h2_handler;
+
+use crate::filter::RpcServerRoute;
+mod http_handler;
 pub mod server;
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,
-    pub fusen_server: HashMap<String, Arc<Box<dyn RpcServer>>>,
+    pub route: &'static RpcServerRoute,
     pub shutdown: broadcast::Receiver<()>,
     pub _shutdown_complete: mpsc::Sender<()>,
 }

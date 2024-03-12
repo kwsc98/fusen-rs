@@ -12,7 +12,7 @@ struct TestServerImpl {
     _db: String,
 }
 
-#[fusen_server(package = "com.fusen", version = "1.0.0")]
+#[fusen_server(package = "com.fusen")]
 impl TestServer for TestServerImpl {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> FusenResult<ResDto> {
         info!("req1 : {:?} , req1 : {:?}", req1, req2);
@@ -40,6 +40,7 @@ async fn main() {
             "default",
             RegisterType::ZooKeeper,
         ))
+        .add_protocol(Protocol::HTTP("8082".to_owned()))
         .add_protocol(Protocol::HTTP2("8081".to_owned()))
         .add_fusen_server(Box::new(server))
         .run()

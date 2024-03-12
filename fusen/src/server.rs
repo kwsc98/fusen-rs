@@ -43,7 +43,7 @@ impl FusenServer {
         return self;
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(mut self) {
         let tcp_server = TcpServer::init(self.protocol.clone(), self.fusen_servers.clone());
         for register_builder in &self.register_builder {
             let register = register_builder.init(Arc::new(RwLock::new(HashMap::new())));

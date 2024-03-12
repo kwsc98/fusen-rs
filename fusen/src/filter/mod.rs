@@ -1,9 +1,8 @@
-use bytes::Bytes;
 use fusen_common::{FusenError, FusenFuture, FusenMsg, RpcServer};
 use futures::Future;
 use http::{HeaderMap, HeaderValue};
-use http_body::{Body, Frame};
-use http_body_util::{BodyExt, Full, StreamBody};
+use http_body::Frame;
+use http_body_util::{BodyExt, StreamBody};
 use hyper::{service::Service, Request, Response};
 use prost::Message;
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
@@ -12,15 +11,15 @@ use crate::support::triple::{TripleExceptionWrapper, TripleRequestWrapper, Tripl
 type TrailersBody = futures_util::stream::Iter<
     std::vec::IntoIter<std::result::Result<http_body::Frame<bytes::Bytes>, Infallible>>,
 >;
-pub struct FusenRouter<KF> {
-    fusen_filter: KF,
+pub struct FusenRouter<KF: 'static> {
+    fusen_filter: &'static KF,
 }
 
 impl<KF> FusenRouter<KF>
 where
     KF: FusenFilter<Request = FusenMsg, Response = FusenMsg, Error = crate::Error> + Clone,
 {
-    pub fn new(fusen_filter: KF) -> Self {
+    pub fn new(fusen_filter: &'static KF) -> Self {
         return FusenRouter { fusen_filter };
     }
 }
@@ -38,6 +37,7 @@ where
 
     fn call(&self, mut req: Request<hyper::body::Incoming>) -> Self::Future {
         let fusen_filter = self.fusen_filter.clone();
+        eprintln!("{:?}", req);
         Box::pin(async move {
             let content_type = req
                 .headers()
@@ -70,9 +70,13 @@ where
                     }
                 }
             } else {
-                match serde_json::from_slice(&data) {
-                    Ok(req) => req,
-                    Err(err) => return Err(FusenError::Client(err.to_string())),
+                if data.starts_with(b"[") {
+                    match serde_json::from_slice(&data) {
+                        Ok(req) => req,
+                        Err(err) => return Err(FusenError::Client(err.to_string())),
+                    }
+                } else {
+                    vec![String::from_utf8(data.to_vec()).unwrap()]
                 }
             };
             let url = req.uri().path().to_string();
@@ -93,6 +97,7 @@ where
                 Ok(msg) => msg,
                 Err(err) => return Err(FusenError::Server(err.to_string())),
             };
+            eprintln!("{:?}",msg);
             let response = Response::builder();
             if content_type.contains("grpc") {
                 let mut status = "0";

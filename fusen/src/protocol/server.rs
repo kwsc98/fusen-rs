@@ -7,6 +7,7 @@ use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error};
 
+use crate::filter::RpcServerRoute;
 use crate::protocol::StreamHandler;
 
 #[derive(Clone)]
@@ -27,12 +28,9 @@ impl TcpServer {
     }
     pub async fn run(self) {
         let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
+        let route = Box::leak(Box::new(RpcServerRoute::new(self.fusen_servers)));
         for protocol in self.protocol {
-            tokio::spawn(Self::monitor(
-                protocol,
-                self.fusen_servers.clone(),
-                shutdown_complete_tx.clone(),
-            ));
+            tokio::spawn(Self::monitor(protocol, route, shutdown_complete_tx.clone()));
         }
         drop(shutdown_complete_tx);
         let _ = shutdown_complete_rx.recv().await;
@@ -41,7 +39,7 @@ impl TcpServer {
 
     async fn monitor(
         protocol: Protocol,
-        fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
+        route: &'static RpcServerRoute,
         shutdown_complete_tx: mpsc::Sender<()>,
     ) -> crate::Result<()> {
         let notify_shutdown = broadcast::channel(1).0;
@@ -64,14 +62,14 @@ impl TcpServer {
                 Ok(stream) => {
                     let stream_handler = StreamHandler {
                         tcp_stream: stream.0,
-                        fusen_server: fusen_servers.clone(),
+                        route: route,
                         shutdown: notify_shutdown.subscribe(),
                         _shutdown_complete: shutdown_complete_tx.clone(),
                     };
                     debug!("socket stream connect, addr: {:?}", stream.1);
                     match &protocol {
-                        Protocol::HTTP(_) => tokio::spawn(stream_handler.run_http2()),
-                        Protocol::HTTP2(_) => tokio::spawn(stream_handler.run_http1()),
+                        Protocol::HTTP(_) => tokio::spawn(stream_handler.run_http1()),
+                        Protocol::HTTP2(_) => tokio::spawn(stream_handler.run_http2()),
                     };
                 }
                 Err(err) => error!("tcp connect, err: {:?}", err),
