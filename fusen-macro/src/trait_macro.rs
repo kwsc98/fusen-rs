@@ -13,10 +13,6 @@ pub fn fusen_trait(
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
     };
-    let package = match attr.package {
-        Some(package) => quote!(#package),
-        None => quote!("fusen"),
-    };
     let input = parse_macro_input!(item as ItemTrait);
     let (id,methods_info) = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => {
@@ -27,6 +23,14 @@ pub fn fusen_trait(
             (methods_info.0,methods)
         },
         Err(err) => return err.into_compile_error().into(),
+    };
+    let package = match attr.package {
+        Some(mut package) => {
+            package.push('.');
+            package.push_str(&id);
+            quote!(#package)
+        },
+        None => quote!(#id),
     };
     let item_trait = get_item_trait(input.clone());
     let trait_ident = &input.ident;
@@ -72,7 +76,7 @@ pub fn fusen_trait(
                     let msg = fusen::fusen_common::FusenMsg::new(
                         fusen::fusen_common::get_uuid(),
                         version.map(|e|e.to_string()),
-                        #package.to_owned() + "." + &#id,
+                        #package.to_owned(),
                         stringify!(#ident).to_string(),
                         req_vec,
                         Err(fusen::fusen_common::FusenError::Null)
@@ -109,7 +113,7 @@ pub fn fusen_trait(
             #(
                vec.push(#temp_method::form_json_str(#methods_info));
             )*
-            (&#id,vec)
+            (&#package,vec)
         }
 
        }

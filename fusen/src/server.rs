@@ -33,9 +33,9 @@ impl FusenServer {
 
     pub fn add_fusen_server(mut self, server: Box<dyn RpcServer>) -> FusenServer {
         let info = server.get_info();
-        let server_name = info.0.to_string() + "." + &info.1.to_string();
+        let server_name = info.0.to_string();
         let mut key = server_name.clone();
-        if let Some(version) = info.2 {
+        if let Some(version) = info.1 {
             key.push_str(":");
             key.push_str(version);
         }
@@ -50,11 +50,11 @@ impl FusenServer {
             if let Ok(port) = register.check(&self.protocol) {
                 for server in &self.fusen_servers {
                     let info = server.1.get_info();
-                    let server_name = info.0.to_string() + "." + &info.1.to_string();
+                    let server_name = info.0.to_string();
                     let resource = Resource::Server(Info {
                         server_name,
-                        version: info.2.map(|e| e.to_string()),
-                        methods: info.3,
+                        version: info.1.map(|e| e.to_string()),
+                        methods: info.2,
                         ip: fusen_common::get_ip(),
                         port: Some(port.clone()),
                     });

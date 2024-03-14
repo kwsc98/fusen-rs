@@ -107,7 +107,7 @@ impl MethodResource {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: FusenMsg) -> FusenFuture<FusenMsg>;
-    fn get_info(&self) -> (&str, &str, Option<&str>, Vec<MethodResource>);
+    fn get_info(&self) -> (&str,Option<&str>, Vec<MethodResource>);
 }
 
 pub fn init_log() {

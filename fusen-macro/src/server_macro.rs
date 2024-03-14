@@ -13,10 +13,6 @@ pub fn fusen_server(
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
     };
-    let package = match attr.package {
-        Some(package) => quote!(#package),
-        None => quote!("fusen"),
-    };
     let org_item = parse_macro_input!(item as ItemImpl);
     let (id, methods_info) = match get_resource_by_server(org_item.clone()) {
         Ok(methods_info) => (
@@ -27,6 +23,14 @@ pub fn fusen_server(
             }),
         ),
         Err(err) => return err.into_compile_error().into(),
+    };
+    let package = match attr.package {
+        Some(mut package) => {
+            package.push('.');
+            package.push_str(&id);
+            quote!(#package)
+        },
+        None => quote!(#id),
     };
     let item = org_item.clone();
     let org_item = get_server_item(org_item);
@@ -98,13 +102,13 @@ pub fn fusen_server(
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
-            fn get_info(&self) -> (&str , &str , Option<&str> , Vec<#temp_method>) {
+            fn get_info(&self) -> (&str, Option<&str> , Vec<#temp_method>) {
 
                let mut methods : Vec<#temp_method> = vec![];
                #(
                 methods.push(#temp_method::form_json_str(#methods_info));
                )*
-               (#package ,&#id , #version ,methods)
+               (#package, #version ,methods)
             }
         }
 
