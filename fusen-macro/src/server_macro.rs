@@ -177,7 +177,7 @@ fn get_resource_by_server(item: ItemImpl) -> Result<(String, Vec<MethodResource>
             };
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
-            res.push(MethodResource::new(id, parent_path, method));
+            res.push(MethodResource::new(id, item_fn.sig.ident.to_string(),parent_path, method));
         }
     }
     return Ok((parent_id, res));

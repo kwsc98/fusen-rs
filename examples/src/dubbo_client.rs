@@ -1,4 +1,4 @@
-use examples::{DemoServiceRpc, ReqDto};
+use examples::{DemoServiceClient, ReqDto};
 use fusen::{
     client::FusenClient,
     fusen_common,
@@ -18,7 +18,7 @@ lazy_static! {
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     fusen_common::init_log();
-    let client = DemoServiceRpc::new(&CLI);
+    let client = DemoServiceClient::new(&CLI);
     info!("{:?}", client.get_info());
     let res = client
         .sayHelloV2(ReqDto {

@@ -1,4 +1,6 @@
 
+use std::collections::HashMap;
+
 use crate::{get_resource_by_attrs, FusenAttr};
 use fusen_common::MethodResource;
 use proc_macro::TokenStream;
@@ -14,10 +16,12 @@ pub fn fusen_trait(
         None => quote!(None),
     };
     let input = parse_macro_input!(item as ItemTrait);
+    let mut methods_cache = HashMap::new();
     let (id,methods_info) = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => {
             let methods = methods_info.1.iter().fold(vec![], |mut vec, e| {
                 vec.push(e.to_json_str());
+                methods_cache.insert(e.get_name(),(e.get_id(),e.get_path()));
                 vec
             });
             (methods_info.0,methods)
@@ -60,6 +64,7 @@ pub fn fusen_trait(
             }
             ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
+        let (methos_id,methos_path) = methods_cache.get(&ident.to_string()).unwrap();
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
@@ -73,11 +78,12 @@ pub fn fusen_trait(
                         req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
-                    let msg = fusen::fusen_common::FusenMsg::new(
+                    let msg = fusen::fusen_common::FusenMsg::new_client(
                         fusen::fusen_common::get_uuid(),
+                        #methos_path.to_string(),
                         version.map(|e|e.to_string()),
                         #package.to_owned(),
-                        stringify!(#ident).to_string(),
+                        #methos_id.to_string(),
                         req_vec,
                         Err(fusen::fusen_common::FusenError::Null)
                     );
@@ -87,7 +93,7 @@ pub fn fusen_trait(
             }
         );
     }
-    let rpc_client = syn::Ident::new(&format!("{}Rpc", trait_ident), trait_ident.span());
+    let rpc_client = syn::Ident::new(&format!("{}Client", trait_ident), trait_ident.span());
     let temp_method = syn::Ident::new(
         &format!("{}MethodResourceTrait", trait_ident),
         trait_ident.span(),
@@ -96,7 +102,8 @@ pub fn fusen_trait(
     let expanded = quote! {
         use fusen::fusen_common::MethodResource as #temp_method;
         #item_trait
-
+        
+        #[derive(Clone)]
         #vis struct #rpc_client {
             client : &'static fusen::client::FusenClient
         }
@@ -188,7 +195,12 @@ fn get_resource_by_trait(item: ItemTrait) -> Result<(String, Vec<MethodResource>
             };
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
-            res.push(MethodResource::new(id, parent_path, method));
+            res.push(MethodResource::new(
+                id,
+                item_fn.sig.ident.to_string(),
+                parent_path,
+                method,
+            ));
         }
     }
     return Ok((parent_id, res));

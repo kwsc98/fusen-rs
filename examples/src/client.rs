@@ -1,5 +1,5 @@
 use examples::ReqDto;
-use examples::TestServerRpc;
+use examples::TestServerClient;
 use fusen::fusen_common;
 use fusen::{
     client::FusenClient,
@@ -18,7 +18,7 @@ lazy_static! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    let de = TestServerRpc::new(&CLI);
+    let de = TestServerClient::new(&CLI);
     println!("{:?}",de.get_info());
     fusen_common::init_log();
     let client = de;

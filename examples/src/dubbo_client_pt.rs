@@ -1,13 +1,13 @@
 use std::time::Duration;
 
+use examples::DemoServiceClient;
 use fusen::{
     client::FusenClient,
-    fusen_client, fusen_common,
+    fusen_common,
     register::{RegisterBuilder, RegisterType},
 };
 use fusen_common::date_util::get_now_date_time_as_millis;
 use lazy_static::lazy_static;
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -19,35 +19,17 @@ lazy_static! {
     ));
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ReqDto {
-    name: String,
-}
 
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct ResDto {
-    res: String,
-}
-
-#[derive(Clone)]
-struct DemoService;
-
-fusen_client! {
-   CLI,
-   "org.apache.dubbo.springboot.demo",
-   DemoService,
-   None,
-   async fn sayHello(&self,name : String) -> Result<String>
-   async fn sayHelloV2(&self,name : ReqDto) -> Result<ResDto>
-}
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     fusen_common::init_log();
-    let _res = DemoService.sayHello("world".to_string()).await;
+    let client = DemoServiceClient::new(&CLI);
+
+    let _res = client.sayHello("world".to_string()).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let start_time = get_now_date_time_as_millis();
-    let client = DemoService;
+    let client = client;
     let mut m: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
     tokio::spawn(do_run(client.clone(), m.0.clone()));
     tokio::spawn(do_run(client.clone(), m.0.clone()));
@@ -94,7 +76,7 @@ async fn main() {
     info!("{:?}", get_now_date_time_as_millis() - start_time);
 }
 
-async fn do_run(client: DemoService, sender: mpsc::Sender<i32>) {
+async fn do_run(client: DemoServiceClient, sender: mpsc::Sender<i32>) {
     for _idx in 0..100000 {
         let temp_client = client.clone();
         let temp_sender = sender.clone();

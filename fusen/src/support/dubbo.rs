@@ -96,6 +96,7 @@ fn get_info(url: &str) -> Info {
             .fold(vec![], |mut vec, e| {
                 vec.push(MethodResource::new(
                     e.to_string(),
+                    e.to_string(),
                     "/".to_owned() + e,
                     "POST".to_owned(),
                 ));

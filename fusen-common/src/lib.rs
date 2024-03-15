@@ -12,9 +12,9 @@ pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 pub type FusenResult<T> = std::result::Result<T, FusenError>;
 pub mod date_util;
-pub mod url_util;
 pub mod r#macro;
 pub mod server;
+pub mod url_util;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum FusenError {
@@ -44,6 +44,7 @@ impl std::error::Error for FusenError {}
 #[derive(Debug)]
 pub struct FusenMsg {
     pub unique_identifier: String,
+    pub path: String,
     pub version: Option<String>,
     pub class_name: String,
     pub method_name: String,
@@ -52,19 +53,9 @@ pub struct FusenMsg {
 }
 
 impl FusenMsg {
-    pub fn new_empty() -> FusenMsg {
-        return FusenMsg {
-            unique_identifier: "".to_string(),
-            version: None,
-            class_name: "".to_string(),
-            method_name: "".to_string(),
-            req: vec![],
-            res: Err(FusenError::Null),
-        };
-    }
-
-    pub fn new(
+    pub fn new_client(
         unique_identifier: String,
+        path: String,
         version: Option<String>,
         class_name: String,
         method_name: String,
@@ -73,6 +64,7 @@ impl FusenMsg {
     ) -> FusenMsg {
         return FusenMsg {
             unique_identifier,
+            path,
             version,
             class_name,
             method_name,
@@ -80,22 +72,53 @@ impl FusenMsg {
             res,
         };
     }
+    pub fn new_server(
+        unique_identifier: String,
+        version: Option<String>,
+        path: String,
+        req: Vec<String>,
+    ) -> FusenMsg {
+        return FusenMsg {
+            unique_identifier,
+            path,
+            version,
+            class_name: "".to_string(),
+            method_name: "".to_string(),
+            req,
+            res: Err(FusenError::Null),
+        };
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MethodResource {
     id: String,
+    name: String,
     path: String,
     //get ot post
     method: String,
 }
 
 impl MethodResource {
+    pub fn into(self) -> (String, String, String) {
+        return (self.id, self.path, self.name);
+    }
     pub fn get_id(&self) -> String {
         return self.id.to_string();
     }
-    pub fn new(id: String, path: String, method: String) -> Self {
-        Self { id, path, method }
+    pub fn get_name(&self) -> String {
+        return self.name.to_string();
+    }
+    pub fn get_path(&self) -> String {
+        return self.path.to_string();
+    }
+    pub fn new(id: String, name: String, path: String, method: String) -> Self {
+        Self {
+            id,
+            name,
+            path,
+            method,
+        }
     }
     pub fn form_json_str(str: &str) -> Self {
         serde_json::from_str(str).unwrap()
@@ -107,7 +130,7 @@ impl MethodResource {
 
 pub trait RpcServer: Send + Sync {
     fn invoke(&self, msg: FusenMsg) -> FusenFuture<FusenMsg>;
-    fn get_info(&self) -> (&str,Option<&str>, Vec<MethodResource>);
+    fn get_info(&self) -> (&str, Option<&str>, Vec<MethodResource>);
 }
 
 pub fn init_log() {

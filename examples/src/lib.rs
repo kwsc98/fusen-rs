@@ -11,7 +11,7 @@ pub struct ResDto {
     pub str: String,
 }
 
-#[fusen_trait( version = "1.0.0")]
+#[fusen_trait(version = "1.0.0")]
 pub trait TestServer {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> ResDto;
 
