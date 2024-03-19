@@ -78,14 +78,13 @@ pub fn fusen_trait(
                         req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
-                    let msg = fusen::fusen_common::FusenMsg::new_client(
+                    let msg = fusen::fusen_common::FusenContext::new (
                         fusen::fusen_common::get_uuid(),
                         #methos_path.to_string(),
                         version.map(|e|e.to_string()),
                         #package.to_owned(),
                         #methos_id.to_string(),
-                        req_vec,
-                        Err(fusen::fusen_common::FusenError::Null)
+                        req_vec
                     );
                     let res : Result<#output_type,fusen::fusen_common::FusenError> = self.client.invoke::<#output_type>(msg).await;
                     return res;

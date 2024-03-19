@@ -1,13 +1,12 @@
 use fusen_common::server::Protocol;
-use fusen_common::RpcServer;
+use fusen_common::server::RpcServer;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error};
-
-use crate::filter::RpcServerRoute;
+use crate::filter::server::RpcServerFilter;
 use crate::protocol::StreamHandler;
 
 #[derive(Clone)]
@@ -28,7 +27,7 @@ impl TcpServer {
     }
     pub async fn run(self) {
         let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
-        let route = Box::leak(Box::new(RpcServerRoute::new(self.fusen_servers)));
+        let route = Box::leak(Box::new(RpcServerFilter::new(self.fusen_servers)));
         for protocol in self.protocol {
             tokio::spawn(Self::monitor(protocol, route, shutdown_complete_tx.clone()));
         }
@@ -39,7 +38,7 @@ impl TcpServer {
 
     async fn monitor(
         protocol: Protocol,
-        route: &'static RpcServerRoute,
+        route: &'static RpcServerFilter,
         shutdown_complete_tx: mpsc::Sender<()>,
     ) -> crate::Result<()> {
         let notify_shutdown = broadcast::channel(1).0;

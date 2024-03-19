@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-
 use crate::register::RegisterBuilder;
-use crate::route::Route;
+use crate::route::client::Route;
 use crate::support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper};
 use bytes::{BufMut, BytesMut};
-use fusen_common::{FusenMsg, FusenError};
+use fusen_common::error::FusenError;
+use fusen_common::FusenContext;
 use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
@@ -27,18 +27,18 @@ impl FusenClient {
         return cli;
     }
 
-    pub async fn invoke<Res>(&self, msg: FusenMsg) -> Result<Res, FusenError>
+    pub async fn invoke<Res>(&self, msg: FusenContext) -> Result<Res, FusenError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
         let mut sender: SendRequest<Full<bytes::Bytes>> = self
             .route
-            .get_socket_sender(&msg.class_name, msg.version.as_deref())
+            .get_socket_sender(msg.class_name.as_ref().unwrap(), msg.version.as_deref())
             .await
             .map_err(|e| FusenError::Client(e.to_string()))?;
         let buf = TripleRequestWrapper::get_buf(msg.req);
         let mut builder = Request::builder()
-            .uri("/".to_owned() + &msg.class_name + "/" + &msg.method_name)
+            .uri("/".to_owned() + msg.class_name.as_ref().unwrap() + "/" + &msg.method_name.unwrap())
             .header("content-type", "application/grpc+proto");
         if let Some(version) = msg.version {
             builder.headers_mut().unwrap().insert(

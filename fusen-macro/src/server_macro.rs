@@ -98,7 +98,7 @@ pub fn fusen_server(
         #org_item
 
         impl fusen::fusen_common::RpcServer for #item_self {
-            fn invoke (&self, param : fusen::fusen_common::FusenMsg) -> fusen::fusen_common::FusenFuture<fusen::fusen_common::FusenMsg> {
+            fn invoke (&self, param : fusen::fusen_common::FusenContext) -> fusen::fusen_common::FusenFuture<fusen::fusen_common::FusenContext> {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
@@ -113,7 +113,7 @@ pub fn fusen_server(
         }
 
         impl #item_self {
-            async fn prv_invoke (&self, mut param : fusen::fusen_common::FusenMsg) -> fusen::fusen_common::FusenMsg {
+            async fn prv_invoke (&self, mut param : fusen::fusen_common::FusenContext) -> fusen::fusen_common::FusenContext {
                 #(#items_fn)*
                 param.res = Err(fusen::fusen_common::FusenError::Server(format!("not find method by {}",param.method_name)));
                 return param;

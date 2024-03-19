@@ -1,89 +1,92 @@
-use std::{
-    fmt::{self, Display, Formatter},
-    net::IpAddr,
-};
+use std::collections::HashMap;
 
+use codec::CodecType;
+use error::FusenError;
+use http::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 pub type FusenResult<T> = std::result::Result<T, FusenError>;
+pub mod codec;
 pub mod date_util;
+pub mod error;
+pub mod logs_util;
 pub mod r#macro;
+pub mod net_util;
 pub mod server;
 pub mod url_util;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum FusenError {
-    Null,
-    Client(String),
-    Server(String),
-    Method(String),
+#[derive(Debug)]
+pub struct MetaData {
+    inner: HashMap<String, String>,
 }
 
-unsafe impl Send for FusenError {}
+impl MetaData {
+    pub fn get_codec(&self) -> CodecType {
+        let content_type = self.get_value("content-type");
+        if let Some(str) = content_type {
+            if str.to_lowercase().contains("grpc") {
+                return CodecType::GRPC;
+            }
+        }
+        return CodecType::JSON;
+    }
 
-unsafe impl Sync for FusenError {}
+    pub fn get_value(&self, key: &str) -> Option<&String> {
+        self.inner.get(key)
+    }
+}
 
-impl Display for FusenError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            FusenError::Null => write!(f, "Bad value"),
-            FusenError::Client(msg) => write!(f, "FusenError::Client {}", msg),
-            FusenError::Server(msg) => write!(f, "FusenError::Server {}", msg),
-            FusenError::Method(msg) => write!(f, "FusenError::Method {}", msg),
+impl From<&HeaderMap<HeaderValue>> for MetaData {
+    fn from(value: &HeaderMap<HeaderValue>) -> MetaData {
+        value.iter().fold(MetaData::new(), |mut meta, e| {
+            meta.inner
+                .insert(e.0.to_string(), e.1.to_str().unwrap().to_string());
+            meta
+        })
+    }
+}
+
+impl MetaData {
+    pub fn new() -> Self {
+        MetaData {
+            inner: HashMap::new(),
         }
     }
 }
 
-impl std::error::Error for FusenError {}
-
 #[derive(Debug)]
-pub struct FusenMsg {
+pub struct FusenContext {
     pub unique_identifier: String,
     pub path: String,
+    pub meta_data: MetaData,
+    pub class_name: Option<String>,
+    pub method_name: Option<String>,
     pub version: Option<String>,
-    pub class_name: String,
-    pub method_name: String,
     pub req: Vec<String>,
     pub res: core::result::Result<String, FusenError>,
 }
 
-impl FusenMsg {
-    pub fn new_client(
+impl FusenContext {
+    pub fn new(
         unique_identifier: String,
         path: String,
+        meta_data: MetaData,
         version: Option<String>,
-        class_name: String,
-        method_name: String,
+        class_name: Option<String>,
+        method_name: Option<String>,
         req: Vec<String>,
-        res: core::result::Result<String, FusenError>,
-    ) -> FusenMsg {
-        return FusenMsg {
+    ) -> FusenContext {
+        return FusenContext {
             unique_identifier,
             path,
+            meta_data,
             version,
             class_name,
             method_name,
-            req,
-            res,
-        };
-    }
-    pub fn new_server(
-        unique_identifier: String,
-        version: Option<String>,
-        path: String,
-        req: Vec<String>,
-    ) -> FusenMsg {
-        return FusenMsg {
-            unique_identifier,
-            path,
-            version,
-            class_name: "".to_string(),
-            method_name: "".to_string(),
             req,
             res: Err(FusenError::Null),
         };
@@ -95,7 +98,6 @@ pub struct MethodResource {
     id: String,
     name: String,
     path: String,
-    //get ot post
     method: String,
 }
 
@@ -125,37 +127,5 @@ impl MethodResource {
     }
     pub fn to_json_str(&self) -> String {
         serde_json::to_string(self).unwrap()
-    }
-}
-
-pub trait RpcServer: Send + Sync {
-    fn invoke(&self, msg: FusenMsg) -> FusenFuture<FusenMsg>;
-    fn get_info(&self) -> (&str, Option<&str>, Vec<MethodResource>);
-}
-
-pub fn init_log() {
-    let stdout = std::io::stdout.with_max_level(tracing::Level::DEBUG);
-    tracing_subscriber::fmt()
-        .with_writer(stdout)
-        .with_line_number(true)
-        .with_thread_ids(true)
-        .init();
-}
-
-pub fn get_uuid() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
-pub fn get_network_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
-    socket.connect("8.8.8.8:80")?;
-    let local_ip = socket.local_addr()?.ip();
-    Ok(local_ip)
-}
-
-pub fn get_ip() -> String {
-    match get_network_ip() {
-        Ok(ok) => ok.to_string(),
-        Err(_err) => "127.0.0.1".to_string(),
     }
 }
