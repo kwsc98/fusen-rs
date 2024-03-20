@@ -25,8 +25,8 @@ impl RpcServerFilter {
     }
     pub fn get_server(&self, msg: &mut FusenContext) -> Option<Arc<Box<dyn RpcServer>>> {
         let info = self.path_cache.get(&msg.path)?;
-        msg.class_name = Some(info.0.clone());
-        msg.method_name = Some(info.1.clone());
+        msg.class_name = info.0.clone();
+        msg.method_name = info.1.clone();
         let mut class_name = msg.class_name.clone();
         if let Some(version) = &msg.version {
             class_name.push_str(":");

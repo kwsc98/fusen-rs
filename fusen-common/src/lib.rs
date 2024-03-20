@@ -6,6 +6,8 @@ use http::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
+pub type HttpError = Box<dyn std::error::Error + Send + Sync>;
+
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
@@ -63,8 +65,8 @@ pub struct FusenContext {
     pub unique_identifier: String,
     pub path: String,
     pub meta_data: MetaData,
-    pub class_name: Option<String>,
-    pub method_name: Option<String>,
+    pub class_name: String,
+    pub method_name: String,
     pub version: Option<String>,
     pub req: Vec<String>,
     pub res: core::result::Result<String, FusenError>,
@@ -76,8 +78,8 @@ impl FusenContext {
         path: String,
         meta_data: MetaData,
         version: Option<String>,
-        class_name: Option<String>,
-        method_name: Option<String>,
+        class_name: String,
+        method_name: String,
         req: Vec<String>,
     ) -> FusenContext {
         return FusenContext {

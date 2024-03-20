@@ -33,12 +33,12 @@ impl FusenClient {
     {
         let mut sender: SendRequest<Full<bytes::Bytes>> = self
             .route
-            .get_socket_sender(msg.class_name.as_ref().unwrap(), msg.version.as_deref())
+            .get_socket_sender(msg.class_name.as_ref(), msg.version.as_deref())
             .await
             .map_err(|e| FusenError::Client(e.to_string()))?;
         let buf = TripleRequestWrapper::get_buf(msg.req);
         let mut builder = Request::builder()
-            .uri("/".to_owned() + msg.class_name.as_ref().unwrap() + "/" + &msg.method_name.unwrap())
+            .uri("/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name)
             .header("content-type", "application/grpc+proto");
         if let Some(version) = msg.version {
             builder.headers_mut().unwrap().insert(

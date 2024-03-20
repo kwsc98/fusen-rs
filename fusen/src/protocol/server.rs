@@ -1,3 +1,5 @@
+use crate::filter::server::RpcServerFilter;
+use crate::protocol::StreamHandler;
 use fusen_common::server::Protocol;
 use fusen_common::server::RpcServer;
 use std::collections::HashMap;
@@ -6,8 +8,6 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error};
-use crate::filter::server::RpcServerFilter;
-use crate::protocol::StreamHandler;
 
 #[derive(Clone)]
 pub struct TcpServer {

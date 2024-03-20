@@ -1,6 +1,6 @@
 pub mod client;
 pub mod codec;
-mod filter;
+pub mod filter;
 pub mod protocol;
 pub mod register;
 pub mod route;
@@ -10,6 +10,8 @@ pub use fusen_common;
 pub use fusen_macro;
 use std::convert::Infallible;
 pub type Error = fusen_common::Error;
+pub type HttpError = fusen_common::HttpError;
+
 pub type Result<T> = fusen_common::Result<T>;
 pub type FusenFuture<T> = fusen_common::FusenFuture<T>;
 pub type HttpBody = futures_util::stream::Iter<
