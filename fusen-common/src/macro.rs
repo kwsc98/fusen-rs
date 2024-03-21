@@ -19,7 +19,7 @@ macro_rules! fusen_attr {
 
             fn build_attr(args: syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>) -> Result<$name, syn::Error> {
                 let mut methods_name = String::new();
-                $(  
+                $(
                     let mut $req  = None;
                     methods_name.push_str("`");
                     methods_name.push_str(stringify!($req));
@@ -45,7 +45,7 @@ macro_rules! fusen_attr {
                             }
                             .replace("\"", "");
                             match ident.as_str() {
-                                $(  
+                                $(
                                     stringify!($req) => {
                                         let _ = $req.insert(lit);
                                     }
@@ -68,7 +68,7 @@ macro_rules! fusen_attr {
                     }
                 }
                 Ok($name{
-                    $(  
+                    $(
                         $req,
                     )*
                 })

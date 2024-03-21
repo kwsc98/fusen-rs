@@ -5,10 +5,7 @@ use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl};
 
 use crate::{get_resource_by_attrs, FusenAttr};
 
-pub fn fusen_server(
-    attr:FusenAttr,
-    item: TokenStream,
-) -> TokenStream {
+pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let version = match attr.version {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
@@ -29,7 +26,7 @@ pub fn fusen_server(
             package.push('.');
             package.push_str(&id);
             quote!(#package)
-        },
+        }
         None => quote!(#id),
     };
     let item = org_item.clone();
@@ -47,7 +44,7 @@ pub fn fusen_server(
                     let token = quote! {
                      let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
-                        param.res = Err(fusen::fusen_common::FusenError::Server(err.to_string()));
+                        param.res = Err(fusen::fusen_common::error::FusenError::Server(err.to_string()).boxed());
                         return param;
                     }
                     let #req : #req_type = result.unwrap();
@@ -76,10 +73,10 @@ pub fn fusen_server(
                         let res = serde_json::to_string(&res);
                         match res {
                             Ok(res) => Ok(res),
-                            Err(err) => Err(fusen::fusen_common::FusenError::Server(err.to_string()))
+                            Err(err) => Err(fusen::fusen_common::error::FusenError::Server(err.to_string()).boxed())
                         }
                     },
-                    Err(info) => Err(info)
+                    Err(info) => Err(info.boxed())
                 };
                 return param;
             }
@@ -97,7 +94,7 @@ pub fn fusen_server(
 
         #org_item
 
-        impl fusen::fusen_common::RpcServer for #item_self {
+        impl fusen::fusen_common::server::RpcServer for #item_self {
             fn invoke (&self, param : fusen::fusen_common::FusenContext) -> fusen::fusen_common::FusenFuture<fusen::fusen_common::FusenContext> {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
@@ -115,7 +112,7 @@ pub fn fusen_server(
         impl #item_self {
             async fn prv_invoke (&self, mut param : fusen::fusen_common::FusenContext) -> fusen::fusen_common::FusenContext {
                 #(#items_fn)*
-                param.res = Err(fusen::fusen_common::FusenError::Server(format!("not find method by {}",param.method_name)));
+                param.res = Err(fusen::fusen_common::error::FusenError::Server(format!("not find method by {}",param.method_name)).boxed());
                 return param;
             }
         }
@@ -177,7 +174,12 @@ fn get_resource_by_server(item: ItemImpl) -> Result<(String, Vec<MethodResource>
             };
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
-            res.push(MethodResource::new(id, item_fn.sig.ident.to_string(),parent_path, method));
+            res.push(MethodResource::new(
+                id,
+                item_fn.sig.ident.to_string(),
+                parent_path,
+                method,
+            ));
         }
     }
     return Ok((parent_id, res));

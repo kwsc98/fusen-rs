@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 
 use crate::{get_resource_by_attrs, FusenAttr};
@@ -7,25 +6,22 @@ use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
 
-pub fn fusen_trait(
-    attr:FusenAttr,
-    item: TokenStream,
-) -> TokenStream {
+pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let version = match attr.version {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
     };
     let input = parse_macro_input!(item as ItemTrait);
     let mut methods_cache = HashMap::new();
-    let (id,methods_info) = match get_resource_by_trait(input.clone()) {
+    let (id, methods_info) = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => {
             let methods = methods_info.1.iter().fold(vec![], |mut vec, e| {
                 vec.push(e.to_json_str());
-                methods_cache.insert(e.get_name(),(e.get_id(),e.get_path()));
+                methods_cache.insert(e.get_name(), (e.get_id(), e.get_path()));
                 vec
             });
-            (methods_info.0,methods)
-        },
+            (methods_info.0, methods)
+        }
         Err(err) => return err.into_compile_error().into(),
     };
     let package = match attr.package {
@@ -33,7 +29,7 @@ pub fn fusen_trait(
             package.push('.');
             package.push_str(&id);
             quote!(#package)
-        },
+        }
         None => quote!(#id),
     };
     let item_trait = get_item_trait(input.clone());
@@ -64,29 +60,30 @@ pub fn fusen_trait(
             }
             ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
-        let (methos_id,methos_path) = methods_cache.get(&ident.to_string()).unwrap();
+        let (methos_id, methos_path) = methods_cache.get(&ident.to_string()).unwrap();
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
-                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen::fusen_common::FusenError> {
+                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen::fusen_common::error::FusenError> {
                     let mut req_vec : Vec<String> = vec![];
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
-                            return Err(fusen::fusen_common::FusenError::Client(err.to_string()));
+                            return Err(fusen::fusen_common::error::FusenError::Client(err.to_string()));
                         }
                         req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
                     let msg = fusen::fusen_common::FusenContext::new (
-                        fusen::fusen_common::get_uuid(),
+                        fusen::fusen_common::logs::get_uuid(),
                         #methos_path.to_string(),
+                        fusen::fusen_common::MetaData::new(),
                         version.map(|e|e.to_string()),
                         #package.to_owned(),
                         #methos_id.to_string(),
                         req_vec
                     );
-                    let res : Result<#output_type,fusen::fusen_common::FusenError> = self.client.invoke::<#output_type>(msg).await;
+                    let res : Result<#output_type,fusen::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(msg).await;
                     return res;
                 }
             }
@@ -101,7 +98,7 @@ pub fn fusen_trait(
     let expanded = quote! {
         use fusen::fusen_common::MethodResource as #temp_method;
         #item_trait
-        
+
         #[derive(Clone)]
         #vis struct #rpc_client {
             client : &'static fusen::client::FusenClient

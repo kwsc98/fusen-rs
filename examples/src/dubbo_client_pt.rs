@@ -19,11 +19,9 @@ lazy_static! {
     ));
 }
 
-
-
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    fusen_common::init_log();
+    fusen_common::logs::init_log();
     let client = DemoServiceClient::new(&CLI);
 
     let _res = client.sayHello("world".to_string()).await;
@@ -81,7 +79,7 @@ async fn do_run(client: DemoServiceClient, sender: mpsc::Sender<i32>) {
         let temp_client = client.clone();
         let temp_sender = sender.clone();
         tokio::spawn(async move {
-            let uuid = fusen_common::get_uuid();
+            let uuid = fusen_common::logs::get_uuid();
             let res = temp_client.sayHello(uuid.clone()).await;
             info!("req {:?} res {:?}", uuid, res);
             drop(temp_sender);

@@ -1,9 +1,5 @@
 use std::net::IpAddr;
 
-pub fn get_uuid() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
 pub fn get_network_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("8.8.8.8:80")?;

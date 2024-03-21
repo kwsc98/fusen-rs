@@ -51,7 +51,7 @@ impl Route {
                         server_name: class_name.to_string(),
                         version: version.map(|e| e.to_string()),
                         methods: vec![],
-                        ip: fusen_common::net_util::get_ip(),
+                        ip: fusen_common::net::get_ip(),
                         port: None,
                     });
                     let socket_read = self.socket_set.read().await;

@@ -2,6 +2,7 @@ use std::fmt::{self, Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
+pub type BoxFusenError = Box<FusenError>;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum FusenError {
@@ -9,6 +10,12 @@ pub enum FusenError {
     Client(String),
     Server(String),
     Method(String),
+}
+
+impl FusenError {
+    pub fn boxed(self) -> BoxFusenError {
+        Box::new(self)
+    }
 }
 
 unsafe impl Send for FusenError {}

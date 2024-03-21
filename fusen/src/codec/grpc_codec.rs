@@ -1,7 +1,7 @@
 use crate::StreamBody;
-use fusen_common::error::FusenError;
+use fusen_common::error::{BoxFusenError, FusenError};
 use http_body::Frame;
-use std::{error::Error, fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, marker::PhantomData};
 
 use super::BodyCodec;
 
@@ -12,8 +12,8 @@ pub struct GrpcBodyCodec<D, E> {
 
 impl<D, E> GrpcBodyCodec<D, E>
 where
-D: bytes::Buf + Debug,
-E: std::error::Error,
+    D: bytes::Buf + Debug,
+    E: std::marker::Sync + std::marker::Send,
 {
     pub fn new() -> Self {
         GrpcBodyCodec {
@@ -25,15 +25,19 @@ E: std::error::Error,
 
 impl<D, E> BodyCodec<D, E> for GrpcBodyCodec<D, E>
 where
-    D: bytes::Buf + Debug ,
-    E: std::error::Error ,
+    D: bytes::Buf + Debug,
+    E: std::marker::Sync + std::marker::Send,
 {
-    fn decode(&self, mut body: Frame<D>) -> Result<Vec<String>, FusenError> {
-        let data = body.data_ref().unwrap().chunk();
+    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, BoxFusenError> {
+        let data = if body.is_empty() || body[0].is_trailers() {
+            return Err(FusenError::Server("receive frame err".to_string()).boxed());
+        } else {
+            body[0].data_ref().unwrap().chunk()
+        };
         Ok(if data.starts_with(b"[") {
             match serde_json::from_slice(&data) {
                 Ok(req) => req,
-                Err(err) => return Err(FusenError::Client(err.to_string())),
+                Err(err) => return Err(FusenError::Client(err.to_string()).boxed()),
             }
         } else {
             vec![String::from_utf8(data.to_vec()).unwrap()]
@@ -42,8 +46,8 @@ where
 
     fn encode(
         &self,
-        res: Result<String, FusenError>,
-    ) -> Result<StreamBody<bytes::Bytes, E>, FusenError> {
+        res: Result<String, BoxFusenError>,
+    ) -> Result<StreamBody<bytes::Bytes, E>, BoxFusenError> {
         let res = res?;
         let chunks = vec![Ok(Frame::data(bytes::Bytes::from(res)))];
         let stream = futures_util::stream::iter(chunks);

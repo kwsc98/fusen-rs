@@ -1,6 +1,6 @@
 use examples::{DemoService, ReqDto, ResDto};
 use fusen::{
-    fusen_common::{self, server::Protocol, FusenResult, RpcServer},
+    fusen_common::{self, server::Protocol, server::RpcServer, FusenResult},
     fusen_macro::{self, resource},
     register::{RegisterBuilder, RegisterType},
     server::FusenServer,
@@ -13,7 +13,7 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[fusen_server(package = "org.apache.dubbo.springboot.demo",version = "1.0.0")]
+#[fusen_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
 #[resource(id = "DemoService" ,method = GET)]
 impl DemoService for DemoServiceImpl {
     #[resource(path="/sayHello2",method = POST)]
@@ -31,7 +31,7 @@ impl DemoService for DemoServiceImpl {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    fusen_common::init_log();
+    fusen_common::logs::init_log();
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };

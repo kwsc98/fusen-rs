@@ -12,7 +12,7 @@ struct TestServerImpl {
     _db: String,
 }
 
-#[fusen_server(version="1.0.0")]
+#[fusen_server(version = "1.0.0")]
 impl TestServer for TestServerImpl {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> FusenResult<ResDto> {
         info!("req1 : {:?} , req1 : {:?}", req1, req2);
@@ -30,7 +30,7 @@ impl TestServer for TestServerImpl {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    fusen_common::init_log();
+    fusen_common::logs::init_log();
     let server: TestServerImpl = TestServerImpl {
         _db: "我是一个DB数据库".to_string(),
     };

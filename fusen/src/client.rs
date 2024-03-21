@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use crate::register::RegisterBuilder;
 use crate::route::client::Route;
 use crate::support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper};
@@ -11,6 +9,8 @@ use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub struct FusenClient {
@@ -58,12 +58,16 @@ impl FusenClient {
             let res_frame = response
                 .frame()
                 .await
-                .map_or(Err(FusenError::Server("error frame 1".to_owned())), |e| Ok(e))?
+                .map_or(Err(FusenError::Server("error frame 1".to_owned())), |e| {
+                    Ok(e)
+                })?
                 .map_err(|e| FusenError::Client(e.to_string()))?;
             if res_frame.is_trailers() {
                 let trailers = res_frame
                     .trailers_ref()
-                    .map_or(Err(FusenError::Server("error frame 2".to_owned())), |e| Ok(e))?;
+                    .map_or(Err(FusenError::Server("error frame 2".to_owned())), |e| {
+                        Ok(e)
+                    })?;
                 match trailers.get("grpc-status") {
                     Some(status) => match status.as_bytes() {
                         b"0" => {

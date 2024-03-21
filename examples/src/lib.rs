@@ -18,7 +18,7 @@ pub trait TestServer {
     async fn doRun2(&self, req: ReqDto) -> ResDto;
 }
 
-#[fusen_trait(package = "org.apache.dubbo.springboot.demo",version = "1.0.0")]
+#[fusen_trait(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
 #[resource(method = POST)]
 pub trait DemoService {
     #[resource(path="/sayHello11",method = POST)]

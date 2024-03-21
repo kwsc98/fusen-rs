@@ -1,6 +1,7 @@
 use super::StreamHandler;
 use crate::{
-    route::server::FusenRouter, support::{TokioExecutor, TokioIo}
+    route::server::FusenRouter,
+    support::{TokioExecutor, TokioIo},
 };
 use hyper::server::conn::{http1, http2};
 use tracing::debug;
@@ -9,8 +10,7 @@ impl StreamHandler {
     pub async fn run_http1(mut self) {
         let hyper_io = TokioIo::new(self.tcp_stream);
         let route = FusenRouter::new(self.route);
-        let future = http1::Builder::new()
-        .serve_connection(hyper_io, route);
+        let future = http1::Builder::new().serve_connection(hyper_io, route);
         let err_info = tokio::select! {
                 res = future =>
                     match res {
@@ -30,8 +30,8 @@ impl StreamHandler {
         let hyper_io = TokioIo::new(self.tcp_stream);
         let route = FusenRouter::new(self.route);
         let future = http2::Builder::new(TokioExecutor)
-        .adaptive_window(true)
-        .serve_connection(hyper_io, route);
+            .adaptive_window(true)
+            .serve_connection(hyper_io, route);
         let err_info = tokio::select! {
                 res = future =>
                     match res {

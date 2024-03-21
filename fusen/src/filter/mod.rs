@@ -1,7 +1,6 @@
 use futures::Future;
 pub mod server;
 
-
 pub trait FusenFilter {
     type Request;
 

@@ -21,7 +21,7 @@ lazy_static! {
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    fusen_common::init_log();
+    fusen_common::logs::init_log();
     let client = TestServerClient::new(&CLI);
     let _res = client
         .doRun2(ReqDto {

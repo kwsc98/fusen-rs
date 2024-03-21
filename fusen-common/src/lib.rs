@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
 use codec::CodecType;
-use error::FusenError;
+use error::{BoxFusenError, FusenError};
 use http::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
-pub type HttpError = Box<dyn std::error::Error + Send + Sync>;
-
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
@@ -15,9 +13,9 @@ pub type FusenResult<T> = std::result::Result<T, FusenError>;
 pub mod codec;
 pub mod date_util;
 pub mod error;
-pub mod logs_util;
+pub mod logs;
 pub mod r#macro;
-pub mod net_util;
+pub mod net;
 pub mod server;
 pub mod url_util;
 
@@ -69,7 +67,7 @@ pub struct FusenContext {
     pub method_name: String,
     pub version: Option<String>,
     pub req: Vec<String>,
-    pub res: core::result::Result<String, FusenError>,
+    pub res: core::result::Result<String, BoxFusenError>,
 }
 
 impl FusenContext {
@@ -90,7 +88,7 @@ impl FusenContext {
             class_name,
             method_name,
             req,
-            res: Err(FusenError::Null),
+            res: Err(FusenError::Null.boxed()),
         };
     }
 }

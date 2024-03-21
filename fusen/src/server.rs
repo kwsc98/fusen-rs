@@ -55,7 +55,7 @@ impl FusenServer {
                         server_name,
                         version: info.1.map(|e| e.to_string()),
                         methods: info.2,
-                        ip: fusen_common::net_util::get_ip(),
+                        ip: fusen_common::net::get_ip(),
                         port: Some(port.clone()),
                     });
                     register.add_resource(resource);
