@@ -1,9 +1,5 @@
 use super::FusenFilter;
-use fusen_common::{
-    error::{BoxFusenError, FusenError},
-    server::RpcServer,
-    FusenContext,
-};
+use fusen_common::{error::FusenError, server::RpcServer, FusenContext};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Default)]
@@ -45,7 +41,7 @@ impl FusenFilter for RpcServerFilter {
 
     type Response = FusenContext;
 
-    type Error = BoxFusenError;
+    type Error = FusenError;
 
     type Future = crate::FusenFuture<Result<Self::Response, Self::Error>>;
 
@@ -55,11 +51,10 @@ impl FusenFilter for RpcServerFilter {
         match server {
             Some(server) => Box::pin(async move { Ok(server.invoke(msg).await) }),
             None => Box::pin(async move {
-                msg.res = Err(FusenError::Server(format!(
+                msg.res = Err(FusenError::ResourceEmpty(format!(
                     "not find server by {:?} version {:?}",
                     msg.class_name, msg.version
-                ))
-                .boxed());
+                )));
                 Ok(msg)
             }),
         }

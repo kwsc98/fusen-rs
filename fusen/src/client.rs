@@ -90,6 +90,7 @@ impl FusenClient {
                                     b"90" => return Err(FusenError::Client(msg)),
                                     b"91" => return Err(FusenError::Method(msg)),
                                     b"92" => return Err(FusenError::Null),
+                                    b"93" => return Err(FusenError::ResourceEmpty(msg)),
                                     _ => return Err(FusenError::Server(msg)),
                                 }
                             }

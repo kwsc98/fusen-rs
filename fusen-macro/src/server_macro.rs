@@ -44,7 +44,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let token = quote! {
                      let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
-                        param.res = Err(fusen::fusen_common::error::FusenError::Server(err.to_string()).boxed());
+                        param.res = Err(fusen::fusen_common::error::FusenError::Server(err.to_string()));
                         return param;
                     }
                     let #req : #req_type = result.unwrap();
@@ -73,10 +73,10 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         let res = serde_json::to_string(&res);
                         match res {
                             Ok(res) => Ok(res),
-                            Err(err) => Err(fusen::fusen_common::error::FusenError::Server(err.to_string()).boxed())
+                            Err(err) => Err(fusen::fusen_common::error::FusenError::Server(err.to_string()))
                         }
                     },
-                    Err(info) => Err(info.boxed())
+                    Err(info) => Err(info)
                 };
                 return param;
             }
@@ -112,7 +112,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         impl #item_self {
             async fn prv_invoke (&self, mut param : fusen::fusen_common::FusenContext) -> fusen::fusen_common::FusenContext {
                 #(#items_fn)*
-                param.res = Err(fusen::fusen_common::error::FusenError::Server(format!("not find method by {}",param.method_name)).boxed());
+                param.res = Err(fusen::fusen_common::error::FusenError::Server(format!("not find method by {}",param.method_name)));
                 return param;
             }
         }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use codec::CodecType;
-use error::{BoxFusenError, FusenError};
+use error::FusenError;
 use http::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
@@ -67,7 +67,7 @@ pub struct FusenContext {
     pub method_name: String,
     pub version: Option<String>,
     pub req: Vec<String>,
-    pub res: core::result::Result<String, BoxFusenError>,
+    pub res: core::result::Result<String, FusenError>,
 }
 
 impl FusenContext {
@@ -88,7 +88,7 @@ impl FusenContext {
             class_name,
             method_name,
             req,
-            res: Err(FusenError::Null.boxed()),
+            res: Err(FusenError::Null),
         };
     }
 }

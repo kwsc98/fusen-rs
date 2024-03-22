@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use fusen_common::{error::BoxFusenError, FusenContext, FusenFuture};
+use fusen_common::{
+    error::{BoxFusenError, FusenError},
+    FusenContext, FusenFuture,
+};
 use http_body_util::BodyExt;
 use hyper::{service::Service, Request, Response};
 use std::sync::Arc;
@@ -7,7 +10,7 @@ use std::sync::Arc;
 use crate::{
     codec::{http_codec::FusenHttpCodec, HttpCodec},
     filter::FusenFilter,
-    StreamBody,
+    get_empty_body, StreamBody,
 };
 
 #[derive(Clone)]
@@ -18,7 +21,7 @@ pub struct FusenRouter<KF: 'static> {
 
 impl<KF> FusenRouter<KF>
 where
-    KF: FusenFilter<Request = FusenContext, Response = FusenContext, Error = BoxFusenError> + Clone,
+    KF: FusenFilter<Request = FusenContext, Response = FusenContext, Error = FusenError> + Clone,
 {
     pub fn new(fusen_filter: &'static KF) -> Self {
         return FusenRouter {
@@ -26,11 +29,23 @@ where
             http_codec: Arc::new(FusenHttpCodec::<bytes::Bytes, hyper::Error>::new()),
         };
     }
+
+    async fn call(
+        req: Request<hyper::body::Incoming>,
+        http_codec: Arc<FusenHttpCodec<bytes::Bytes, hyper::Error>>,
+        fusen_filter: Arc<&'static KF>,
+    ) -> Result<Response<StreamBody<Bytes, hyper::Error>>, FusenError> {
+        let req = req.map(|e| e.boxed());
+        let context = http_codec.as_ref().decode(req).await?;
+        let context = fusen_filter.call(context).await?;
+        let res = http_codec.encode(context).await?;
+        Ok(res)
+    }
 }
 
 impl<KF> Service<Request<hyper::body::Incoming>> for FusenRouter<KF>
 where
-    KF: FusenFilter<Request = FusenContext, Response = FusenContext, Error = BoxFusenError>
+    KF: FusenFilter<Request = FusenContext, Response = FusenContext, Error = FusenError>
         + Clone
         + Send
         + 'static
@@ -44,11 +59,19 @@ where
         let fusen_filter = self.fusen_filter.clone();
         let http_codec = self.http_codec.clone();
         Box::pin(async move {
-            let req = req.map(|e| e.boxed());
-            let context = http_codec.as_ref().decode(req).await?;
-            let context = fusen_filter.call(context).await?;
-            let res = http_codec.encode(context).await?;
-            Ok(res)
+            Ok(match Self::call(req, http_codec, fusen_filter).await {
+                Ok(response) => response,
+                Err(fusen_error) => {
+                    let mut status = 500;
+                    if let FusenError::ResourceEmpty(_) = fusen_error {
+                        status = 404;
+                    }
+                    Response::builder()
+                        .status(status)
+                        .body(get_empty_body())
+                        .unwrap()
+                }
+            })
         })
     }
 }

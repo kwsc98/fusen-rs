@@ -1,5 +1,5 @@
 use crate::StreamBody;
-use fusen_common::error::{BoxFusenError, FusenError};
+use fusen_common::error::FusenError;
 use http_body::Frame;
 use std::{fmt::Debug, marker::PhantomData};
 
@@ -28,16 +28,16 @@ where
     D: bytes::Buf + Debug,
     E: std::marker::Sync + std::marker::Send,
 {
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, BoxFusenError> {
+    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, FusenError> {
         let data = if body.is_empty() || body[0].is_trailers() {
-            return Err(FusenError::Server("receive frame err".to_string()).boxed());
+            return Err(FusenError::Server("receive frame err".to_string()));
         } else {
             body[0].data_ref().unwrap().chunk()
         };
         Ok(if data.starts_with(b"[") {
             match serde_json::from_slice(&data) {
                 Ok(req) => req,
-                Err(err) => return Err(FusenError::Client(err.to_string()).boxed()),
+                Err(err) => return Err(FusenError::Client(err.to_string())),
             }
         } else {
             vec![String::from_utf8(data.to_vec()).unwrap()]
@@ -46,8 +46,8 @@ where
 
     fn encode(
         &self,
-        res: Result<String, BoxFusenError>,
-    ) -> Result<StreamBody<bytes::Bytes, E>, BoxFusenError> {
+        res: Result<String, FusenError>,
+    ) -> Result<StreamBody<bytes::Bytes, E>, FusenError> {
         let res = res?;
         let chunks = vec![Ok(Frame::data(bytes::Bytes::from(res)))];
         let stream = futures_util::stream::iter(chunks);

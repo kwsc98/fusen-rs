@@ -5,7 +5,6 @@ use crate::{
 };
 use hyper::server::conn::{http1, http2};
 use tracing::debug;
-
 impl StreamHandler {
     pub async fn run_http1(mut self) {
         let hyper_io = TokioIo::new(self.tcp_stream);

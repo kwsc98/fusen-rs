@@ -2,11 +2,7 @@ use std::fmt::Debug;
 
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec, HttpCodec};
 use crate::{BoxBody, StreamBody};
-use fusen_common::{
-    error::{BoxFusenError, FusenError},
-    logs::get_uuid,
-    FusenContext, MetaData,
-};
+use fusen_common::{error::FusenError, logs::get_uuid, FusenContext, MetaData};
 use http::Response;
 use http_body_util::BodyExt;
 
@@ -38,7 +34,7 @@ where
     async fn decode(
         &self,
         mut req: http::Request<BoxBody<D, E>>,
-    ) -> Result<FusenContext, BoxFusenError> {
+    ) -> Result<FusenContext, FusenError> {
         let meta_data = MetaData::from(req.headers());
         let codec = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => &self.json_codec,
@@ -73,7 +69,7 @@ where
     async fn encode(
         &self,
         context: fusen_common::FusenContext,
-    ) -> Result<http::Response<StreamBody<bytes::Bytes, E>>, BoxFusenError> {
+    ) -> Result<http::Response<StreamBody<bytes::Bytes, E>>, FusenError> {
         let meta_data = &context.meta_data;
         let codec = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => &self.json_codec,
@@ -82,7 +78,7 @@ where
         let body = codec.encode(context.res)?;
         let response = Response::builder()
             .body(body)
-            .map_err(|e| FusenError::Server(e.to_string()).boxed())?;
+            .map_err(|e| FusenError::Server(e.to_string()))?;
         Ok(response)
     }
 }

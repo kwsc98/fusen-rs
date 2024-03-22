@@ -1,6 +1,6 @@
 use crate::BoxBody;
 use crate::StreamBody;
-use fusen_common::error::BoxFusenError;
+use fusen_common::error::FusenError;
 use fusen_common::FusenContext;
 use http::Request;
 use http::Response;
@@ -15,22 +15,22 @@ pub trait HttpCodec<D, E>
 where
     D: bytes::Buf + Debug,
 {
-    async fn decode(&self, req: Request<BoxBody<D, E>>) -> Result<FusenContext, BoxFusenError>;
+    async fn decode(&self, req: Request<BoxBody<D, E>>) -> Result<FusenContext, FusenError>;
 
     async fn encode(
         &self,
         context: FusenContext,
-    ) -> Result<Response<StreamBody<bytes::Bytes, E>>, BoxFusenError>;
+    ) -> Result<Response<StreamBody<bytes::Bytes, E>>, FusenError>;
 }
 
 pub trait BodyCodec<D, E>
 where
     D: bytes::Buf + Debug,
 {
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, BoxFusenError>;
+    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, FusenError>;
 
     fn encode(
         &self,
-        res: Result<String, BoxFusenError>,
-    ) -> Result<StreamBody<bytes::Bytes, E>, BoxFusenError>;
+        res: Result<String, FusenError>,
+    ) -> Result<StreamBody<bytes::Bytes, E>, FusenError>;
 }

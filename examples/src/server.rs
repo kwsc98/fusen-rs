@@ -21,7 +21,7 @@ impl TestServer for TestServerImpl {
         });
     }
     async fn doRun2(&self, req: ReqDto) -> FusenResult<ResDto> {
-        info!("res : {:?}", req);
+        // info!("res : {:?}", req);
         return Ok(ResDto {
             str: "Hello ".to_owned() + &req.str + " V2",
         });

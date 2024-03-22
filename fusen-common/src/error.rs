@@ -7,6 +7,7 @@ pub type BoxFusenError = Box<FusenError>;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum FusenError {
     Null,
+    ResourceEmpty(String),
     Client(String),
     Server(String),
     Method(String),
@@ -29,6 +30,7 @@ impl Display for FusenError {
             FusenError::Client(msg) => write!(f, "FusenError::Client {}", msg),
             FusenError::Server(msg) => write!(f, "FusenError::Server {}", msg),
             FusenError::Method(msg) => write!(f, "FusenError::Method {}", msg),
+            FusenError::ResourceEmpty(msg) => write!(f, "FusenError::ResourceEmpty {}", msg),
         }
     }
 }
