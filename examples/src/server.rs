@@ -2,12 +2,14 @@ use std::time::Duration;
 
 use examples::{ReqDto, ResDto, TestServer};
 use fusen::{
-    fusen_common::{self, logs::get_uuid, server::Protocol, FusenResult},
+    fusen_common::{
+        self, date_util::get_now_date_time_as_millis, logs::get_uuid, server::Protocol, FusenResult,
+    },
     fusen_macro::fusen_server,
     register::{Directory, Info, RegisterBuilder, RegisterType, Resource},
     server::FusenServer,
 };
-use tokio::time::sleep;
+use tokio::{sync::mpsc, time::sleep};
 use tracing::info;
 
 #[derive(Clone)]
@@ -48,45 +50,47 @@ async fn main() {
     //     .add_fusen_server(Box::new(server))
     //     .run()
     //     .await;
-    let mut de = Directory::new().await;
-    let mut de_c = de.clone();
+    let de = Directory::new().await;
+    let mut ds = vec![];
+    let uuid = get_uuid();
+    ds.push(Resource::Client(Info {
+        server_name: uuid.clone(),
+        version: None,
+        methods: vec![],
+        ip: uuid,
+        port: None,
+    }));
+    let uuid = get_uuid();
 
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            let mut ds = vec![];
-            let uuid = get_uuid();
-            ds.push(Resource::Client(Info {
-                server_name: uuid.clone(),
-                version: None,
-                methods: vec![],
-                ip: uuid,
-                port: None,
-            }));
-            let uuid = get_uuid();
+    ds.push(Resource::Client(Info {
+        server_name: uuid.clone(),
+        version: None,
+        methods: vec![],
+        ip: uuid,
+        port: None,
+    }));
+    let uuid = get_uuid();
 
-            ds.push(Resource::Client(Info {
-                server_name: uuid.clone(),
-                version: None,
-                methods: vec![],
-                ip: uuid,
-                port: None,
-            }));
-            let uuid = get_uuid();
+    ds.push(Resource::Client(Info {
+        server_name: uuid.clone(),
+        version: None,
+        methods: vec![],
+        ip: uuid,
+        port: None,
+    }));
+    de.change(ds).await;
+    let mut m: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
 
-            ds.push(Resource::Client(Info {
-                server_name: uuid.clone(),
-                version: None,
-                methods: vec![],
-                ip: uuid,
-                port: None,
-            }));
-
-            println!("{:?}", de.change(ds).await);
-        }
-    });
-    loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        println!("{:?}", de_c.get().await);
+    let start_time = get_now_date_time_as_millis();
+    for i in 0..1000000 {
+        let mut de_c = de.clone();
+        let de = m.0.clone();
+        tokio::spawn(async move {
+            de_c.get().await;
+            drop(de);
+        });
     }
+    drop(m.0);
+    m.1.recv().await;
+    info!("{:?}", get_now_date_time_as_millis() - start_time);
 }
