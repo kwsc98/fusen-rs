@@ -48,5 +48,5 @@ lazy_static.workspace = true
 
 #注册中心
 zookeeper-client.workspace = true
-
+nacos-sdk.workspace = true
 rand.workspace = true
