@@ -88,7 +88,7 @@ pub trait Register: Send + Sync {
 pub trait RegisterV2: Send + Sync {
     async fn register(&self, resource: Resource) -> Result<(), crate::Error>;
 
-    async fn subscribe(&self, resource: Resource) -> Result<(), crate::Error>;
+    async fn subscribe(&self, resource: Resource) -> Result<Directory, crate::Error>;
 }
 
 pub enum DirectorySender {

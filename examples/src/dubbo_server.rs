@@ -8,7 +8,7 @@ use fusen::{
 use fusen_macro::fusen_server;
 use tracing::info;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DemoServiceImpl {
     _db: String,
 }

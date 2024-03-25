@@ -76,3 +76,11 @@ macro_rules! fusen_attr {
         }
     }
 }
+
+
+// 宏定义，用于判断一个字段的类型是否为Result
+macro_rules! is_result_type {
+    ($ty:ty) => {
+        <$ty as std::any::TypeId>::of::<Result<(), ()>>() == std::any::TypeId::of::<$ty>()
+    };
+}
