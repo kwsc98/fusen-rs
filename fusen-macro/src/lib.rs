@@ -75,6 +75,7 @@ pub fn url_config(org: TokenStream) -> TokenStream {
                     let item : Vec<&str> = url.split("=").collect();
                     map.insert(item[0],item[1]);
                 }
+                
                 Self {
                     #(
                         #fields.0 : match map.get("ds") {

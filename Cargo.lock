@@ -504,6 +504,7 @@ dependencies = [
 name = "fusen-common"
 version = "0.2.0"
 dependencies = [
+ "bytes",
  "http 1.0.0",
  "percent-encoding",
  "pretty_env_logger",
