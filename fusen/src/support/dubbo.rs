@@ -1,63 +1,40 @@
 use fusen_common::MethodResource;
 
-use crate::register::{Info, Resource};
-use std::vec;
+use crate::register::{Category, Resource};
+use std::{collections::HashMap, vec};
 
-pub fn decode_url(url: &str) -> Result<Resource, String> {
-    let mut url = &fusen_common::url_util::decode_url(url)?[..];
-    if url.starts_with("tri://") {
-        url = &url[6..];
-        return Ok(Resource::Server(get_info(url)));
-    } else if url.starts_with("consumer://") {
-        url = &url[11..];
-        return Ok(Resource::Client(get_info(url)));
-    }
-    return Err("decode err".to_string());
+pub fn decode_url(url: &str) -> Result<Resource, crate::Error> {
+    let url = &fusen_common::url::decode_url(url)?[..];
+    get_info(url)
 }
 
 pub fn encode_url(resource: &Resource) -> String {
     let mut url = String::new();
-    match resource {
-        Resource::Client(info) => {
-            url.push_str("consumer://");
-            url.push_str(&(get_path(info) + &"/"));
-            url.push_str(&(info.server_name.clone() + &"?"));
-            url.push_str(&("interface=".to_owned() + &info.server_name));
-            url.push_str(&get_field_url(
-                "&methods",
-                &info.methods.iter().fold(vec![], |mut vec, e| {
-                    vec.push(e.get_id());
-                    vec
-                }),
-            ));
-            if let Some(version) = &info.version {
-                let value = vec![version.clone()];
-                url.push_str(&get_field_url("&version", &value));
-            }
-            url.push_str("&dubbo=2.0.2&release=3.3.0-beta.1&side=consumer");
-        }
-        Resource::Server(info) => {
-            url.push_str("tri://");
-            url.push_str(&(get_path(info) + &"/"));
-            url.push_str(&(info.server_name.clone() + &"?"));
-            url.push_str(&("interface=".to_owned() + &info.server_name));
-            url.push_str(&get_field_url(
-                "&methods",
-                &info.methods.iter().fold(vec![], |mut vec, e| {
-                    vec.push(e.get_id());
-                    vec
-                }),
-            ));
-            if let Some(version) = &info.version {
-                let value = vec![version.clone()];
-                url.push_str(&get_field_url("&version", &value));
-            }
-            url.push_str(
-                "&dubbo=2.0.2&prefer.serialization=fastjson&release=3.3.0-beta.1&side=provider",
-            );
-        }
+    match resource.category {
+        Category::Client => url.push_str("consumer://"),
+        Category::Server => url.push_str("tri://"),
     }
-    return "/".to_string() + &fusen_common::url_util::encode_url(&url);
+    url.push_str(&(get_path(resource) + &"/"));
+    url.push_str(&(resource.server_name.clone() + &"?"));
+    url.push_str(&("interface=".to_owned() + &resource.server_name));
+    url.push_str(&get_field_url(
+        "&methods",
+        &resource.methods.iter().fold(vec![], |mut vec, e| {
+            vec.push(e.get_id());
+            vec
+        }),
+    ));
+    if let Some(version) = &resource.version {
+        let value = vec![version.clone()];
+        url.push_str(&get_field_url("&version", &value));
+    }
+    match resource.category {
+        Category::Client => url.push_str("&dubbo=2.0.2&release=3.3.0-beta.1&side=consumer"),
+        Category::Server => url.push_str(
+            "&dubbo=2.0.2&prefer.serialization=fastjson&release=3.3.0-beta.1&side=provider",
+        ),
+    }
+    return "/".to_string() + &fusen_common::url::encode_url(&url);
 }
 
 fn get_ip(path: &str) -> (String, Option<String>) {
@@ -69,7 +46,7 @@ fn get_ip(path: &str) -> (String, Option<String>) {
     return (path[0].to_string(), port);
 }
 
-fn get_path(info: &Info) -> String {
+fn get_path(info: &Resource) -> String {
     let mut ip = info.ip.clone();
     if let Some(port) = info.port.clone() {
         ip.push_str(":");
@@ -78,7 +55,16 @@ fn get_path(info: &Info) -> String {
     return ip.to_string();
 }
 
-fn get_info(url: &str) -> Info {
+fn get_info(mut url: &str) -> crate::Result<Resource> {
+    let mut category = Category::Server;
+    if url.starts_with("tri://") {
+        url = &url[6..];
+    } else if url.starts_with("consumer://") {
+        url = &url[11..];
+        category = Category::Client;
+    } else {
+        return Err(format!("err url : {}", url).into());
+    }
     let info: Vec<&str> = url.split("/").collect();
     let path = get_ip(info[0]);
     let info: Vec<&str> = info[1].split("?").collect();
@@ -88,8 +74,15 @@ fn get_info(url: &str) -> Info {
     if !vision.is_empty() {
         let _ = revision.insert(vision[0].clone());
     }
-    let info = Info {
+    let group = get_field_values(info[1], "group");
+    let mut regroup = None;
+    if !group.is_empty() {
+        let _ = regroup.insert(vision[0].clone());
+    }
+    let info = Resource {
         server_name,
+        category,
+        group: regroup,
         version: revision,
         methods: get_field_values(info[1], "methods")
             .iter()
@@ -104,8 +97,9 @@ fn get_info(url: &str) -> Info {
             }),
         ip: path.0,
         port: path.1,
+        params: HashMap::new(),
     };
-    return info;
+    return Ok(info);
 }
 
 fn get_field_values(str: &str, key: &str) -> Vec<String> {

@@ -1,12 +1,14 @@
 use examples::{DemoService, ReqDto, ResDto};
 use fusen::{
-    fusen_common::{self, server::Protocol, server::RpcServer, FusenResult},
+    fusen_common::{self, server::{Protocol, RpcServer}, FusenResult},
     fusen_macro::{self, resource},
-    register::{RegisterBuilder, RegisterType},
+    register::{nacos::NacosConfig, RegisterBuilder, RegisterType},
     server::FusenServer,
 };
 use fusen_macro::fusen_server;
 use tracing::info;
+use fusen::fusen_common::url::UrlConfig;
+
 
 #[derive(Clone, Debug)]
 struct DemoServiceImpl {
@@ -38,11 +40,9 @@ async fn main() {
     let ds = server.get_info();
     println!("{:?}", ds);
     FusenServer::build()
-        .add_register_builder(RegisterBuilder::new(
-            &format!("127.0.0.1:{}", "2181"),
-            "default",
-            RegisterType::ZooKeeper,
-        ))
+        .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
+            NacosConfig::new("127.0.0.1:8848", "nacos", "nacos").to_url().unwrap()
+        ),))
         .add_protocol(Protocol::HTTP2("8081".to_owned()))
         .add_fusen_server(Box::new(server))
         .run()

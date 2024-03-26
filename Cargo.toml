@@ -49,4 +49,4 @@ rand = "0"
 
 #注册中心
 zookeeper-client = "0.6.2"
-nacos-sdk = { version = "0.3", features = ["default"] }
+nacos-sdk = { version = "0.3", features = ["naming", "auth-by-http", "async"] }

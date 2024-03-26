@@ -17,7 +17,7 @@ pub mod logs;
 pub mod r#macro;
 pub mod net;
 pub mod server;
-pub mod url_util;
+pub mod url;
 
 #[derive(Debug)]
 pub struct MetaData {

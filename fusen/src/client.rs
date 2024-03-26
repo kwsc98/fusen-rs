@@ -19,10 +19,9 @@ pub struct FusenClient {
 
 impl FusenClient {
     pub fn build(register_builder: RegisterBuilder) -> FusenClient {
-        let map = Arc::new(RwLock::new(HashMap::new()));
-        let register = register_builder.init(map.clone());
+        let register = register_builder.init();
         let cli = FusenClient {
-            route: Route::new(register, map),
+            route: Route::new(register),
         };
         return cli;
     }

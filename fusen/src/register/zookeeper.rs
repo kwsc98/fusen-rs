@@ -1,4 +1,4 @@
-use super::{Register, Resource};
+use super::{Category, Register, Resource};
 use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
 use fusen_common::server::Protocol;
@@ -107,24 +107,17 @@ fn creat_resource_node(
     map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
 ) {
     let mut path = root.to_string();
-    let info = match &resource {
-        Resource::Client(info) => {
-            listener_resource_node_change(
-                cluster.clone(),
-                root,
-                Resource::Client(info.clone()),
-                map,
-            );
-            path.push_str(&("/".to_owned() + &info.server_name + "/consumers"));
-            info
+    match &resource.category {
+        &Category::Client => {
+            listener_resource_node_change(cluster.clone(), root, resource.clone(), map);
+            path.push_str(&("/".to_owned() + &resource.server_name + "/consumers"));
         }
-        Resource::Server(info) => {
-            path.push_str(&("/".to_owned() + &info.server_name + "/providers"));
-            info
+        &Category::Server => {
+            path.push_str(&("/".to_owned() + &resource.server_name + "/providers"));
         }
     };
     let node_name = encode_url(&resource);
-    let node_data = serde_json::to_string(&info).unwrap();
+    let node_data = serde_json::to_string(&resource).unwrap();
     tokio::spawn(async move {
         loop {
             let client = connect(&cluster, &path).await;
@@ -160,17 +153,16 @@ fn listener_resource_node_change(
     map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
 ) {
     let mut path = root;
-    let info = match resource {
-        Resource::Client(info) => {
-            path.push_str(&("/".to_owned() + &info.server_name + "/providers"));
-            info
+    match &resource.category {
+        &Category::Client => {
+            path.push_str(&("/".to_owned() + &resource.server_name + "/providers"));
         }
-        Resource::Server(_) => return,
+        &Category::Server => return,
     };
     tokio::spawn(async move {
         let mut client = connect(&cluster.clone(), &path).await;
         let map = map;
-        let info = info;
+        let info = resource;
         loop {
             let watcher: (Vec<String>, zk::Stat, OneshotWatcher) =
                 match client.get_and_watch_children("/").await {
@@ -184,9 +176,9 @@ fn listener_resource_node_change(
             for node in watcher.0 {
                 let resource = decode_url(&node);
                 if let Ok(resource) = resource {
-                    if let Resource::Server(resource_info) = resource {
-                        if &info.version == &resource_info.version {
-                            server_list.push(Resource::Server(resource_info));
+                    if let &Category::Server = &resource.category {
+                        if &info.version == &resource.version {
+                            server_list.push(resource);
                         }
                     }
                 }

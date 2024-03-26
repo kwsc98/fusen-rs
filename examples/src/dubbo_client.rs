@@ -2,17 +2,17 @@ use examples::{DemoServiceClient, ReqDto};
 use fusen::{
     client::FusenClient,
     fusen_common,
-    register::{RegisterBuilder, RegisterType},
+    register::{nacos::NacosConfig, RegisterBuilder, RegisterType},
 };
 use lazy_static::lazy_static;
 use tracing::info;
+use fusen::fusen_common::url::UrlConfig;
+
 
 lazy_static! {
-    static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(
-        &format!("127.0.0.1:{}", "2181"),
-        "default",
-        RegisterType::ZooKeeper,
-    ));
+    static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::Nacos(
+        NacosConfig::new("127.0.0.1:8848", "nacos", "nacos").to_url().unwrap()
+    ),));
 }
 
 #[tokio::main(worker_threads = 512)]

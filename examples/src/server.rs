@@ -1,16 +1,12 @@
-use std::time::Duration;
-
 use examples::{ReqDto, ResDto, TestServer};
 use fusen::{
-    fusen_common::{
-        self, date_util::get_now_date_time_as_millis, logs::get_uuid, server::Protocol, FusenResult,
-    },
+    fusen_common::{self, server::Protocol, FusenResult},
     fusen_macro::fusen_server,
-    register::{Directory, Info, RegisterBuilder, RegisterType, Resource},
+    register::{nacos::NacosConfig, RegisterBuilder, RegisterType},
     server::FusenServer,
 };
-use tokio::{sync::mpsc, time::sleep};
 use tracing::info;
+use fusen::fusen_common::url::UrlConfig;
 
 #[derive(Clone)]
 struct TestServerImpl {
@@ -36,61 +32,16 @@ impl TestServer for TestServerImpl {
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     fusen_common::logs::init_log();
-    // let server: TestServerImpl = TestServerImpl {
-    //     _db: "我是一个DB数据库".to_string(),
-    // };
-    // FusenServer::build()
-    //     .add_register_builder(RegisterBuilder::new(
-    //         &format!("127.0.0.1:{}", "2181"),
-    //         "default",
-    //         RegisterType::ZooKeeper,
-    //     ))
-    //     .add_protocol(Protocol::HTTP("8082".to_owned()))
-    //     .add_protocol(Protocol::HTTP2("8081".to_owned()))
-    //     .add_fusen_server(Box::new(server))
-    //     .run()
-    //     .await;
-    let de = Directory::new().await;
-    let mut ds = vec![];
-    let uuid = get_uuid();
-    ds.push(Resource::Client(Info {
-        server_name: uuid.clone(),
-        version: None,
-        methods: vec![],
-        ip: uuid,
-        port: None,
-    }));
-    let uuid = get_uuid();
-
-    ds.push(Resource::Client(Info {
-        server_name: uuid.clone(),
-        version: None,
-        methods: vec![],
-        ip: uuid,
-        port: None,
-    }));
-    let uuid = get_uuid();
-
-    ds.push(Resource::Client(Info {
-        server_name: uuid.clone(),
-        version: None,
-        methods: vec![],
-        ip: uuid,
-        port: None,
-    }));
-    de.change(ds).await;
-    let mut m: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
-
-    let start_time = get_now_date_time_as_millis();
-    for i in 0..1000000 {
-        let mut de_c = de.clone();
-        let de = m.0.clone();
-        tokio::spawn(async move {
-            de_c.get().await;
-            drop(de);
-        });
-    }
-    drop(m.0);
-    m.1.recv().await;
-    info!("{:?}", get_now_date_time_as_millis() - start_time);
+    let server: TestServerImpl = TestServerImpl {
+        _db: "我是一个DB数据库".to_string(),
+    };
+    FusenServer::build()
+        .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
+            NacosConfig::new("127.0.0.1:8848", "nacos", "nacos").to_url().unwrap()
+        )))
+        .add_protocol(Protocol::HTTP("8082".to_owned()))
+        .add_protocol(Protocol::HTTP2("8081".to_owned()))
+        .add_fusen_server(Box::new(server))
+        .run()
+        .await;
 }

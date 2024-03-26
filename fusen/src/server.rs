@@ -1,6 +1,6 @@
 use crate::{
     protocol::server::TcpServer,
-    register::{Info, Register, RegisterBuilder, Resource},
+    register::{Category, Register, RegisterBuilder, Resource},
 };
 use fusen_common::server::{Protocol, RpcServer};
 use std::{collections::HashMap, sync::Arc};
@@ -46,20 +46,23 @@ impl FusenServer {
     pub async fn run(mut self) {
         let tcp_server = TcpServer::init(self.protocol.clone(), self.fusen_servers.clone());
         for register_builder in &self.register_builder {
-            let register = register_builder.init(Arc::new(RwLock::new(HashMap::new())));
+            let register = register_builder.init();
             if let Ok(port) = register.check(&self.protocol) {
                 for server in &self.fusen_servers {
                     let info = server.1.get_info();
                     let server_name = info.0.to_string();
-                    let resource = Resource::Server(Info {
+                    let resource = Resource {
                         server_name,
+                        category: Category::Server,
+                        group: None,
                         version: info.1.map(|e| e.to_string()),
                         methods: info.2,
                         ip: fusen_common::net::get_ip(),
                         port: Some(port.clone()),
-                    });
-                    register.add_resource(resource);
-                }
+                        params: HashMap::new(),
+                    };
+                    let _ = register.register(resource).await;
+                }let _ = 
                 self.register.push(register);
             }
         }

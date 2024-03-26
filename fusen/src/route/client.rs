@@ -1,4 +1,4 @@
-use crate::register::{Info, Register, Resource};
+use crate::register::{Category, Directory, Register, Resource};
 use crate::support::TokioExecutor;
 use crate::{register::SocketInfo, support::TokioIo};
 use http_body_util::Full;
@@ -11,19 +11,17 @@ use tokio::{net::TcpStream, sync::RwLock};
 pub struct Route {
     register: Box<dyn Register>,
     socket_set: RwLock<HashMap<String, SocketInfo>>,
-    resource_map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
+    directory_map: RwLock<HashMap<String, Directory>>,
 }
 
 impl Route {
-    pub fn new(
-        register: Box<dyn Register>,
-        resource_map: Arc<RwLock<HashMap<String, Arc<Vec<Resource>>>>>,
-    ) -> Self {
+    pub fn new(register: Box<dyn Register>) -> Self {
         let socket_set = RwLock::new(HashMap::new());
+        let directory_map = RwLock::new(HashMap::new());
         Route {
             register,
             socket_set,
-            resource_map,
+            directory_map,
         }
     }
 
@@ -39,41 +37,35 @@ impl Route {
             key.push_str(version);
         }
         loop {
-            let resource_map_read = self.resource_map.read().await;
+            let resource_map_read = self.directory_map.read().await;
             match resource_map_read.get(&key) {
-                Some(value) => {
-                    vec_info = value.clone();
+                Some(directory) => {
+                    vec_info = directory.get().await?;
                     break;
                 }
                 None => {
                     drop(resource_map_read);
-                    let resource_client = Resource::Client(Info {
+                    let resource_client = Resource {
                         server_name: class_name.to_string(),
+                        category: Category::Client,
+                        group: None,
                         version: version.map(|e| e.to_string()),
                         methods: vec![],
                         ip: fusen_common::net::get_ip(),
                         port: None,
-                    });
-                    let socket_read = self.socket_set.read().await;
-                    if let None = socket_read.get(&key) {
-                        drop(socket_read);
-                        let mut socket_write = self.socket_set.write().await;
-                        if let None = socket_write.get(&key) {
-                            self.register.add_resource(resource_client);
-                            socket_write.insert(
-                                key.clone(),
-                                SocketInfo {
-                                    sender: Arc::new(RwLock::new(None)),
-                                },
-                            );
-                        }
+                        params: HashMap::new(),
+                    };
+                    let mut directory_map_write = self.directory_map.write().await;
+                    if let None = directory_map_write.get(&key) {
+                        let directory = self.register.subscribe(resource_client).await?;
+                        directory_map_write.insert(key.clone(), directory);
                     }
                 }
             }
         }
         let server_resource = vec_info.iter().fold(vec![], |mut vec, e| {
-            if let Resource::Server(info) = e {
-                vec.push(info);
+            if let Category::Server = e.category {
+                vec.push(e);
             }
             vec
         });

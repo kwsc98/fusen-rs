@@ -22,10 +22,6 @@ pub fn encode_url(url: &str) -> String {
 }
 
 pub fn from_url<'a, T: Deserialize<'a>>(url: &str) -> Result<T, crate::Error> {
-    let info: Vec<&str> = url.split("?").collect();
-    if info[0] != stringify!(id) {
-        return Err(format!("err url config {}", url).into());
-    }
     let info: Vec<&str> = url.split("&").collect();
     let mut map = HashMap::new();
     for item in info {
@@ -37,8 +33,27 @@ pub fn from_url<'a, T: Deserialize<'a>>(url: &str) -> Result<T, crate::Error> {
     T::deserialize(&mut deserializer).map_err(|e| e.to_string().into())
 }
 
-pub fn to_url<T: Serialize>(t: &T) -> Result<&str, crate::Error> {
-    let json_str = serde_json::to_string(t)?;
+pub fn to_url<T: Serialize>(t: &T) -> Result<String, crate::Error> {
+    let value = serde_json::to_value(t)?;
+    let mut str = String::new();
+    for item in value.as_object().map_or(Err("err serialize"), |e| Ok(e))? {
+        if let Some(value) = item.1.as_str() {
+            str.push('&');
+            str.push_str(item.0);
+            str.push('=');
+            str.push_str(value);
+        }
+    }
+    if str.len() > 0 {
+        str.remove(0);
+    }
+    return Ok(str);
+}
 
-    todo!()
+pub trait UrlConfig {
+    fn from_url(url: &str) -> Result<Self, crate::Error>
+    where
+        Self: Sized;
+
+    fn to_url(&self) -> Result<String, crate::Error>;
 }
