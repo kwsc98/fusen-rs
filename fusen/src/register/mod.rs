@@ -1,5 +1,4 @@
 use fusen_common::{server::Protocol, FusenFuture, MethodResource};
-use futures::future::FusedFuture;
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use serde::{Deserialize, Serialize};
@@ -11,7 +10,7 @@ use tokio::sync::{
 
 use self::nacos::FusenNacos;
 pub mod nacos;
-// pub mod zookeeper;
+pub mod zookeeper;
 
 pub struct RegisterBuilder {
     register_type: RegisterType,
@@ -102,7 +101,7 @@ impl Directory {
         tokio::spawn(async move {
             let mut cache: Arc<Vec<Resource>> = Arc::new(vec![]);
             while let Some(msg) = r.recv().await {
-                println!("{:?}",msg.0);
+                println!("{:?}", msg.0);
                 match msg.0 {
                     DirectorySender::GET => {
                         let _ = msg.1.send(DirectoryReceiver::GET(cache.clone()));

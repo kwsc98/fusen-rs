@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error};
 
@@ -25,15 +26,14 @@ impl TcpServer {
             fusen_servers,
         };
     }
-    pub async fn run(self) {
-        let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
+    pub async fn run(self) -> Receiver<()> {
+        let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         let route = Box::leak(Box::new(RpcServerFilter::new(self.fusen_servers)));
         for protocol in self.protocol {
             tokio::spawn(Self::monitor(protocol, route, shutdown_complete_tx.clone()));
         }
         drop(shutdown_complete_tx);
-        let _ = shutdown_complete_rx.recv().await;
-        tracing::info!("fusen server shut");
+        return shutdown_complete_rx;
     }
 
     async fn monitor(

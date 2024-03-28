@@ -1,14 +1,17 @@
 use examples::{DemoService, ReqDto, ResDto};
+use fusen::fusen_common::url::UrlConfig;
 use fusen::{
-    fusen_common::{self, server::{Protocol, RpcServer}, FusenResult},
-    fusen_macro::{self, resource},
+    fusen_common::{
+        self,
+        server::{Protocol, RpcServer},
+        FusenResult,
+    },
+    fusen_macro::{self, asset},
     register::{nacos::NacosConfig, RegisterBuilder, RegisterType},
     server::FusenServer,
 };
 use fusen_macro::fusen_server;
 use tracing::info;
-use fusen::fusen_common::url::UrlConfig;
-
 
 #[derive(Clone, Debug)]
 struct DemoServiceImpl {
@@ -16,9 +19,9 @@ struct DemoServiceImpl {
 }
 
 #[fusen_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
-#[resource(id = "DemoService" ,method = GET)]
+#[asset(id = "DemoService" ,method = GET)]
 impl DemoService for DemoServiceImpl {
-    #[resource(path="/sayHello2",method = POST)]
+    #[asset(path="/sayHello2",method = POST)]
     async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
         return Ok("Hello ".to_owned() + &req);
@@ -41,8 +44,10 @@ async fn main() {
     println!("{:?}", ds);
     FusenServer::build()
         .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
-            NacosConfig::new("127.0.0.1:8848", "nacos", "nacos").to_url().unwrap()
-        ),))
+            NacosConfig::new("127.0.0.1:8848", "nacos", "nacos")
+                .to_url()
+                .unwrap(),
+        )))
         .add_protocol(Protocol::HTTP2("8081".to_owned()))
         .add_fusen_server(Box::new(server))
         .run()

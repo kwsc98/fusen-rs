@@ -3,11 +3,15 @@ use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl};
 
-use crate::{get_resource_by_attrs, FusenAttr};
+use crate::{get_asset_by_attrs, FusenAttr};
 
 pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let version = match attr.version {
         Some(version) => quote!(Some(&#version)),
+        None => quote!(None),
+    };
+    let group = match attr.group {
+        Some(group) => quote!(Some(&#group)),
         None => quote!(None),
     };
     let org_item = parse_macro_input!(item as ItemImpl);
@@ -99,13 +103,13 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
-            fn get_info(&self) -> (&str, Option<&str> , Vec<#temp_method>) {
+            fn get_info(&self) -> fusen::fusen_common::server::ServerInfo {
 
                let mut methods : Vec<#temp_method> = vec![];
                #(
                 methods.push(#temp_method::form_json_str(#methods_info));
                )*
-               (#package, #version ,methods)
+               fusen::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
             }
         }
 
@@ -143,14 +147,14 @@ fn get_server_item(item: ItemImpl) -> proc_macro2::TokenStream {
 fn get_resource_by_server(item: ItemImpl) -> Result<(String, Vec<MethodResource>), syn::Error> {
     let mut res = vec![];
     let attrs = &item.attrs;
-    let resource = get_resource_by_attrs(attrs)?;
+    let resource = get_asset_by_attrs(attrs)?;
     let parent_id = match resource.id {
         Some(id) => id,
         None => item.trait_.unwrap().1.segments[0].ident.to_string(),
     };
     let parent_path = match resource.path {
         Some(path) => path,
-        None => "/".to_owned() + &parent_id,
+        None => "".to_owned(),
     };
     let parent_method = match resource.method {
         Some(method) => method,
@@ -159,7 +163,7 @@ fn get_resource_by_server(item: ItemImpl) -> Result<(String, Vec<MethodResource>
 
     for fn_item in item.items.iter() {
         if let ImplItem::Fn(item_fn) = fn_item {
-            let resource = get_resource_by_attrs(&item_fn.attrs)?;
+            let resource = get_asset_by_attrs(&item_fn.attrs)?;
             let id = match resource.id {
                 Some(id) => id,
                 None => item_fn.sig.ident.to_string(),

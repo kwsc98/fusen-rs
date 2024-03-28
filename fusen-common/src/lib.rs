@@ -66,6 +66,8 @@ pub struct FusenContext {
     pub class_name: String,
     pub method_name: String,
     pub version: Option<String>,
+    pub group: Option<String>,
+
     pub req: Vec<String>,
     pub res: core::result::Result<String, FusenError>,
 }
@@ -76,6 +78,7 @@ impl FusenContext {
         path: String,
         meta_data: MetaData,
         version: Option<String>,
+        group: Option<String>,
         class_name: String,
         method_name: String,
         req: Vec<String>,
@@ -85,6 +88,7 @@ impl FusenContext {
             path,
             meta_data,
             version,
+            group,
             class_name,
             method_name,
             req,

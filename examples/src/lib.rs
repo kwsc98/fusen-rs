@@ -1,4 +1,4 @@
-use fusen::fusen_macro::{fusen_trait, resource};
+use fusen::fusen_macro::{asset, fusen_trait};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -19,11 +19,11 @@ pub trait TestServer {
 }
 
 #[fusen_trait(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
-#[resource(method = POST)]
+#[asset(method = POST)]
 pub trait DemoService {
-    #[resource(path="/sayHello11",method = POST)]
+    #[asset(path="/sayHello11",method = POST)]
     async fn sayHello(&self, name: String) -> String;
 
-    #[resource(path="/sayHelloV22",method = POST)]
+    #[asset(path="/sayHelloV22",method = POST)]
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
 }

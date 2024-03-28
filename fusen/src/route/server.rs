@@ -6,6 +6,7 @@ use fusen_common::{
 use http_body_util::BodyExt;
 use hyper::{service::Service, Request, Response};
 use std::sync::Arc;
+use tracing::info;
 
 use crate::{
     codec::{http_codec::FusenHttpCodec, HttpCodec},

@@ -8,7 +8,7 @@ use nacos_sdk::api::{
     props::ClientProps,
 };
 use serde::{Deserialize, Serialize};
-use std::{pin::Pin, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tracing::{debug, error, info};
 
@@ -63,7 +63,7 @@ impl FusenNacos {
 
 impl Register for FusenNacos {
     fn register(&self, resource: super::Resource) -> FusenFuture<Result<(), crate::Error>> {
-        let nacos = self.clone(); 
+        let nacos = self.clone();
         println!("1aaa");
 
         Box::pin(async move {
@@ -85,7 +85,7 @@ impl Register for FusenNacos {
     }
 
     fn subscribe(&self, resource: super::Resource) -> FusenFuture<Result<Directory, crate::Error>> {
-        let nacos = self.clone(); 
+        let nacos = self.clone();
         Box::pin(async move {
             let nacos_service_name = get_service_name(&resource);
             info!("subscribe service: {}", nacos_service_name);

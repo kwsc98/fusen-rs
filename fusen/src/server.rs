@@ -2,9 +2,8 @@ use crate::{
     protocol::server::TcpServer,
     register::{Category, Register, RegisterBuilder, Resource},
 };
-use fusen_common::server::{Protocol, RpcServer};
+use fusen_common::server::{Protocol, RpcServer, ServerInfo};
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
 
 pub struct FusenServer {
     protocol: Vec<Protocol>,
@@ -33,11 +32,11 @@ impl FusenServer {
 
     pub fn add_fusen_server(mut self, server: Box<dyn RpcServer>) -> FusenServer {
         let info = server.get_info();
-        let server_name = info.0.to_string();
+        let server_name = info.id.to_string();
         let mut key = server_name.clone();
-        if let Some(version) = info.1 {
+        if let Some(version) = info.version {
             key.push_str(":");
-            key.push_str(version);
+            key.push_str(&version);
         }
         self.fusen_servers.insert(key, Arc::new(server));
         return self;
@@ -45,27 +44,29 @@ impl FusenServer {
 
     pub async fn run(mut self) {
         let tcp_server = TcpServer::init(self.protocol.clone(), self.fusen_servers.clone());
+        let mut shutdown_complete_rx = tcp_server.run().await;
         for register_builder in &self.register_builder {
             let register = register_builder.init();
             if let Ok(port) = register.check(&self.protocol) {
                 for server in &self.fusen_servers {
-                    let info = server.1.get_info();
-                    let server_name = info.0.to_string();
+                    let info: ServerInfo = server.1.get_info();
+                    let server_name = info.id.to_string();
                     let resource = Resource {
                         server_name,
                         category: Category::Server,
                         group: None,
-                        version: info.1.map(|e| e.to_string()),
-                        methods: info.2,
+                        version: info.version,
+                        methods: info.methods,
                         ip: fusen_common::net::get_ip(),
                         port: Some(port.clone()),
                         params: HashMap::new(),
                     };
                     let _ = register.register(resource).await;
-                }let _ = 
-                self.register.push(register);
+                }
+                let _ = self.register.push(register);
             }
         }
-        let _ = tcp_server.run().await;
+        let _ = shutdown_complete_rx.recv().await;
+        tracing::info!("fusen server shut");
     }
 }

@@ -48,5 +48,5 @@ proc-macro2 = "1"
 rand = "0"
 
 #注册中心
-zookeeper-client = "0.6.2"
+zookeeper-client = "0"
 nacos-sdk = { version = "0.3", features = ["naming", "auth-by-http", "async"] }

@@ -9,9 +9,6 @@ use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http2::SendRequest;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub struct FusenClient {
     route: Route,

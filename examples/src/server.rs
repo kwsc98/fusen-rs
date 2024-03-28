@@ -1,4 +1,5 @@
 use examples::{ReqDto, ResDto, TestServer};
+use fusen::fusen_common::url::UrlConfig;
 use fusen::{
     fusen_common::{self, server::Protocol, FusenResult},
     fusen_macro::fusen_server,
@@ -6,7 +7,6 @@ use fusen::{
     server::FusenServer,
 };
 use tracing::info;
-use fusen::fusen_common::url::UrlConfig;
 
 #[derive(Clone)]
 struct TestServerImpl {
@@ -37,7 +37,9 @@ async fn main() {
     };
     FusenServer::build()
         .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
-            NacosConfig::new("127.0.0.1:8848", "nacos", "nacos").to_url().unwrap()
+            NacosConfig::new("127.0.0.1:8848", "nacos1", "nacos")
+                .to_url()
+                .unwrap(),
         )))
         .add_protocol(Protocol::HTTP("8082".to_owned()))
         .add_protocol(Protocol::HTTP2("8081".to_owned()))

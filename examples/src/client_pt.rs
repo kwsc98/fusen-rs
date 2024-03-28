@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use examples::{ReqDto, TestServerClient};
+use fusen::fusen_common::url::UrlConfig;
 use fusen::{
     client::FusenClient,
     fusen_common,
@@ -10,12 +11,12 @@ use fusen_common::date_util::get_now_date_time_as_millis;
 use lazy_static::lazy_static;
 use tokio::sync::mpsc;
 use tracing::info;
-use fusen::fusen_common::url::UrlConfig;
-
 
 lazy_static! {
     static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::Nacos(
-        NacosConfig::new("127.0.0.1:8848", "nacos", "nacos").to_url().unwrap()
+        NacosConfig::new("127.0.0.1:8848", "nacos", "nacos")
+            .to_url()
+            .unwrap()
     ),));
 }
 

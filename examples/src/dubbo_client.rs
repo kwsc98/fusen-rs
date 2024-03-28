@@ -1,4 +1,5 @@
 use examples::{DemoServiceClient, ReqDto};
+use fusen::fusen_common::url::UrlConfig;
 use fusen::{
     client::FusenClient,
     fusen_common,
@@ -6,12 +7,12 @@ use fusen::{
 };
 use lazy_static::lazy_static;
 use tracing::info;
-use fusen::fusen_common::url::UrlConfig;
-
 
 lazy_static! {
     static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::Nacos(
-        NacosConfig::new("127.0.0.1:8848", "nacos", "nacos").to_url().unwrap()
+        NacosConfig::new("127.0.0.1:8848", "nacos", "nacos")
+            .to_url()
+            .unwrap()
     ),));
 }
 

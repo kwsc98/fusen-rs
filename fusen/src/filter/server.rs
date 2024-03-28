@@ -12,13 +12,13 @@ impl RpcServerFilter {
     pub fn new(cache: HashMap<String, Arc<Box<dyn RpcServer>>>) -> Self {
         let mut path_cache = HashMap::new();
         for item in &cache {
-            let (id, _version, methods) = item.1.get_info();
-            for method in methods {
+            let info = item.1.get_info();
+            for method in info.methods {
                 let method_info = method.into();
-                let path_rpc = "/".to_owned() + id + "/" + &method_info.0;
+                let path_rpc = "/".to_owned() + &info.id + "/" + &method_info.0;
                 let path = method_info.1;
-                path_cache.insert(path_rpc, (id.to_string(), method_info.2.clone()));
-                path_cache.insert(path, (id.to_string(), method_info.2));
+                path_cache.insert(path_rpc, (info.id.to_string(), method_info.2.clone()));
+                path_cache.insert(path, (info.id.to_string(), method_info.2));
             }
         }
         return RpcServerFilter { cache, path_cache };

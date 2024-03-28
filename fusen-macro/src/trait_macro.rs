@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
-use crate::{get_resource_by_attrs, FusenAttr};
+use crate::{get_asset_by_attrs, FusenAttr};
 use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
 
 pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
+    let group = match attr.group {
+        Some(group) => quote!(Some(&#group)),
+        None => quote!(None),
+    };
     let version = match attr.version {
         Some(version) => quote!(Some(&#version)),
         None => quote!(None),
@@ -74,11 +78,13 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
+                    let group : Option<&str> = #group;
                     let msg = fusen::fusen_common::FusenContext::new (
                         fusen::fusen_common::logs::get_uuid(),
                         #methos_path.to_string(),
                         fusen::fusen_common::MetaData::new(),
                         version.map(|e|e.to_string()),
+                        group.map(|e|e.to_string()),
                         #package.to_owned(),
                         #methos_id.to_string(),
                         req_vec
@@ -111,12 +117,12 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             #rpc_client {client}
         }
 
-        pub fn get_info(&self) -> (&str,Vec<#temp_method>) {
+        pub fn get_info(&self) -> (&str,Option<&str>,Option<&str>,Vec<#temp_method>) {
             let mut vec : Vec<#temp_method> = vec![];
             #(
                vec.push(#temp_method::form_json_str(#methods_info));
             )*
-            (&#package,vec)
+            (&#package,#version,#group ,vec)
         }
 
        }
@@ -160,14 +166,14 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
 fn get_resource_by_trait(item: ItemTrait) -> Result<(String, Vec<MethodResource>), syn::Error> {
     let mut res = vec![];
     let attrs = &item.attrs;
-    let resource = get_resource_by_attrs(attrs)?;
+    let resource = get_asset_by_attrs(attrs)?;
     let parent_id = match resource.id {
         Some(id) => id,
         None => item.ident.to_string(),
     };
     let parent_path = match resource.path {
         Some(path) => path,
-        None => "/".to_owned() + &parent_id,
+        None => "".to_owned(),
     };
     let parent_method = match resource.method {
         Some(method) => method,
@@ -176,7 +182,7 @@ fn get_resource_by_trait(item: ItemTrait) -> Result<(String, Vec<MethodResource>
 
     for fn_item in item.items.iter() {
         if let TraitItem::Fn(item_fn) = fn_item {
-            let resource = get_resource_by_attrs(&item_fn.attrs)?;
+            let resource = get_asset_by_attrs(&item_fn.attrs)?;
             let id = match resource.id {
                 Some(id) => id,
                 None => item_fn.sig.ident.to_string(),
