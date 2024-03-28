@@ -1,5 +1,6 @@
 use examples::{ReqDto, ResDto, TestServer};
 use fusen::fusen_common::url::UrlConfig;
+use fusen::register::zookeeper::ZookeeperConfig;
 use fusen::{
     fusen_common::{self, server::Protocol, FusenResult},
     fusen_macro::fusen_server,
@@ -36,10 +37,17 @@ async fn main() {
         _db: "我是一个DB数据库".to_string(),
     };
     FusenServer::build()
-        .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
-            NacosConfig::new("127.0.0.1:8848", "nacos1", "nacos")
-                .to_url()
-                .unwrap(),
+        // .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
+        //     NacosConfig::new("127.0.0.1:8848", "nacos1", "nacos")
+        //         .to_url()
+        //         .unwrap(),
+        // )))
+        .add_register_builder(RegisterBuilder::new(RegisterType::ZooKeeper(
+            ZookeeperConfig {
+                cluster: "127.0.0.1:2181".to_owned(),
+            }
+            .to_url()
+            .unwrap(),
         )))
         .add_protocol(Protocol::HTTP("8082".to_owned()))
         .add_protocol(Protocol::HTTP2("8081".to_owned()))

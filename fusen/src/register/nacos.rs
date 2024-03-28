@@ -64,10 +64,7 @@ impl FusenNacos {
 impl Register for FusenNacos {
     fn register(&self, resource: super::Resource) -> FusenFuture<Result<(), crate::Error>> {
         let nacos = self.clone();
-        println!("1aaa");
-
         Box::pin(async move {
-            println!("dsdasdsadsad");
             let group = (&resource).group.clone();
             let nacos_service_name = get_service_name(&resource);
             let nacos_service_instance = get_service_instance(resource);

@@ -3,10 +3,12 @@ use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
 use fusen_common::{server::Protocol, url::UrlConfig};
 use fusen_macro::UrlConfig;
+use futures::future::err;
+use h2::client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, f32::consts::E, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{debug, error, info};
 use zk::{Client, OneshotWatcher};
 use zookeeper_client as zk;
 
@@ -21,11 +23,11 @@ pub struct FusenZookeeper {
 
 #[derive(UrlConfig, Serialize, Deserialize)]
 pub struct ZookeeperConfig {
-    cluster: String,
+    pub cluster: String,
 }
 
 impl FusenZookeeper {
-    pub async fn init(url: &str) -> crate::Result<Self> {
+    pub fn init(url: &str) -> crate::Result<Self> {
         let config = ZookeeperConfig::from_url(url)?;
         Ok(Self {
             cluster: config.cluster.to_string(),
@@ -120,12 +122,40 @@ async fn creat_resource_node(cluster: String, resource: &Resource) -> crate::Res
         .create(&node_name, node_data.as_bytes(), EPHEMERAL_OPEN)
         .await
     {
-        Ok(_) => return Ok(()),
-        Err(err) => {
-            info!("create node err {:?}", err);
-            return Err(Box::new(err));
+        Ok(_) => {
+            debug!("node create success");
         }
-    }
+        Err(err) => {
+            if let zk::Error::NodeExists = err {
+                debug!("node exists success")
+            } else {
+                info!("create node err {:?}", err);
+                return Err(Box::new(err));
+            }
+        }
+    };
+    tokio::spawn(async move {
+        let mut client = client;
+        loop {
+            match client.check_and_watch_stat(&node_name).await {
+                Ok(watch) => {
+                    let event = watch.1.changed().await;
+                    info!("resource node event {:?}", event);
+                }
+                Err(err) => {
+                    info!("resource node err {:?}", err);
+                }
+            };
+            while let Err(err) = client
+                .create(&node_name, node_data.as_bytes(), EPHEMERAL_OPEN)
+                .await
+            {
+                error!("node : {:?} create err : {:?}", node_data, err);
+                client = connect(&cluster, &path).await;
+            }
+        }
+    });
+    Ok(())
 }
 
 async fn listener_resource_node_change(
@@ -141,18 +171,34 @@ async fn listener_resource_node_change(
     };
     let directory = super::Directory::new().await;
     let directory_clone = directory.clone();
-
+    let client = connect(&cluster.clone(), &path).await;
+    let watcher: (Vec<String>, zk::Stat, OneshotWatcher) =
+        match client.get_and_watch_children("/").await {
+            Ok(watcher) => watcher,
+            Err(err) => return Err(Box::new(err)),
+        };
+    let mut server_list = vec![];
+    for node in watcher.0 {
+        let resource = decode_url(&node);
+        if let Ok(resource) = resource {
+            if let &Category::Server = &resource.category {
+                if &resource.version == &resource.version {
+                    server_list.push(resource);
+                }
+            }
+        }
+    }
+    let _ = directory.change(server_list).await;
     tokio::spawn(async move {
         let mut client = connect(&cluster.clone(), &path).await;
         loop {
-            let watcher: (Vec<String>, zk::Stat, OneshotWatcher) =
-                match client.get_and_watch_children("/").await {
-                    Ok(watcher) => watcher,
-                    Err(_) => {
-                        client = connect(&cluster.clone(), &path).await;
-                        continue;
-                    }
-                };
+            let watcher = match client.get_and_watch_children("/").await {
+                Ok(watcher) => watcher,
+                Err(_) => {
+                    client = connect(&cluster.clone(), &path).await;
+                    continue;
+                }
+            };
             let mut server_list = vec![];
             for node in watcher.0 {
                 let resource = decode_url(&node);
@@ -164,6 +210,7 @@ async fn listener_resource_node_change(
                     }
                 }
             }
+            let _ = directory.change(server_list).await;
             let event: zk::WatchedEvent = watcher.2.changed().await;
             if let zk::EventType::NodeChildrenChanged = event.event_type {
                 info!("Monitor node changes");
@@ -172,45 +219,5 @@ async fn listener_resource_node_change(
             }
         }
     });
-    // tokio::spawn(async move {
-    //     let mut client = connect(&cluster.clone(), &path).await;
-    //     let info = resource;
-    //     loop {
-    //         let watcher: (Vec<String>, zk::Stat, OneshotWatcher) =
-    //             match client.get_and_watch_children("/").await {
-    //                 Ok(watcher) => watcher,
-    //                 Err(_) => {
-    //                     client = connect(&cluster.clone(), &path).await;
-    //                     continue;
-    //                 }
-    //             };
-    //         let mut server_list = vec![];
-    //         for node in watcher.0 {
-    //             let resource = decode_url(&node);
-    //             if let Ok(resource) = resource {
-    //                 if let &Category::Server = &resource.category {
-    //                     if &info.version == &resource.version {
-    //                         server_list.push(resource);
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //         let mut key = info.server_name.clone();
-    //         if let Some(version) = &info.version {
-    //             key.push_str(":");
-    //             key.push_str(version);
-    //         }
-    //         info!("update server cache {:?} : {:?}", key, server_list);
-    //         let mut temp_map = map.write().await;
-    //         temp_map.insert(key, Arc::new(server_list));
-    //         drop(temp_map);
-    //         let event: zk::WatchedEvent = watcher.2.changed().await;
-    //         if let zk::EventType::NodeChildrenChanged = event.event_type {
-    //             info!("Monitor node changes");
-    //         } else {
-    //             client = connect(&cluster.clone(), &path).await;
-    //         }
-    //     }
-    // }
     Ok(directory_clone)
 }

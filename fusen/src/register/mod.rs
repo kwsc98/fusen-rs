@@ -8,7 +8,7 @@ use tokio::sync::{
     oneshot, RwLock,
 };
 
-use self::nacos::FusenNacos;
+use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 pub mod nacos;
 pub mod zookeeper;
 
@@ -23,9 +23,7 @@ impl RegisterBuilder {
 
     pub fn init(&self) -> Box<dyn Register> {
         match &self.register_type {
-            RegisterType::ZooKeeper(url) => {
-                panic!("not support")
-            }
+            RegisterType::ZooKeeper(url) => Box::new(FusenZookeeper::init(&url).unwrap()),
             RegisterType::Nacos(url) => Box::new(FusenNacos::init(&url).unwrap()),
         }
     }

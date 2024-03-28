@@ -3,6 +3,7 @@ use examples::TestServerClient;
 use fusen::fusen_common;
 use fusen::fusen_common::url::UrlConfig;
 use fusen::register::nacos::NacosConfig;
+use fusen::register::zookeeper::ZookeeperConfig;
 use fusen::{
     client::FusenClient,
     register::{RegisterBuilder, RegisterType},
@@ -11,11 +12,13 @@ use lazy_static::lazy_static;
 use tracing::info;
 
 lazy_static! {
-    static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::Nacos(
-        NacosConfig::new("127.0.0.1:8848", "nacos", "nacos")
-            .to_url()
-            .unwrap()
-    ),));
+    static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::ZooKeeper(
+        ZookeeperConfig {
+            cluster: "127.0.0.1:2181".to_owned(),
+        }
+        .to_url()
+        .unwrap(),
+    )));
 }
 
 #[tokio::main(worker_threads = 512)]
