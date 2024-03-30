@@ -10,6 +10,9 @@ description.workspace = true
 proc-macro = true
 
 [dependencies]
+#json序列化
+serde.workspace = true
+serde_json.workspace = true
 fusen-common.workspace = true
 quote = "1"
 syn = { version = "2", features = ["full"] }

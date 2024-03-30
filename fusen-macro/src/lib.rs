@@ -1,7 +1,7 @@
 use fusen_common::fusen_attr;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse::Parser, parse_macro_input, Attribute, DeriveInput, Meta};
+use syn::{parse::Parser, parse_macro_input, Attribute, Data, DeriveInput, Meta};
 
 mod server_macro;
 mod trait_macro;
@@ -51,6 +51,50 @@ pub fn url_config(org: TokenStream) -> TokenStream {
                 res.push_str(&("config://".to_owned() + stringify!(#id) + "?" ));
                 res.push_str(&(fusen_common::url::to_url(self)?));
                 Ok(res)
+            }
+        }
+    };
+    token.into()
+}
+
+#[proc_macro_derive(Builder)]
+pub fn builder(org: TokenStream) -> TokenStream {
+    let org_item = parse_macro_input!(org as DeriveInput);
+    let id = &org_item.ident;
+    let builder = syn::Ident::new(&format!("{}Builder", id), id.span());
+    let Data::Struct(data_struct) = &org_item.data else {
+        return syn::Error::new_spanned(org_item.to_token_stream(), "Builder must label to Struct")
+            .into_compile_error()
+            .into();
+    };
+    let fields_builder = data_struct.fields.iter().fold(vec![] ,|mut vec,e| {
+        let id = e.ident.as_ref().unwrap();
+        let _type = e.ty.to_token_stream();
+        vec.push(quote!(
+            pub fn #id(mut self,value : #_type) -> Self {
+                self.cache.#id = value;
+                self
+            }
+        ));
+        vec
+    });
+    let token = quote! {
+        impl #id {
+            pub fn builder() -> #builder {
+                return #builder {cache : 
+                   #id::default()
+                };
+            }
+        }
+        pub struct #builder {
+            cache : #id
+        }
+        impl #builder {
+            #(
+               #fields_builder
+            )*
+            pub fn build(self) -> #id {
+                self.cache
             }
         }
     };

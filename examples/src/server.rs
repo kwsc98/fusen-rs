@@ -1,5 +1,6 @@
 use examples::{ReqDto, ResDto, TestServer};
 use fusen::fusen_common::url::UrlConfig;
+use fusen::fusen_macro::Builder;
 use fusen::register::zookeeper::ZookeeperConfig;
 use fusen::{
     fusen_common::{self, server::Protocol, FusenResult},
