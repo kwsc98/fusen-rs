@@ -45,7 +45,7 @@ impl FusenServer {
     pub async fn run(mut self) {
         let tcp_server = TcpServer::init(self.protocol.clone(), self.fusen_servers.clone());
         let mut shutdown_complete_rx = tcp_server.run().await;
-        for register_builder in &self.register_builder {
+        for register_builder in self.register_builder {
             let register = register_builder.init();
             if let Ok(port) = register.check(&self.protocol) {
                 for server in &self.fusen_servers {

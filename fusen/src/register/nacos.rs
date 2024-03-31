@@ -1,5 +1,5 @@
 use fusen_common::{server::Protocol, url::UrlConfig, FusenFuture};
-use fusen_macro::UrlConfig;
+use fusen_macro::{url_config};
 use nacos_sdk::api::{
     naming::{
         NamingChangeEvent, NamingEventListener, NamingService, NamingServiceBuilder,
@@ -21,25 +21,15 @@ pub struct FusenNacos {
     naming_service: Arc<dyn NamingService + Sync + Send + 'static>,
 }
 
-#[derive(UrlConfig, Serialize, Deserialize)]
+
+#[derive(Serialize, Deserialize)]
+#[url_config]
 pub struct NacosConfig {
     server_addr: String,
     namespace: Option<String>,
     app_name: Option<String>,
     username: String,
     password: String,
-}
-
-impl NacosConfig {
-    pub fn new(server_addr: &str, username: &str, password: &str) -> Self {
-        Self {
-            server_addr: server_addr.to_string(),
-            namespace: None,
-            app_name: None,
-            username: username.to_string(),
-            password: password.to_string(),
-        }
-    }
 }
 
 impl FusenNacos {

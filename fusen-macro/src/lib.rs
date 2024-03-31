@@ -29,12 +29,16 @@ pub fn asset(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-#[proc_macro_derive(UrlConfig)]
-pub fn url_config(org: TokenStream) -> TokenStream {
-    let org_item = parse_macro_input!(org as DeriveInput);
+#[proc_macro_attribute]
+pub fn url_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let org_item = parse_macro_input!(item as DeriveInput);
     let id = &org_item.ident;
     let token = quote! {
-        impl fusen_common::url::UrlConfig for #id {
+
+        #[fusen_macro::builder]
+        #org_item
+
+        impl #id {
             fn from_url(url : &str) -> Result<Self,fusen_common::Error> {
                 let info : Vec<&str> = url.split("://").collect();
                 if info[0] != "config" {
@@ -46,20 +50,26 @@ pub fn url_config(org: TokenStream) -> TokenStream {
                 }
                 fusen_common::url::from_url(info[1])
             }
+        }
+
+        impl fusen_common::url::UrlConfig for #id {
             fn to_url(&self) -> Result<String, fusen_common::Error> {
                 let mut res = String::new();
                 res.push_str(&("config://".to_owned() + stringify!(#id) + "?" ));
                 res.push_str(&(fusen_common::url::to_url(self)?));
                 Ok(res)
             }
+            fn boxed(self) -> Box<dyn UrlConfig> {
+                Box::new(self)
+            }
         }
     };
     token.into()
 }
 
-#[proc_macro_derive(Builder)]
-pub fn builder(org: TokenStream) -> TokenStream {
-    let org_item = parse_macro_input!(org as DeriveInput);
+#[proc_macro_attribute]
+pub fn builder(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let org_item = parse_macro_input!(item as DeriveInput);
     let id = &org_item.ident;
     let builder = syn::Ident::new(&format!("{}Builder", id), id.span());
     let Data::Struct(data_struct) = &org_item.data else {
@@ -67,7 +77,7 @@ pub fn builder(org: TokenStream) -> TokenStream {
             .into_compile_error()
             .into();
     };
-    let fields_builder = data_struct.fields.iter().fold(vec![] ,|mut vec,e| {
+    let fields_builder = data_struct.fields.iter().fold(vec![], |mut vec, e| {
         let id = e.ident.as_ref().unwrap();
         let _type = e.ty.to_token_stream();
         vec.push(quote!(
@@ -79,9 +89,12 @@ pub fn builder(org: TokenStream) -> TokenStream {
         vec
     });
     let token = quote! {
+        #[derive(Default)]
+        #org_item
+
         impl #id {
             pub fn builder() -> #builder {
-                return #builder {cache : 
+                return #builder {cache :
                    #id::default()
                 };
             }

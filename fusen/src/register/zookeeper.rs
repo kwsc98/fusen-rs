@@ -2,7 +2,7 @@ use super::{Category, Register, Resource};
 use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
 use fusen_common::{server::Protocol, url::UrlConfig};
-use fusen_macro::{Builder, UrlConfig};
+use fusen_macro::url_config;
 use futures::future::err;
 use h2::client;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,8 @@ pub struct FusenZookeeper {
     cluster: String,
 }
 
-#[derive(Default, Builder, UrlConfig, Serialize, Deserialize)]
+#[url_config]
+#[derive(Serialize, Deserialize)]
 pub struct ZookeeperConfig {
     pub cluster: String,
 }

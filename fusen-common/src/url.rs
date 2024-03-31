@@ -51,9 +51,6 @@ pub fn to_url<T: Serialize>(t: &T) -> Result<String, crate::Error> {
 }
 
 pub trait UrlConfig {
-    fn from_url(url: &str) -> Result<Self, crate::Error>
-    where
-        Self: Sized;
-
     fn to_url(&self) -> Result<String, crate::Error>;
+    fn boxed(self) -> Box<dyn UrlConfig>;
 }

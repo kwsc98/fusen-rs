@@ -96,13 +96,8 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         );
     }
     let rpc_client = syn::Ident::new(&format!("{}Client", trait_ident), trait_ident.span());
-    let temp_method = syn::Ident::new(
-        &format!("{}MethodResourceTrait", trait_ident),
-        trait_ident.span(),
-    );
 
     let expanded = quote! {
-        use fusen::fusen_common::MethodResource as #temp_method;
         #item_trait
 
         #[derive(Clone)]
@@ -117,12 +112,12 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             #rpc_client {client}
         }
 
-        pub fn get_info(&self) -> (&str,Option<&str>,Option<&str>,Vec<#temp_method>) {
-            let mut vec : Vec<#temp_method> = vec![];
+        pub fn get_info(&self) -> fusen::fusen_common::server::ServerInfo {
+            let mut methods : Vec<fusen::fusen_common::MethodResource> = vec![];
             #(
-               vec.push(#temp_method::form_json_str(#methods_info));
+                methods.push(fusen::fusen_common::MethodResource::form_json_str(#methods_info));
             )*
-            (&#package,#version,#group ,vec)
+            fusen::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
         }
 
        }

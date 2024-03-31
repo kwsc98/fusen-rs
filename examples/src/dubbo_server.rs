@@ -44,9 +44,11 @@ async fn main() {
     println!("{:?}", ds);
     FusenServer::build()
         .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
-            NacosConfig::new("127.0.0.1:8848", "nacos", "nacos")
-                .to_url()
-                .unwrap(),
+            NacosConfig::builder()
+                .server_addr("127.0.0.1:8848".to_owned())
+                .app_name(Some("fusen-rust-server".to_owned()))
+                .build()
+                .boxed(),
         )))
         .add_protocol(Protocol::HTTP2("8081".to_owned()))
         .add_fusen_server(Box::new(server))

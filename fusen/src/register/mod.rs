@@ -1,4 +1,4 @@
-use fusen_common::{server::Protocol, FusenFuture, MethodResource};
+use fusen_common::{server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use serde::{Deserialize, Serialize};
@@ -21,18 +21,18 @@ impl RegisterBuilder {
         return RegisterBuilder { register_type };
     }
 
-    pub fn init(&self) -> Box<dyn Register> {
-        match &self.register_type {
-            RegisterType::ZooKeeper(url) => Box::new(FusenZookeeper::init(&url).unwrap()),
-            RegisterType::Nacos(url) => Box::new(FusenNacos::init(&url).unwrap()),
+    pub fn init(self) -> Box<dyn Register> {
+        match self.register_type {
+            RegisterType::ZooKeeper(url) => Box::new(FusenZookeeper::init(&url.to_url().unwrap()).unwrap()),
+            RegisterType::Nacos(url) => Box::new(FusenNacos::init(&url.to_url().unwrap()).unwrap()),
         }
     }
 }
 
-#[derive(Clone)]
+
 pub enum RegisterType {
-    ZooKeeper(String),
-    Nacos(String),
+    ZooKeeper(Box<dyn UrlConfig>),
+    Nacos(Box<dyn UrlConfig>),
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Resource {

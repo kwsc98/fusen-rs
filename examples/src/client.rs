@@ -2,7 +2,6 @@ use examples::ReqDto;
 use examples::TestServerClient;
 use fusen::fusen_common;
 use fusen::fusen_common::url::UrlConfig;
-use fusen::register::nacos::NacosConfig;
 use fusen::register::zookeeper::ZookeeperConfig;
 use fusen::{
     client::FusenClient,
@@ -13,11 +12,9 @@ use tracing::info;
 
 lazy_static! {
     static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::ZooKeeper(
-        ZookeeperConfig {
-            cluster: "127.0.0.1:2181".to_owned(),
-        }
-        .to_url()
-        .unwrap(),
+        ZookeeperConfig::builder()
+        .cluster("127.0.0.1:2181".to_owned())
+        .build().boxed()
     )));
 }
 

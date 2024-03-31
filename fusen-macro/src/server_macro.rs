@@ -35,7 +35,6 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
     };
     let item = org_item.clone();
     let org_item = get_server_item(org_item);
-    let item_trait = &item.trait_.unwrap().1.segments[0].ident;
     let item_self = item.self_ty;
     let items_fn = item.items.iter().fold(vec![], |mut vec, e| {
         if let ImplItem::Fn(fn_item) = e {
@@ -89,12 +88,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         }
         vec
     });
-    let temp_method = syn::Ident::new(
-        &format!("{}MethodResourceServer", item_trait),
-        item_trait.span(),
-    );
     let expanded = quote! {
-        use fusen::fusen_common::MethodResource as #temp_method;
 
         #org_item
 
@@ -105,9 +99,9 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
             }
             fn get_info(&self) -> fusen::fusen_common::server::ServerInfo {
 
-               let mut methods : Vec<#temp_method> = vec![];
+               let mut methods : Vec<fusen::fusen_common::MethodResource> = vec![];
                #(
-                methods.push(#temp_method::form_json_str(#methods_info));
+                methods.push(fusen::fusen_common::MethodResource::form_json_str(#methods_info));
                )*
                fusen::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
             }
