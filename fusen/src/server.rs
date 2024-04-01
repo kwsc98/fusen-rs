@@ -47,7 +47,7 @@ impl FusenServer {
         let mut shutdown_complete_rx = tcp_server.run().await;
         for register_builder in self.register_builder {
             let register = register_builder.init();
-            if let Ok(port) = register.check(&self.protocol) {
+            if let Ok(port) = register.check(&self.protocol).await {
                 for server in &self.fusen_servers {
                     let info: ServerInfo = server.1.get_info();
                     let server_name = info.id.to_string();

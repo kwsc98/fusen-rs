@@ -43,11 +43,11 @@ pub fn url_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn from_url(url : &str) -> Result<Self,fusen_common::Error> {
                 let info : Vec<&str> = url.split("://").collect();
                 if info[0] != "config" {
-                   return Err(format!("err url {}",url).into());
+                   return Err(format!("err1 url {}",url).into());
                 }
                 let info : Vec<&str> = info[1].split("?").collect();
                 if info[0] != stringify!(#id) {
-                    return Err(format!("err url {}",url).into());
+                    return Err(format!("err2 url {}",url).into());
                 }
                 fusen_common::url::from_url(info[1])
             }

@@ -1,5 +1,5 @@
-use fusen_common::{server::Protocol, url::UrlConfig, FusenFuture};
-use fusen_macro::{url_config};
+use fusen_common::{net::get_ip, server::Protocol, url::UrlConfig, FusenFuture};
+use fusen_macro::url_config;
 use nacos_sdk::api::{
     naming::{
         NamingChangeEvent, NamingEventListener, NamingService, NamingServiceBuilder,
@@ -8,44 +8,53 @@ use nacos_sdk::api::{
     props::ClientProps,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tracing::{debug, error, info};
 
 use crate::register::Resource;
 
-use super::{Category, Directory, Register};
+use super::{Category, Directory, Register, Type};
 
 #[derive(Clone)]
 pub struct FusenNacos {
     naming_service: Arc<dyn NamingService + Sync + Send + 'static>,
+    config: Arc<NacosConfig>,
 }
-
 
 #[url_config]
 pub struct NacosConfig {
     server_addr: String,
     namespace: Option<String>,
+    group: Option<String>,
     app_name: Option<String>,
-    username: String,
-    password: String,
+    username: Option<String>,
+    password: Option<String>,
+    r#type: Type,
 }
 
 impl FusenNacos {
     pub fn init(url: &str) -> crate::Result<Self> {
         let mut client_props = ClientProps::new();
         let config = NacosConfig::from_url(url)?;
-        let namespace = config.namespace.map_or("public".to_owned(), |e| e);
-        let app_name = config.app_name.map_or("fusen".to_owned(), |e| e);
+        let namespace = config
+            .namespace
+            .as_ref()
+            .map_or("public".to_owned(), |e| e.to_owned());
+        let app_name = config
+            .app_name
+            .as_ref()
+            .map_or("fusen".to_owned(), |e| e.to_owned());
         client_props = client_props
-            .server_addr(config.server_addr)
+            .server_addr(config.server_addr.clone())
             .namespace(namespace)
-            .app_name(app_name)
+            .app_name(app_name.clone())
             .auth_username(String::default())
             .auth_password(String::default());
         let naming_service = NamingServiceBuilder::new(client_props).build()?;
         Ok(Self {
             naming_service: Arc::new(naming_service),
+            config: Arc::new(config),
         })
     }
 }
@@ -56,7 +65,8 @@ impl Register for FusenNacos {
         Box::pin(async move {
             let group = (&resource).group.clone();
             let nacos_service_name = get_service_name(&resource);
-            let nacos_service_instance = get_service_instance(resource);
+            let nacos_service_instance =
+                get_instance(resource.ip, resource.port.unwrap(), resource.params);
             info!("register service: {}", nacos_service_name);
             let ret = nacos
                 .naming_service
@@ -110,13 +120,65 @@ impl Register for FusenNacos {
         })
     }
 
-    fn check(&self, protocol: &Vec<Protocol>) -> crate::Result<String> {
-        for protocol in protocol {
-            if let Protocol::HTTP2(port) = protocol {
-                return Ok(port.clone());
+    fn check(&self, protocol: &Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
+        let nacos = self.clone();
+        let protocol = protocol.clone();
+        Box::pin(async move {
+            let protocol = match &nacos.config.r#type {
+                &Type::Dubbo => {
+                    let Some(protocol) =
+                        protocol.iter().find(|e| matches!(**e, Protocol::HTTP2(_)))
+                    else {
+                        return Err("Dubbo not find protocol for HTTP2".into());
+                    };
+                    (protocol, "DUBBO")
+                }
+                &Type::Fusen => {
+                    let Some(protocol) =
+                        protocol.iter().find(|e| matches!(**e, Protocol::HTTP2(_)))
+                    else {
+                        return Err("Fusen not find protocol for HTTP2".into());
+                    };
+                    (protocol, "FUSEN")
+                }
+                &Type::SpringCloud => {
+                    let Some(protocol) =
+                        protocol.iter().find(|e| matches!(**e, Protocol::HTTP(_)))
+                    else {
+                        return Err("SpringCloud not find protocol for HTTP1".into());
+                    };
+                    (protocol, "SPRING_CLOUD")
+                }
+            };
+            let port = match protocol.0 {
+                Protocol::HTTP(port) => port,
+                Protocol::HTTP2(port) => port,
             }
-        }
-        return Err("need monitor Http2".into());
+            .to_owned();
+            let group = &nacos.config.group;
+            let mut params = HashMap::new();
+            params.insert(
+                "preserved.register.source".to_owned(),
+                protocol.1.to_owned(),
+            );
+            let app_name = nacos
+                .config
+                .as_ref()
+                .app_name
+                .as_ref()
+                .map_or("fusen".to_owned(), |e| e.clone());
+            let nacos_instance = get_instance(get_ip(), port.clone(), params);
+            info!("register application: {}", app_name);
+            let ret = nacos
+                .naming_service
+                .register_instance(app_name.to_string(), group.to_owned(), nacos_instance)
+                .await;
+            if let Err(e) = ret {
+                error!("register to nacos occur an error: {:?}", e);
+                return Err(format!("register to nacos occur an error: {:?}", e).into());
+            }
+            return Ok(port);
+        })
     }
 }
 
@@ -179,13 +241,11 @@ fn get_service_name(resource: &super::Resource) -> String {
     )
 }
 
-fn get_service_instance(resource: super::Resource) -> ServiceInstance {
-    let ip = resource.ip;
-    let port = resource.port;
+fn get_instance(ip: String, port: String, params: HashMap<String, String>) -> ServiceInstance {
     nacos_sdk::api::naming::ServiceInstance {
         ip,
-        port: port.unwrap().parse().unwrap(),
-        metadata: resource.params,
+        port: port.parse().unwrap(),
+        metadata: params,
         ..Default::default()
     }
 }

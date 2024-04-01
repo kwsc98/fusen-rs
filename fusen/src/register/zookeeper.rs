@@ -1,10 +1,10 @@
-use super::{Category, Register, Resource};
+use super::{Category, Register, Resource, Type};
 use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
-use fusen_common::{server::Protocol, url::UrlConfig};
+use fusen_common::{server::Protocol, url::UrlConfig, FusenFuture};
 use fusen_macro::url_config;
 use serde::{Deserialize, Serialize};
-use std:: time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use zk::{Client, OneshotWatcher};
@@ -16,46 +16,61 @@ static CONTAINER_OPEN: &zk::CreateOptions<'static> =
     &zk::CreateMode::Container.with_acls(zk::Acls::anyone_all());
 
 pub struct FusenZookeeper {
-    cluster: String,
+    cluster: Arc<String>,
+    root_path: String,
 }
 
 #[url_config]
 pub struct ZookeeperConfig {
-    pub cluster: String,
+    cluster: String,
+    r#type: Type,
 }
 
 impl FusenZookeeper {
     pub fn init(url: &str) -> crate::Result<Self> {
         let config = ZookeeperConfig::from_url(url)?;
+        let path = match config.r#type {
+            Type::Dubbo => "/dubbo",
+            Type::Fusen => "/fusen",
+            Type::SpringCloud => return Err("zookeeper not support SpringCloud".into()),
+        }
+        .to_owned();
         Ok(Self {
-            cluster: config.cluster.to_string(),
+            cluster: Arc::new(config.cluster),
+            root_path: path,
         })
     }
 }
 
 impl Register for FusenZookeeper {
-    fn check(&self, protocol: &Vec<Protocol>) -> crate::Result<String> {
-        for protocol in protocol {
-            if let Protocol::HTTP2(port) = protocol {
-                return Ok(port.clone());
+    fn check(&self, protocol: &Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
+        let protocol = protocol.clone();
+        Box::pin(async move {
+            for protocol in protocol {
+                if let Protocol::HTTP2(port) = protocol {
+                    return Ok(port.clone());
+                }
             }
-        }
-        return Err("need monitor Http2".into());
+            return Err("need monitor Http2".into());
+        })
     }
 
     fn register(&self, resource: Resource) -> fusen_common::FusenFuture<Result<(), crate::Error>> {
-        let cluster = self.cluster.to_owned();
-        Box::pin(async move { creat_resource_node(cluster, &resource).await })
+        let cluster = self.cluster.clone();
+        let path = self.root_path.clone();
+        Box::pin(async move { creat_resource_node(cluster, path, &resource).await })
     }
 
     fn subscribe(
         &self,
         resource: Resource,
     ) -> fusen_common::FusenFuture<Result<super::Directory, crate::Error>> {
-        let cluster = self.cluster.to_owned();
+        let cluster = self.cluster.clone();
+        let path = self.root_path.clone();
+
         Box::pin(async move {
-            creat_resource_node(cluster.clone(), &resource).await?;
-            listener_resource_node_change(cluster, resource).await
+            creat_resource_node(cluster.clone(), path.clone(), &resource).await?;
+            listener_resource_node_change(cluster, path, resource).await
         })
     }
 }
@@ -103,8 +118,11 @@ async fn connect(cluster: &str, chroot: &str) -> zk::Client {
     }
 }
 
-async fn creat_resource_node(cluster: String, resource: &Resource) -> crate::Result<()> {
-    let mut path = "/dubbo".to_owned();
+async fn creat_resource_node(
+    cluster: Arc<String>,
+    mut path: String,
+    resource: &Resource,
+) -> crate::Result<()> {
     match &resource.category {
         &Category::Client => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/consumers"));
@@ -157,10 +175,10 @@ async fn creat_resource_node(cluster: String, resource: &Resource) -> crate::Res
 }
 
 async fn listener_resource_node_change(
-    cluster: String,
+    cluster: Arc<String>,
+    mut path: String,
     resource: Resource,
 ) -> Result<super::Directory, crate::Error> {
-    let mut path = "/dubbo".to_owned();
     match &resource.category {
         &Category::Client => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/providers"));

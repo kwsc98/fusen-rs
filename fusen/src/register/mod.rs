@@ -23,23 +23,31 @@ impl RegisterBuilder {
 
     pub fn init(self) -> Box<dyn Register> {
         match self.register_type {
-            RegisterType::ZooKeeper(url) => Box::new(FusenZookeeper::init(&url.to_url().unwrap()).unwrap()),
+            RegisterType::ZooKeeper(url) => {
+                Box::new(FusenZookeeper::init(&url.to_url().unwrap()).unwrap())
+            }
             RegisterType::Nacos(url) => Box::new(FusenNacos::init(&url.to_url().unwrap()).unwrap()),
         }
     }
 }
 
-
 pub enum RegisterType {
     ZooKeeper(Box<dyn UrlConfig>),
     Nacos(Box<dyn UrlConfig>),
 }
+
+#[derive(Serialize, Deserialize,Debug)]
 pub enum Type {
     Dubbo,
     SpringCloud,
-    Fusen
+    Fusen,
 }
 
+impl Default for Type {
+    fn default() -> Self {
+        Type::Fusen
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Resource {
@@ -80,7 +88,7 @@ pub trait Register: Send + Sync {
 
     fn subscribe(&self, resource: Resource) -> FusenFuture<Result<Directory, crate::Error>>;
 
-    fn check(&self, protocol: &Vec<Protocol>) -> crate::Result<String>;
+    fn check(&self, protocol: &Vec<Protocol>) -> FusenFuture<crate::Result<String>>;
 }
 
 #[derive(Debug)]
