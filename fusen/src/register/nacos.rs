@@ -22,7 +22,6 @@ pub struct FusenNacos {
 }
 
 
-#[derive(Serialize, Deserialize)]
 #[url_config]
 pub struct NacosConfig {
     server_addr: String,

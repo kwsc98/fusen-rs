@@ -36,6 +36,7 @@ pub fn url_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let token = quote! {
 
         #[fusen_macro::builder]
+        #[derive(serde::Serialize, serde::Deserialize)]
         #org_item
 
         impl #id {

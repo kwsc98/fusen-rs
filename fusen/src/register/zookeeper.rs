@@ -3,10 +3,8 @@ use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
 use fusen_common::{server::Protocol, url::UrlConfig};
 use fusen_macro::url_config;
-use futures::future::err;
-use h2::client;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, f32::consts::E, sync::Arc, time::Duration};
+use std:: time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use zk::{Client, OneshotWatcher};
@@ -22,7 +20,6 @@ pub struct FusenZookeeper {
 }
 
 #[url_config]
-#[derive(Serialize, Deserialize)]
 pub struct ZookeeperConfig {
     pub cluster: String,
 }

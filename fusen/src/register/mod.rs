@@ -34,6 +34,13 @@ pub enum RegisterType {
     ZooKeeper(Box<dyn UrlConfig>),
     Nacos(Box<dyn UrlConfig>),
 }
+pub enum Type {
+    Dubbo,
+    SpringCloud,
+    Fusen
+}
+
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Resource {
     pub server_name: String,
