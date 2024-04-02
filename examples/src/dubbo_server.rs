@@ -7,7 +7,7 @@ use fusen::{
         FusenResult,
     },
     fusen_macro::{self, asset},
-    register::{nacos::NacosConfig, RegisterBuilder, RegisterType},
+    register::nacos::NacosConfig,
     server::FusenServer,
 };
 use fusen_macro::fusen_server;
@@ -43,13 +43,13 @@ async fn main() {
     let ds = server.get_info();
     println!("{:?}", ds);
     FusenServer::build()
-        .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
+        .add_register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
                 .app_name(Some("fusen-rust-server".to_owned()))
                 .build()
                 .boxed(),
-        )))
+        )
         .add_protocol(Protocol::HTTP2("8081".to_owned()))
         .add_fusen_server(Box::new(server))
         .run()

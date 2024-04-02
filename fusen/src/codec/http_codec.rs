@@ -1,10 +1,9 @@
-use std::fmt::Debug;
-
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec, HttpCodec};
 use crate::{BoxBody, StreamBody};
 use fusen_common::{error::FusenError, logs::get_uuid, FusenContext, MetaData};
 use http::Response;
 use http_body_util::BodyExt;
+use std::fmt::Debug;
 
 pub struct FusenHttpCodec<D, E> {
     json_codec: Box<dyn BodyCodec<D, E> + Sync + Send>,
@@ -76,8 +75,13 @@ where
             fusen_common::codec::CodecType::JSON => &self.json_codec,
             fusen_common::codec::CodecType::GRPC => &self.grpc_codec,
         };
+        let content_type = match meta_data.get_codec() {
+            fusen_common::codec::CodecType::JSON => "application/json",
+            fusen_common::codec::CodecType::GRPC => "application/grpc",
+        };
         let body = codec.encode(context.res)?;
         let response = Response::builder()
+            .header("content-type", content_type)
             .body(body)
             .map_err(|e| FusenError::Server(e.to_string()))?;
         Ok(response)

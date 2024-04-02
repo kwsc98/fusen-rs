@@ -1,5 +1,7 @@
 use std::net::IpAddr;
 
+use http::uri::Port;
+
 pub fn get_network_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("8.8.8.8:80")?;
@@ -12,4 +14,12 @@ pub fn get_ip() -> String {
         Ok(ok) => ok.to_string(),
         Err(_err) => "127.0.0.1".to_string(),
     }
+}
+
+pub fn get_path(mut ip: String, port: Option<&str>) -> String {
+    if let Some(port) = port {
+        ip.push(':');
+        ip.push_str(port);
+    }
+    ip
 }

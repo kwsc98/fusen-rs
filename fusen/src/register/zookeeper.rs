@@ -3,11 +3,9 @@ use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
 use fusen_common::{server::Protocol, url::UrlConfig, FusenFuture};
 use fusen_macro::url_config;
-use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
-use tokio::sync::RwLock;
 use tracing::{debug, error, info};
-use zk::{Client, OneshotWatcher};
+use zk::OneshotWatcher;
 use zookeeper_client as zk;
 
 static EPHEMERAL_OPEN: &zk::CreateOptions<'static> =
@@ -16,27 +14,27 @@ static CONTAINER_OPEN: &zk::CreateOptions<'static> =
     &zk::CreateMode::Container.with_acls(zk::Acls::anyone_all());
 
 pub struct FusenZookeeper {
-    cluster: Arc<String>,
+    config: Arc<ZookeeperConfig>,
     root_path: String,
 }
 
-#[url_config]
+#[url_config(attr = register)]
 pub struct ZookeeperConfig {
     cluster: String,
-    r#type: Type,
+    server_type: Type,
 }
 
 impl FusenZookeeper {
     pub fn init(url: &str) -> crate::Result<Self> {
         let config = ZookeeperConfig::from_url(url)?;
-        let path = match config.r#type {
+        let path = match config.server_type {
             Type::Dubbo => "/dubbo",
             Type::Fusen => "/fusen",
             Type::SpringCloud => return Err("zookeeper not support SpringCloud".into()),
         }
         .to_owned();
         Ok(Self {
-            cluster: Arc::new(config.cluster),
+            config: Arc::new(config),
             root_path: path,
         })
     }
@@ -56,7 +54,7 @@ impl Register for FusenZookeeper {
     }
 
     fn register(&self, resource: Resource) -> fusen_common::FusenFuture<Result<(), crate::Error>> {
-        let cluster = self.cluster.clone();
+        let cluster = self.config.cluster.clone();
         let path = self.root_path.clone();
         Box::pin(async move { creat_resource_node(cluster, path, &resource).await })
     }
@@ -65,12 +63,12 @@ impl Register for FusenZookeeper {
         &self,
         resource: Resource,
     ) -> fusen_common::FusenFuture<Result<super::Directory, crate::Error>> {
-        let cluster = self.cluster.clone();
+        let cluster = self.config.cluster.clone();
         let path = self.root_path.clone();
-
+        let server_type = self.config.server_type;
         Box::pin(async move {
             creat_resource_node(cluster.clone(), path.clone(), &resource).await?;
-            listener_resource_node_change(cluster, path, resource).await
+            listener_resource_node_change(cluster, path, server_type, resource).await
         })
     }
 }
@@ -119,7 +117,7 @@ async fn connect(cluster: &str, chroot: &str) -> zk::Client {
 }
 
 async fn creat_resource_node(
-    cluster: Arc<String>,
+    cluster: String,
     mut path: String,
     resource: &Resource,
 ) -> crate::Result<()> {
@@ -175,8 +173,9 @@ async fn creat_resource_node(
 }
 
 async fn listener_resource_node_change(
-    cluster: Arc<String>,
+    cluster: String,
     mut path: String,
+    server_type: Type,
     resource: Resource,
 ) -> Result<super::Directory, crate::Error> {
     match &resource.category {
@@ -185,7 +184,7 @@ async fn listener_resource_node_change(
         }
         &Category::Server => return Err("server cloud be listener".into()),
     };
-    let directory = super::Directory::new().await;
+    let directory = super::Directory::new(Arc::new(server_type)).await;
     let directory_clone = directory.clone();
     let client = connect(&cluster.clone(), &path).await;
     let watcher: (Vec<String>, zk::Stat, OneshotWatcher) =

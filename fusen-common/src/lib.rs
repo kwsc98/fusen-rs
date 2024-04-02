@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::Iter, HashMap};
 
 use codec::CodecType;
 use error::FusenError;
@@ -37,6 +37,10 @@ impl MetaData {
 
     pub fn get_value(&self, key: &str) -> Option<&String> {
         self.inner.get(key)
+    }
+
+    pub fn get_iter(&self) -> Iter<String, String> {
+        self.inner.iter()
     }
 }
 

@@ -2,24 +2,20 @@ use std::time::Duration;
 
 use examples::DemoServiceClient;
 use fusen::fusen_common::url::UrlConfig;
-use fusen::{
-    client::FusenClient,
-    fusen_common,
-    register::{nacos::NacosConfig, RegisterBuilder, RegisterType},
-};
+use fusen::{client::FusenClient, fusen_common, register::nacos::NacosConfig};
 use fusen_common::date_util::get_now_date_time_as_millis;
 use lazy_static::lazy_static;
 use tokio::sync::mpsc;
 use tracing::info;
 
 lazy_static! {
-    static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::Nacos(
+    static ref CLI: FusenClient = FusenClient::build(
         NacosConfig::builder()
-        .server_addr("127.0.0.1:8848".to_owned())
-        .app_name(Some("fusen-rust-server".to_owned()))
-        .build()
-        .boxed(),
-    ),));
+            .server_addr("127.0.0.1:8848".to_owned())
+            .app_name(Some("fusen-rust-server".to_owned()))
+            .build()
+            .boxed(),
+    );
 }
 
 #[tokio::main(worker_threads = 512)]

@@ -30,8 +30,19 @@ pub fn asset(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn url_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = UrlConfigAttr::from_attr(attr);
+    if let Err(err) = attr {
+        return err.into_compile_error().into();
+    }
+    let attr = attr.unwrap();
+    let attr = attr.attr;
     let org_item = parse_macro_input!(item as DeriveInput);
+    let Some(attr) = attr else {
+        return syn::Error::new_spanned(org_item.to_token_stream(), "url_config must label to attr")
+            .into_compile_error()
+            .into();
+    };
     let id = &org_item.ident;
     let token = quote! {
 
@@ -42,7 +53,7 @@ pub fn url_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
         impl #id {
             fn from_url(url : &str) -> Result<Self,fusen_common::Error> {
                 let info : Vec<&str> = url.split("://").collect();
-                if info[0] != "config" {
+                if info[0] != #attr {
                    return Err(format!("err1 url {}",url).into());
                 }
                 let info : Vec<&str> = info[1].split("?").collect();
@@ -56,7 +67,7 @@ pub fn url_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
         impl fusen_common::url::UrlConfig for #id {
             fn to_url(&self) -> Result<String, fusen_common::Error> {
                 let mut res = String::new();
-                res.push_str(&("config://".to_owned() + stringify!(#id) + "?" ));
+                res.push_str(&(#attr.to_owned() + "://" + stringify!(#id) + "?" ));
                 res.push_str(&(fusen_common::url::to_url(self)?));
                 Ok(res)
             }
@@ -65,6 +76,7 @@ pub fn url_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     };
+    eprintln!("{:?}",token.to_string());
     token.into()
 }
 
@@ -133,6 +145,11 @@ fusen_attr! {
     id,
     path,
     method
+}
+
+fusen_attr! {
+    UrlConfigAttr,
+    attr
 }
 
 fusen_attr! {

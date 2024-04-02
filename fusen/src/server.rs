@@ -2,13 +2,16 @@ use crate::{
     protocol::server::TcpServer,
     register::{Category, Register, RegisterBuilder, Resource},
 };
-use fusen_common::server::{Protocol, RpcServer, ServerInfo};
+use fusen_common::{
+    server::{Protocol, RpcServer, ServerInfo},
+    url::UrlConfig,
+};
 use std::{collections::HashMap, sync::Arc};
 
 pub struct FusenServer {
     protocol: Vec<Protocol>,
     fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
-    register_builder: Vec<RegisterBuilder>,
+    register_config: Vec<Box<dyn UrlConfig>>,
     register: Vec<Box<dyn Register>>,
 }
 
@@ -16,7 +19,7 @@ impl FusenServer {
     pub fn build() -> FusenServer {
         return FusenServer {
             protocol: vec![],
-            register_builder: vec![],
+            register_config: vec![],
             register: vec![],
             fusen_servers: HashMap::new(),
         };
@@ -25,8 +28,8 @@ impl FusenServer {
         self.protocol.push(protocol);
         return self;
     }
-    pub fn add_register_builder(mut self, register_builder: RegisterBuilder) -> FusenServer {
-        self.register_builder.push(register_builder);
+    pub fn add_register_builder(mut self, register_config: Box<dyn UrlConfig>) -> FusenServer {
+        self.register_config.push(register_config);
         return self;
     }
 
@@ -45,8 +48,8 @@ impl FusenServer {
     pub async fn run(mut self) {
         let tcp_server = TcpServer::init(self.protocol.clone(), self.fusen_servers.clone());
         let mut shutdown_complete_rx = tcp_server.run().await;
-        for register_builder in self.register_builder {
-            let register = register_builder.init();
+        for register_config in self.register_config {
+            let register = RegisterBuilder::new(register_config).unwrap().init();
             if let Ok(port) = register.check(&self.protocol).await {
                 for server in &self.fusen_servers {
                     let info: ServerInfo = server.1.get_info();

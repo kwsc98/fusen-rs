@@ -1,21 +1,19 @@
 use examples::ReqDto;
 use examples::TestServerClient;
+use fusen::client::FusenClient;
 use fusen::fusen_common;
 use fusen::fusen_common::url::UrlConfig;
 use fusen::register::zookeeper::ZookeeperConfig;
-use fusen::{
-    client::FusenClient,
-    register::{RegisterBuilder, RegisterType},
-};
 use lazy_static::lazy_static;
 use tracing::info;
 
 lazy_static! {
-    static ref CLI: FusenClient = FusenClient::build(RegisterBuilder::new(RegisterType::ZooKeeper(
+    static ref CLI: FusenClient = FusenClient::build(
         ZookeeperConfig::builder()
-        .cluster("127.0.0.1:2181".to_owned())
-        .build().boxed()
-    )));
+            .cluster("127.0.0.1:2181".to_owned())
+            .build()
+            .boxed()
+    );
 }
 
 #[tokio::main(worker_threads = 512)]

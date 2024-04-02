@@ -1,13 +1,15 @@
-use crate::register::RegisterBuilder;
+use crate::register::{RegisterBuilder, Resource, ResourceInfo};
 use crate::route::client::Route;
 use crate::support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper};
 use bytes::{BufMut, BytesMut};
 use fusen_common::error::FusenError;
+use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
 use http::{HeaderValue, Request};
-use http_body_util::{BodyExt, Full};
+use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 use prost::Message;
+use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 pub struct FusenClient {
@@ -15,18 +17,30 @@ pub struct FusenClient {
 }
 
 impl FusenClient {
-    pub fn build(register_builder: RegisterBuilder) -> FusenClient {
-        let register = register_builder.init();
-        let cli = FusenClient {
+    pub fn build(register_config: Box<dyn UrlConfig>) -> FusenClient {
+        let registry_builder = RegisterBuilder::new(register_config).unwrap();
+        let register = registry_builder.init();
+        FusenClient {
             route: Route::new(register),
-        };
-        return cli;
+        }
     }
 
     pub async fn invoke<Res>(&self, msg: FusenContext) -> Result<Res, FusenError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
+        let resource_info: ResourceInfo = self
+            .route
+            .get_server_resource(msg.class_name.as_ref(), msg.version.as_deref())
+            .await
+            .map_err(|e| FusenError::Client(e.to_string()))?;
+        let ResourceInfo { server_type, info } = resource_info;
+        let socket_info = info
+            .choose(&mut rand::thread_rng())
+            .ok_or(FusenError::Client("not find server".into()))?;
+        
+        let sender = socket_info.socket;
+
         let mut sender: SendRequest<Full<bytes::Bytes>> = self
             .route
             .get_socket_sender(msg.class_name.as_ref(), msg.version.as_deref())

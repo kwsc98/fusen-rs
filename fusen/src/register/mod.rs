@@ -1,6 +1,8 @@
-use fusen_common::{server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
+use fusen_common::{net::get_path, server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
 use http_body_util::Full;
+use hyper::client::conn::http1::SendRequest as SendRequestHttp1;
 use hyper::client::conn::http2::SendRequest;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{
@@ -17,8 +19,22 @@ pub struct RegisterBuilder {
 }
 
 impl RegisterBuilder {
-    pub fn new(register_type: RegisterType) -> Self {
-        return RegisterBuilder { register_type };
+    pub fn new(config: Box<dyn UrlConfig>) -> crate::Result<Self> {
+        let config_url = config.to_url()?;
+        let info: Vec<&str> = config_url.split("://").collect();
+        if info[0] != "register" {
+            return Err(format!("config url err is not register : {:?}", config_url).into());
+        }
+        let info: Vec<&str> = info[1].split("?").collect();
+        let info = info[0].to_lowercase();
+        let register_type = if info.contains("nacos") {
+            RegisterType::Nacos(config)
+        } else if info.contains("zookeeper") {
+            RegisterType::ZooKeeper(config)
+        } else {
+            return Err(format!("config url err : {:?}", config_url).into());
+        };
+        return Ok(RegisterBuilder { register_type });
     }
 
     pub fn init(self) -> Box<dyn Register> {
@@ -36,7 +52,7 @@ pub enum RegisterType {
     Nacos(Box<dyn UrlConfig>),
 }
 
-#[derive(Serialize, Deserialize,Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Type {
     Dubbo,
     SpringCloud,
@@ -72,11 +88,6 @@ impl Resource {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SocketInfo {
-    pub sender: Arc<RwLock<Option<SendRequest<Full<bytes::Bytes>>>>>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Category {
     Client,
@@ -98,43 +109,85 @@ pub enum DirectorySender {
 }
 
 pub enum DirectoryReceiver {
-    GET(Arc<Vec<Resource>>),
+    GET(Vec<Arc<SocketInfo>>),
     CHANGE,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Directory {
+    server_type: Arc<Type>,
     sender: UnboundedSender<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>,
 }
 
+pub struct ResourceInfo {
+    pub server_type: Arc<Type>,
+    pub info: Vec<Arc<SocketInfo>>,
+}
+
+pub struct SocketInfo {
+    pub resource: Resource,
+    pub socket: SocketType,
+}
+
+pub enum SocketType {
+    HTTP1(RwLock<Option<SendRequestHttp1<Full<bytes::Bytes>>>>),
+    HTTP2(RwLock<Option<SendRequest<Full<bytes::Bytes>>>>),
+}
+
 impl Directory {
-    pub async fn new() -> Self {
+    pub async fn new(server_type: Arc<Type>) -> Self {
         let (s, mut r) =
             mpsc::unbounded_channel::<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>();
+        let server_type_clone = server_type.clone();
         tokio::spawn(async move {
-            let mut cache: Arc<Vec<Resource>> = Arc::new(vec![]);
+            let mut cache: Vec<Arc<SocketInfo>> = vec![];
             while let Some(msg) = r.recv().await {
-                println!("{:?}", msg.0);
                 match msg.0 {
                     DirectorySender::GET => {
                         let _ = msg.1.send(DirectoryReceiver::GET(cache.clone()));
                     }
                     DirectorySender::CHANGE(resources) => {
-                        cache = Arc::new(resources);
+                        let map = cache.iter().fold(HashMap::new(), |mut map, e| {
+                            let key = get_path(e.resource.ip.clone(), e.resource.port.as_deref());
+                            map.insert(key, e.clone());
+                            map
+                        });
+                        let mut res = vec![];
+                        for item in resources {
+                            let key = get_path(item.ip.clone(), item.port.as_deref());
+                            res.push(match map.get(&key) {
+                                Some(info) => info.clone(),
+                                None => Arc::new(SocketInfo {
+                                    resource: item,
+                                    socket: match server_type_clone.as_ref() {
+                                        Type::Dubbo => SocketType::HTTP2(RwLock::new(None)),
+                                        Type::SpringCloud => SocketType::HTTP1(RwLock::new(None)),
+                                        Type::Fusen => SocketType::HTTP2(RwLock::new(None)),
+                                    },
+                                }),
+                            });
+                        }
+                        cache = res;
                         let _ = msg.1.send(DirectoryReceiver::CHANGE);
                     }
                 }
             }
         });
-        Self { sender: s }
+        Self {
+            sender: s,
+            server_type,
+        }
     }
 
-    pub async fn get(&self) -> Result<Arc<Vec<Resource>>, crate::Error> {
+    pub async fn get(&self) -> Result<ResourceInfo, crate::Error> {
         let oneshot = oneshot::channel();
-        let _ = self.sender.clone().send((DirectorySender::GET, oneshot.0));
+        let _ = self.sender.send((DirectorySender::GET, oneshot.0));
         let rev = oneshot.1.await.map_err(|e| e.to_string())?;
         match rev {
-            DirectoryReceiver::GET(rev) => Ok(rev),
+            DirectoryReceiver::GET(rev) => Ok(ResourceInfo {
+                server_type: self.server_type.clone(),
+                info: rev,
+            }),
             DirectoryReceiver::CHANGE => Err("err receiver".into()),
         }
     }

@@ -1,3 +1,5 @@
+use super::{Category, Directory, Register, Type};
+use crate::register::Resource;
 use fusen_common::{net::get_ip, server::Protocol, url::UrlConfig, FusenFuture};
 use fusen_macro::url_config;
 use nacos_sdk::api::{
@@ -7,14 +9,9 @@ use nacos_sdk::api::{
     },
     props::ClientProps,
 };
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tracing::{debug, error, info};
-
-use crate::register::Resource;
-
-use super::{Category, Directory, Register, Type};
 
 #[derive(Clone)]
 pub struct FusenNacos {
@@ -22,7 +19,7 @@ pub struct FusenNacos {
     config: Arc<NacosConfig>,
 }
 
-#[url_config]
+#[url_config(attr = register)]
 pub struct NacosConfig {
     server_addr: String,
     namespace: Option<String>,
@@ -30,7 +27,7 @@ pub struct NacosConfig {
     app_name: Option<String>,
     username: Option<String>,
     password: Option<String>,
-    r#type: Type,
+    server_type: Type,
 }
 
 impl FusenNacos {
@@ -85,7 +82,7 @@ impl Register for FusenNacos {
         Box::pin(async move {
             let nacos_service_name = get_service_name(&resource);
             info!("subscribe service: {}", nacos_service_name);
-            let directory = Directory::new().await;
+            let directory = Directory::new(Arc::new(nacos.config.server_type)).await;
             let directory_clone = directory.clone();
             let naming_service = nacos.naming_service.clone();
             let (event_listener, receiver) = ServiceChangeListener::new();
@@ -124,7 +121,7 @@ impl Register for FusenNacos {
         let nacos = self.clone();
         let protocol = protocol.clone();
         Box::pin(async move {
-            let protocol = match &nacos.config.r#type {
+            let protocol = match &nacos.config.server_type {
                 &Type::Dubbo => {
                     let Some(protocol) =
                         protocol.iter().find(|e| matches!(**e, Protocol::HTTP2(_)))
@@ -142,8 +139,7 @@ impl Register for FusenNacos {
                     (protocol, "FUSEN")
                 }
                 &Type::SpringCloud => {
-                    let Some(protocol) =
-                        protocol.iter().find(|e| matches!(**e, Protocol::HTTP(_)))
+                    let Some(protocol) = protocol.iter().find(|e| matches!(**e, Protocol::HTTP(_)))
                     else {
                         return Err("SpringCloud not find protocol for HTTP1".into());
                     };

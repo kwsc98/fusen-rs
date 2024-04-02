@@ -2,11 +2,9 @@ use examples::{ReqDto, ResDto, TestServer};
 use fusen::fusen_common::url::UrlConfig;
 use fusen::fusen_macro::asset;
 use fusen::register::nacos::NacosConfig;
-use fusen::register::zookeeper::ZookeeperConfig;
 use fusen::{
     fusen_common::{self, server::Protocol, FusenResult},
     fusen_macro::fusen_server,
-    register::{RegisterBuilder, RegisterType},
     server::FusenServer,
 };
 use tracing::info;
@@ -26,7 +24,7 @@ impl TestServer for TestServerImpl {
     }
     #[asset(path="/doRun2",method = POST)]
     async fn doRun2(&self, req: ReqDto) -> FusenResult<ResDto> {
-        // info!("res : {:?}", req);
+        info!("res : {:?}", req);
         return Ok(ResDto {
             str: "Hello ".to_owned() + &req.str + " V2",
         });
@@ -40,14 +38,14 @@ async fn main() {
         _db: "我是一个DB数据库".to_string(),
     };
     FusenServer::build()
-        .add_register_builder(RegisterBuilder::new(RegisterType::Nacos(
+        .add_register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
                 .app_name(Some("fusen-rust-server".to_owned()))
-                .r#type(fusen::register::Type::SpringCloud)
+                .register_type(fusen::register::Type::SpringCloud)
                 .build()
                 .boxed(),
-        )))
+        )
         .add_protocol(Protocol::HTTP("8081".to_owned()))
         .add_protocol(Protocol::HTTP2("8082".to_owned()))
         .add_fusen_server(Box::new(server))
