@@ -1,90 +1,56 @@
-use crate::{
-    support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper},
-    StreamBody,
-};
+use bytes::Buf;
 use fusen_common::error::FusenError;
-use http::{HeaderMap, HeaderValue};
 use http_body::Frame;
 use prost::Message;
-use std::{fmt::Debug, marker::PhantomData};
+use std::marker::PhantomData;
+
+use crate::support::triple::get_buf;
 
 use super::BodyCodec;
 
-pub struct GrpcBodyCodec<D, E> {
+pub struct GrpcBodyCodec<D,E,U, T> 
+{   
     _d: PhantomData<D>,
     _e: PhantomData<E>,
+    _u: PhantomData<U>,
+    _t: PhantomData<T>,
 }
 
-impl<D, E> GrpcBodyCodec<D, E>
-where
-    D: bytes::Buf + Debug,
-    E: std::marker::Sync + std::marker::Send,
-{
+impl<D,E,U, T> GrpcBodyCodec<D,E,U, T> {
     pub fn new() -> Self {
         GrpcBodyCodec {
             _d: PhantomData,
             _e: PhantomData,
+            _u: PhantomData,
+            _t: PhantomData,
         }
     }
 }
 
-impl<D, E> BodyCodec<D, E> for GrpcBodyCodec<D, E>
+impl<D, E, U, T> BodyCodec<D, E> for GrpcBodyCodec<D,E,U, T>
 where
-    D: bytes::Buf + Debug,
+    D: bytes::Buf ,
     E: std::marker::Sync + std::marker::Send,
+    U: Message + Send + 'static + Default,
+    T: Message + Default + Send + 'static,
 {
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, FusenError> {
+    type DecodeType = U;
+
+    type EncodeType = T;
+
+    fn decode(&self, body: Vec<Frame<D>>) -> Result<Self::DecodeType, crate::Error> {
         let data = if body.is_empty() || body[0].is_trailers() {
-            return Err(FusenError::Server("receive frame err".to_string()));
+            return Err("decode frame err".into());
         } else {
             body[0].data_ref().unwrap().chunk()
         };
-        let triple_request_wrapper = TripleRequestWrapper::decode(&data[5..])
-            .map_err(|e| FusenError::Server(e.to_string()))?;
-        Ok(triple_request_wrapper.get_req())
+        let wrapper = Self::DecodeType::decode(&data[5..])?;
+        Ok(wrapper)
     }
 
-    fn encode(
-        &self,
-        res: Result<String, FusenError>,
-    ) -> Result<StreamBody<bytes::Bytes, E>, FusenError> {
-        let mut status = "0";
-        let mut message = String::from("success");
-        let mut trailers = HeaderMap::new();
-        let res_data = match res {
-            Ok(data) => bytes::Bytes::from(TripleResponseWrapper::get_buf(data)),
-            Err(err) => bytes::Bytes::from(TripleExceptionWrapper::get_buf({
-                message = match err {
-                    FusenError::Client(msg) => {
-                        status = "90";
-                        msg
-                    }
-                    FusenError::Method(msg) => {
-                        status = "91";
-                        msg
-                    }
-                    FusenError::Null => {
-                        status = "92";
-                        "FusenError::Null".to_string()
-                    }
-                    FusenError::ResourceEmpty(msg) => {
-                        status = "93";
-                        msg
-                    }
-                    FusenError::Server(msg) => {
-                        status = "94";
-                        msg
-                    }
-                };
-                message.clone()
-            })),
-        };
-        trailers.insert("grpc-status", HeaderValue::from_str(status).unwrap());
-        trailers.insert("grpc-message", HeaderValue::from_str(&message).unwrap());
-
-        let chunks = vec![Ok(Frame::data(res_data)), Ok(Frame::trailers(trailers))];
-        let stream = futures_util::stream::iter(chunks);
-        let stream_body = http_body_util::StreamBody::new(stream);
-        Ok(stream_body)
+    fn encode(&self, res: Self::EncodeType) -> Result<Frame<bytes::Bytes>, crate::Error> {
+        let buf = res.encode_to_vec();
+        let buf = get_buf(buf);
+        Ok(Frame::data(bytes::Bytes::from(buf)))
     }
 }

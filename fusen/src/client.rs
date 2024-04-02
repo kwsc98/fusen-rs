@@ -41,6 +41,8 @@ impl FusenClient {
         
         let sender = socket_info.socket;
 
+        
+
         let mut sender: SendRequest<Full<bytes::Bytes>> = self
             .route
             .get_socket_sender(msg.class_name.as_ref(), msg.version.as_deref())

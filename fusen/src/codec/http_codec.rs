@@ -1,13 +1,22 @@
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec, HttpCodec};
-use crate::{BoxBody, StreamBody};
+use crate::{
+    support::triple::{TripleRequestWrapper, TripleResponseWrapper},
+    BoxBody, StreamBody,
+};
 use fusen_common::{error::FusenError, logs::get_uuid, FusenContext, MetaData};
-use http::Response;
+use http::{HeaderMap, HeaderValue, Response};
+use http_body::Frame;
 use http_body_util::BodyExt;
-use std::fmt::Debug;
+use std::{fmt::Debug, marker::PhantomData};
 
 pub struct FusenHttpCodec<D, E> {
-    json_codec: Box<dyn BodyCodec<D, E> + Sync + Send>,
-    grpc_codec: Box<dyn BodyCodec<D, E> + Sync + Send>,
+    json_codec:
+        Box<dyn BodyCodec<D, E, EncodeType = Vec<String>, DecodeType = Vec<String>> + Sync + Send>,
+    grpc_codec: Box<
+        (dyn BodyCodec<D, E, DecodeType = TripleRequestWrapper, EncodeType = TripleResponseWrapper>
+             + Sync
+             + Send),
+    >,
 }
 
 impl<D, E> FusenHttpCodec<D, E>
@@ -17,7 +26,7 @@ where
 {
     pub fn new() -> Self {
         let json_codec = JsonBodyCodec::<D, E>::new();
-        let grpc_codec = GrpcBodyCodec::<D, E>::new();
+        let grpc_codec = GrpcBodyCodec::<D, E, TripleRequestWrapper, TripleResponseWrapper>::new();
         FusenHttpCodec {
             json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
@@ -35,10 +44,6 @@ where
         mut req: http::Request<BoxBody<D, E>>,
     ) -> Result<FusenContext, FusenError> {
         let meta_data = MetaData::from(req.headers());
-        let codec = match meta_data.get_codec() {
-            fusen_common::codec::CodecType::JSON => &self.json_codec,
-            fusen_common::codec::CodecType::GRPC => &self.grpc_codec,
-        };
         let path = req.uri().path().to_string();
         let mut frame_vec = vec![];
         while let Some(frame) = req.body_mut().frame().await {
@@ -46,7 +51,17 @@ where
                 frame_vec.push(frame);
             }
         }
-        let msg = codec.decode(frame_vec)?;
+        let msg = match meta_data.get_codec() {
+            fusen_common::codec::CodecType::JSON => self
+                .json_codec
+                .decode(frame_vec)
+                .map_err(|e| FusenError::Server(e.to_string()))?,
+            fusen_common::codec::CodecType::GRPC => self
+                .grpc_codec
+                .decode(frame_vec)
+                .map_err(|e| FusenError::Server(e.to_string()))?
+                .get_req(),
+        };
         let unique_identifier = meta_data
             .get_value("unique_identifier")
             .map_or(get_uuid(), |e| e.clone());
@@ -71,18 +86,79 @@ where
         context: fusen_common::FusenContext,
     ) -> Result<http::Response<StreamBody<bytes::Bytes, E>>, FusenError> {
         let meta_data = &context.meta_data;
-        let codec = match meta_data.get_codec() {
-            fusen_common::codec::CodecType::JSON => &self.json_codec,
-            fusen_common::codec::CodecType::GRPC => &self.grpc_codec,
-        };
         let content_type = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => "application/json",
             fusen_common::codec::CodecType::GRPC => "application/grpc",
         };
-        let body = codec.encode(context.res)?;
+        let body = match meta_data.get_codec() {
+            fusen_common::codec::CodecType::JSON => vec![match context.res {
+                Ok(res) => self
+                    .json_codec
+                    .encode(vec![res])
+                    .map_err(|e| FusenError::Server(e.to_string()))?,
+                Err(err) => {
+                    if let FusenError::Null = err {
+                        Frame::data(bytes::Bytes::from("null"))
+                    } else {
+                        Frame::trailers(HeaderMap::new())
+                    }
+                }
+            }],
+            fusen_common::codec::CodecType::GRPC => {
+                let mut status = "0";
+                let mut message = String::from("success");
+                let mut trailers = HeaderMap::new();
+                let mut vec = vec![];
+                match context.res {
+                    Ok(data) => {
+                        let res_wrapper = TripleResponseWrapper::form(data);
+                        let f = self
+                            .grpc_codec
+                            .encode(res_wrapper)
+                            .map_err(|e| FusenError::Server(e.to_string()))?;
+                        vec.push(f);
+                    }
+                    Err(err) => {
+                        message = match err {
+                            FusenError::Client(msg) => {
+                                status = "90";
+                                msg
+                            }
+                            FusenError::Method(msg) => {
+                                status = "91";
+                                msg
+                            }
+                            FusenError::Null => {
+                                status = "92";
+                                "FusenError::Null".to_string()
+                            }
+                            FusenError::ResourceEmpty(msg) => {
+                                status = "93";
+                                msg
+                            }
+                            FusenError::Server(msg) => {
+                                status = "94";
+                                msg
+                            }
+                        }
+                    }
+                }
+                trailers.insert("grpc-status", HeaderValue::from_str(status).unwrap());
+                trailers.insert("grpc-message", HeaderValue::from_str(&message).unwrap());
+                vec.push(Frame::trailers(trailers));
+                vec
+            }
+        };
+
+        let chunks = body.into_iter().fold(vec![], |mut vec, e| {
+            vec.push(Ok(e));
+            vec
+        });
+        let stream = futures_util::stream::iter(chunks);
+        let stream_body = http_body_util::StreamBody::new(stream);
         let response = Response::builder()
             .header("content-type", content_type)
-            .body(body)
+            .body(stream_body)
             .map_err(|e| FusenError::Server(e.to_string()))?;
         Ok(response)
     }

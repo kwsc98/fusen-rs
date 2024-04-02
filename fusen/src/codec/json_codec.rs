@@ -1,7 +1,7 @@
-use crate::StreamBody;
-use fusen_common::error::FusenError;
+use std::marker::PhantomData;
+
+use bytes::Buf;
 use http_body::Frame;
-use std::{fmt::Debug, marker::PhantomData};
 
 use super::BodyCodec;
 
@@ -10,13 +10,9 @@ pub struct JsonBodyCodec<D, E> {
     _e: PhantomData<E>,
 }
 
-impl<D, E> JsonBodyCodec<D, E>
-where
-    D: bytes::Buf + Debug,
-    E: std::marker::Sync + std::marker::Send,
-{
+impl<D, E> JsonBodyCodec<D, E> {
     pub fn new() -> Self {
-        JsonBodyCodec {
+        Self {
             _d: PhantomData,
             _e: PhantomData,
         }
@@ -25,33 +21,38 @@ where
 
 impl<D, E> BodyCodec<D, E> for JsonBodyCodec<D, E>
 where
-    D: bytes::Buf + Debug,
+    D: bytes::Buf,
     E: std::marker::Sync + std::marker::Send,
 {
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, FusenError> {
+    type DecodeType = Vec<String>;
+
+    type EncodeType = Vec<String>;
+
+    fn decode(&self, body: Vec<Frame<D>>) -> Result<Self::DecodeType, crate::Error> {
         let data = if body.is_empty() || body[0].is_trailers() {
-            return Err(FusenError::Server("receive frame err".to_string()));
+            return Err("receive frame err".into());
         } else {
             body[0].data_ref().unwrap().chunk()
         };
         Ok(if data.starts_with(b"[") {
             match serde_json::from_slice(&data) {
                 Ok(req) => req,
-                Err(err) => return Err(FusenError::Client(err.to_string())),
+                Err(err) => return Err(err.into()),
             }
         } else {
             vec![String::from_utf8(data.to_vec()).unwrap()]
         })
     }
 
-    fn encode(
-        &self,
-        res: Result<String, FusenError>,
-    ) -> Result<StreamBody<bytes::Bytes, E>, FusenError> {
-        let res = res?;
-        let chunks = vec![Ok(Frame::data(bytes::Bytes::from(res)))];
-        let stream = futures_util::stream::iter(chunks);
-        let stream_body = http_body_util::StreamBody::new(stream);
-        Ok(stream_body)
+    fn encode(&self, res: Self::EncodeType) -> Result<Frame<bytes::Bytes>, crate::Error> {
+        if res.is_empty() {
+            return Err("encode err res is empty".into());
+        }
+        let res = if res.len() == 1 {
+            res[0]
+        } else {
+            serde_json::to_string(&res)?
+        };
+        Ok(Frame::data(bytes::Bytes::from(res)))
     }
 }

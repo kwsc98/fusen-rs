@@ -56,11 +56,11 @@ impl TripleRequestWrapper {
 }
 
 impl TripleResponseWrapper {
-    pub fn get_buf(strs: String) -> Vec<u8> {
+    pub fn form(strs: String) -> Self {
         let mut trip = TripleResponseWrapper::default();
         trip.serialize_type = "fastjson".to_string();
         trip.data = strs.as_bytes().to_vec();
-        return get_buf(trip.encode_to_vec());
+        return trip;
     }
     pub fn is_empty_body(&self) -> bool {
         return self.data.starts_with("null".as_bytes());
@@ -79,7 +79,7 @@ impl TripleExceptionWrapper {
     }
 }
 
-fn get_buf(data: Vec<u8>) -> Vec<u8> {
+pub fn get_buf(data: Vec<u8>) -> Vec<u8> {
     let mut len = data.len();
     let mut u8_array = [0 as u8; 4];
     for idx in 0..4 {

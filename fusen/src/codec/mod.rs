@@ -23,14 +23,15 @@ where
     ) -> Result<Response<StreamBody<bytes::Bytes, E>>, FusenError>;
 }
 
-pub trait BodyCodec<D, E>
+pub trait BodyCodec<D,E> 
 where
-    D: bytes::Buf + Debug,
+    D: bytes::Buf,
 {
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, FusenError>;
+    type DecodeType: Send;
 
-    fn encode(
-        &self,
-        res: Result<String, FusenError>,
-    ) -> Result<StreamBody<bytes::Bytes, E>, FusenError>;
+    type EncodeType: Send;
+
+    fn decode(&self, body: Vec<Frame<D>>) -> Result<Self::DecodeType, crate::Error>;
+
+    fn encode(&self, res: Self::EncodeType) -> Result<Frame<bytes::Bytes>, crate::Error>;
 }
