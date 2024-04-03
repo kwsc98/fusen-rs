@@ -82,7 +82,7 @@ impl Register for FusenNacos {
         Box::pin(async move {
             let nacos_service_name = get_service_name(&resource);
             info!("subscribe service: {}", nacos_service_name);
-            let directory = Directory::new(Arc::new(nacos.config.server_type)).await;
+            let directory = Directory::new(Arc::new(nacos.config.server_type.clone())).await;
             let directory_clone = directory.clone();
             let naming_service = nacos.naming_service.clone();
             let (event_listener, receiver) = ServiceChangeListener::new();

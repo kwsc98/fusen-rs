@@ -52,7 +52,7 @@ impl Route {
     pub async fn get_server_resource(
         &self,
         name: &str,
-        version: Option<&str>,
+        version: std::option::Option<&'async_recursion str>,
     ) -> crate::Result<ResourceInfo> {
         let mut key = name.to_owned();
         if let Some(version) = version {

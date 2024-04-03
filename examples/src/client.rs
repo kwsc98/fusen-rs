@@ -3,16 +3,18 @@ use examples::TestServerClient;
 use fusen::client::FusenClient;
 use fusen::fusen_common;
 use fusen::fusen_common::url::UrlConfig;
-use fusen::register::zookeeper::ZookeeperConfig;
+use fusen::register::nacos::NacosConfig;
 use lazy_static::lazy_static;
 use tracing::info;
 
 lazy_static! {
     static ref CLI: FusenClient = FusenClient::build(
-        ZookeeperConfig::builder()
-            .cluster("127.0.0.1:2181".to_owned())
+        NacosConfig::builder()
+            .server_addr("127.0.0.1:8848".to_owned())
+            .app_name(Some("fusen-rust-client".to_owned()))
+            .server_type(fusen::register::Type::Fusen)
             .build()
-            .boxed()
+            .boxed(),
     );
 }
 

@@ -1,34 +1,27 @@
-use std::marker::PhantomData;
-
-use bytes::Buf;
 use http_body::Frame;
+use std::marker::PhantomData;
 
 use super::BodyCodec;
 
-pub struct JsonBodyCodec<D, E> {
+pub struct JsonBodyCodec<D> {
     _d: PhantomData<D>,
-    _e: PhantomData<E>,
 }
 
-impl<D, E> JsonBodyCodec<D, E> {
+impl<D> JsonBodyCodec<D> {
     pub fn new() -> Self {
-        Self {
-            _d: PhantomData,
-            _e: PhantomData,
-        }
+        Self { _d: PhantomData }
     }
 }
 
-impl<D, E> BodyCodec<D, E> for JsonBodyCodec<D, E>
+impl<D> BodyCodec<D> for JsonBodyCodec<D>
 where
     D: bytes::Buf,
-    E: std::marker::Sync + std::marker::Send,
 {
     type DecodeType = Vec<String>;
 
     type EncodeType = Vec<String>;
 
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Self::DecodeType, crate::Error> {
+    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, crate::Error> {
         let data = if body.is_empty() || body[0].is_trailers() {
             return Err("receive frame err".into());
         } else {
@@ -44,12 +37,12 @@ where
         })
     }
 
-    fn encode(&self, res: Self::EncodeType) -> Result<Frame<bytes::Bytes>, crate::Error> {
+    fn encode(&self, mut res: Vec<String>) -> Result<Frame<bytes::Bytes>, crate::Error> {
         if res.is_empty() {
             return Err("encode err res is empty".into());
         }
         let res = if res.len() == 1 {
-            res[0]
+            res.remove(0)
         } else {
             serde_json::to_string(&res)?
         };

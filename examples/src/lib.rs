@@ -11,10 +11,11 @@ pub struct ResDto {
     pub str: String,
 }
 
-#[fusen_trait(version = "1.0.0")]
+#[fusen_trait]
 pub trait TestServer {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> ResDto;
 
+    #[asset(path="/doRun2",method = POST)]
     async fn doRun2(&self, req: ReqDto) -> ResDto;
 }
 

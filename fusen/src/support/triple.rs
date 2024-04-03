@@ -37,14 +37,14 @@ pub struct TripleExceptionWrapper {
 }
 
 impl TripleRequestWrapper {
-    pub fn get_buf(strs: Vec<String>) -> Vec<u8> {
+    pub fn from(strs: Vec<String>) -> Self {
         let mut trip = TripleRequestWrapper::default();
         trip.serialize_type = "fastjson".to_string();
         trip.args = vec![];
         for str in strs {
             trip.args.push(str.as_bytes().to_vec());
         }
-        return get_buf(trip.encode_to_vec());
+        return trip;
     }
     pub fn get_req(self) -> Vec<String> {
         let mut res = vec![];

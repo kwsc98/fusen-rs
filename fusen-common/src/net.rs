@@ -1,7 +1,5 @@
 use std::net::IpAddr;
 
-use http::uri::Port;
-
 pub fn get_network_ip() -> std::result::Result<IpAddr, Box<dyn std::error::Error>> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("8.8.8.8:80")?;

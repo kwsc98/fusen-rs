@@ -1,6 +1,5 @@
+use bytes::Bytes;
 use fusen_common::{net::get_path, server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
-use http_body_util::Full;
-use hyper::client::conn::http1::SendRequest as SendRequestHttp1;
 use hyper::client::conn::http2::SendRequest;
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +8,8 @@ use tokio::sync::{
     mpsc::{self, UnboundedSender},
     oneshot, RwLock,
 };
+
+use crate::StreamBody;
 
 use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 pub mod nacos;
@@ -52,7 +53,7 @@ pub enum RegisterType {
     Nacos(Box<dyn UrlConfig>),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Type {
     Dubbo,
     SpringCloud,
@@ -130,8 +131,8 @@ pub struct SocketInfo {
 }
 
 pub enum SocketType {
-    HTTP1(RwLock<Option<SendRequestHttp1<Full<bytes::Bytes>>>>),
-    HTTP2(RwLock<Option<SendRequest<Full<bytes::Bytes>>>>),
+    HTTP1,
+    HTTP2(RwLock<Option<SendRequest<StreamBody<Bytes, hyper::Error>>>>),
 }
 
 impl Directory {
@@ -161,7 +162,7 @@ impl Directory {
                                     resource: item,
                                     socket: match server_type_clone.as_ref() {
                                         Type::Dubbo => SocketType::HTTP2(RwLock::new(None)),
-                                        Type::SpringCloud => SocketType::HTTP1(RwLock::new(None)),
+                                        Type::SpringCloud => SocketType::HTTP1,
                                         Type::Fusen => SocketType::HTTP2(RwLock::new(None)),
                                     },
                                 }),

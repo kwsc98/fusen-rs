@@ -1,27 +1,50 @@
-use crate::register::{RegisterBuilder, Resource, ResourceInfo};
+use crate::codec::grpc_codec::GrpcBodyCodec;
+use crate::codec::json_codec::JsonBodyCodec;
+use crate::codec::BodyCodec;
+use crate::register::{RegisterBuilder, Resource, ResourceInfo, SocketType};
 use crate::route::client::Route;
-use crate::support::triple::{TripleExceptionWrapper, TripleRequestWrapper, TripleResponseWrapper};
-use bytes::{BufMut, BytesMut};
+use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
+use crate::support::{TokioExecutor, TokioIo};
 use fusen_common::error::FusenError;
+use fusen_common::net::get_path;
 use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
-use http::{HeaderValue, Request};
-use http_body_util::Full;
-use hyper::client::conn::http2::SendRequest;
-use prost::Message;
+use http::{HeaderMap, HeaderValue, Request};
+use http_body::Frame;
+use http_body_util::BodyExt;
 use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
+use tokio::net::TcpStream;
+use tracing::error;
 
 pub struct FusenClient {
     route: Route,
+    json_codec: Box<
+        dyn BodyCodec<bytes::Bytes, EncodeType = Vec<String>, DecodeType = Vec<String>>
+            + Sync
+            + Send,
+    >,
+    grpc_codec: Box<
+        (dyn BodyCodec<
+            bytes::Bytes,
+            DecodeType = TripleResponseWrapper,
+            EncodeType = TripleRequestWrapper,
+        > + Sync
+             + Send),
+    >,
 }
 
 impl FusenClient {
     pub fn build(register_config: Box<dyn UrlConfig>) -> FusenClient {
         let registry_builder = RegisterBuilder::new(register_config).unwrap();
         let register = registry_builder.init();
+        let json_codec = JsonBodyCodec::<bytes::Bytes>::new();
+        let grpc_codec =
+            GrpcBodyCodec::<bytes::Bytes, TripleResponseWrapper, TripleRequestWrapper>::new();
         FusenClient {
             route: Route::new(register),
+            json_codec: Box::new(json_codec),
+            grpc_codec: Box::new(grpc_codec),
         }
     }
 
@@ -38,94 +61,180 @@ impl FusenClient {
         let socket_info = info
             .choose(&mut rand::thread_rng())
             .ok_or(FusenError::Client("not find server".into()))?;
-        
-        let sender = socket_info.socket;
 
-        
+        let path = match server_type.as_ref() {
+            &crate::register::Type::SpringCloud => msg.path,
+            _ => "/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name,
+        };
 
-        let mut sender: SendRequest<Full<bytes::Bytes>> = self
-            .route
-            .get_socket_sender(msg.class_name.as_ref(), msg.version.as_deref())
-            .await
-            .map_err(|e| FusenError::Client(e.to_string()))?;
-        let buf = TripleRequestWrapper::get_buf(msg.req);
+        let content_type = match server_type.as_ref() {
+            &crate::register::Type::Dubbo => ("application/grpc", "tri-service-version"),
+            _ => ("application/json", "version"),
+        };
         let mut builder = Request::builder()
-            .uri("/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name)
-            .header("content-type", "application/grpc+proto");
+            .uri(path)
+            .header("content-type", content_type.0);
         if let Some(version) = msg.version {
-            builder.headers_mut().unwrap().insert(
-                "tri-service-version",
-                HeaderValue::from_str(&version).unwrap(),
-            );
+            builder
+                .headers_mut()
+                .unwrap()
+                .insert(content_type.1, HeaderValue::from_str(&version).unwrap());
         }
+
+        let body = match server_type.as_ref() {
+            &crate::register::Type::Dubbo => {
+                let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
+                vec![
+                    Ok(self
+                        .grpc_codec
+                        .encode(triple_request_wrapper)
+                        .map_err(|e| FusenError::Client(e.to_string()))?),
+                    Ok(Frame::trailers(HeaderMap::new())),
+                ]
+            }
+            _ => vec![Ok(self
+                .json_codec
+                .encode(msg.req)
+                .map_err(|e| FusenError::Client(e.to_string()))?)],
+        };
+        let stream = futures_util::stream::iter(body);
+        let stream_body = http_body_util::StreamBody::new(stream);
         let req = builder
-            .body(Full::<bytes::Bytes>::from(buf))
+            .body(stream_body)
             .map_err(|e| FusenError::Client(e.to_string()))?;
-        let mut response = sender
-            .send_request(req)
-            .await
-            .map_err(|e| FusenError::Client(e.to_string()))?;
-        let mut res_body = BytesMut::new();
-        loop {
-            let res_frame = response
-                .frame()
-                .await
-                .map_or(Err(FusenError::Server("error frame 1".to_owned())), |e| {
-                    Ok(e)
-                })?
-                .map_err(|e| FusenError::Client(e.to_string()))?;
-            if res_frame.is_trailers() {
-                let trailers = res_frame
-                    .trailers_ref()
-                    .map_or(Err(FusenError::Server("error frame 2".to_owned())), |e| {
-                        Ok(e)
-                    })?;
-                match trailers.get("grpc-status") {
-                    Some(status) => match status.as_bytes() {
-                        b"0" => {
-                            let trip_res = TripleResponseWrapper::decode(&res_body.to_vec()[5..])
-                                .map_err(|e| FusenError::Client(e.to_string()))?;
-                            if trip_res.is_empty_body() {
-                                return Err(FusenError::Null);
-                            }
-                            let res: Res = serde_json::from_slice(&trip_res.data)
-                                .map_err(|e| FusenError::Client(e.to_string()))?;
-                            return Ok(res);
-                        }
-                        else_status => {
-                            if !res_body.is_empty() {
-                                let trip_res: TripleExceptionWrapper =
-                                    TripleExceptionWrapper::decode(&res_body.to_vec()[5..])
+        let mut response = match &socket_info.socket {
+            SocketType::HTTP1 => {
+                let resource = &socket_info.resource;
+                let io = get_tcp_stream(&resource)
+                    .await
+                    .map_err(|e| FusenError::Client(e.to_string()))?;
+                let (mut sender, _) = hyper::client::conn::http1::Builder::new()
+                    .handshake(io)
+                    .await
+                    .map_err(|e| FusenError::Client(e.to_string()))?;
+                let resource = sender.send_request(req).await.map_err(|e| {
+                    error!("error : {:?}", e);
+                    FusenError::Client(e.to_string())
+                })?;
+                resource
+            }
+            SocketType::HTTP2(sender) => {
+                let sender_read = sender.read().await;
+                let mut sender = match sender_read.as_ref() {
+                    Some(sender) => sender.clone(),
+                    None => {
+                        drop(sender_read);
+                        let mut sender_write = sender.write().await;
+                        let sender = match sender_write.as_ref() {
+                            Some(sender) => sender.clone(),
+                            None => {
+                                let resource = &socket_info.resource;
+                                let io = get_tcp_stream(&resource)
+                                    .await
+                                    .map_err(|e| FusenError::Client(e.to_string()))?;
+                                let (sender, _conn) =
+                                    hyper::client::conn::http2::Builder::new(TokioExecutor)
+                                        .adaptive_window(true)
+                                        .handshake(io)
+                                        .await
                                         .map_err(|e| FusenError::Client(e.to_string()))?;
-                                let msg = String::from_utf8(trip_res.data).unwrap();
+                                let _ = sender_write.insert(sender.clone());
+                                sender
+                            }
+                        };
+                        sender
+                    }
+                };
+                let resource = sender.send_request(req).await.map_err(|e| {
+                    error!("{:?}", e);
+                    FusenError::Client(e.to_string())
+                })?;
+                resource
+            }
+        };
+        if !response.status().is_success() {
+            if response.status().is_client_error() {
+                return Err(FusenError::Client(format!(
+                    "err code : {}",
+                    response.status().as_str()
+                )));
+            } else if response.status().is_server_error() {
+                return Err(FusenError::Server(format!(
+                    "err code : {}",
+                    response.status().as_str()
+                )));
+            }
+        }
+        let mut frame_vec = vec![];
+        while let Some(body) = response.frame().await {
+            if let Ok(body) = body {
+                if body.is_trailers() {
+                    let trailers = body
+                        .trailers_ref()
+                        .map_or(Err(FusenError::Server("error frame".to_owned())), |e| Ok(e))?;
+                    match trailers.get("grpc-status") {
+                        Some(status) => match status.as_bytes() {
+                            b"0" => {
+                                break;
+                            }
+                            else_status => {
+                                let msg = match trailers.get("grpc-message") {
+                                    Some(value) => {
+                                        "grpc-message=".to_owned()
+                                            + &String::from_utf8(value.as_bytes().to_vec()).unwrap()
+                                    }
+                                    None => {
+                                        "grpc-status=".to_owned()
+                                            + &String::from_utf8(else_status.to_vec()).unwrap()
+                                    }
+                                };
                                 match else_status {
                                     b"90" => return Err(FusenError::Client(msg)),
                                     b"91" => return Err(FusenError::Method(msg)),
                                     b"92" => return Err(FusenError::Null),
                                     b"93" => return Err(FusenError::ResourceEmpty(msg)),
                                     _ => return Err(FusenError::Server(msg)),
-                                }
+                                };
                             }
-                            return Err(FusenError::Server(match trailers.get("grpc-message") {
-                                Some(value) => {
-                                    "grpc-message=".to_owned()
-                                        + &String::from_utf8(value.as_bytes().to_vec()).unwrap()
-                                }
-                                None => {
-                                    "grpc-status=".to_owned()
-                                        + &String::from_utf8(else_status.to_vec()).unwrap()
-                                }
-                            }));
-                        }
-                    },
-                    None => return Err(FusenError::Server("error frame 3".to_owned())),
+                        },
+                        None => return Err(FusenError::Server("error frame".to_owned())),
+                    }
                 }
+                frame_vec.push(body);
             } else {
-                let res_data = res_frame
-                    .into_data()
-                    .map_err(|_e| FusenError::Server("error frame 4".to_owned()))?;
-                let _ = res_body.put(res_data);
+                break;
             }
         }
+        let res = match server_type.as_ref() {
+            &crate::register::Type::Dubbo => {
+                let response = self
+                    .grpc_codec
+                    .decode(frame_vec)
+                    .map_err(|e| FusenError::Client(e.to_string()))?;
+                String::from_utf8(response.data).map_err(|e| FusenError::Client(e.to_string()))?
+            }
+            _ => {
+                let mut response = self
+                    .json_codec
+                    .decode(frame_vec)
+                    .map_err(|e| FusenError::Client(e.to_string()))?;
+                response.remove(0)
+            }
+        };
+        let res: Res = serde_json::from_str(&res).map_err(|e| FusenError::Client(e.to_string()))?;
+        return Ok(res);
     }
+}
+
+async fn get_tcp_stream(resource: &Resource) -> Result<TokioIo<TcpStream>, crate::Error> {
+    let url = get_path(resource.ip.clone(), resource.port.as_deref())
+        .parse::<hyper::Uri>()
+        .map_err(|e| FusenError::Client(e.to_string()))?;
+    let host = url.host().expect("uri has no host");
+    let port = url.port_u16().unwrap_or(80);
+    let addr = format!("{}:{}", host, port);
+    Ok(TcpStream::connect(addr)
+        .await
+        .map(TokioIo::new)
+        .map_err(|e| FusenError::Client(e.to_string()))?)
 }

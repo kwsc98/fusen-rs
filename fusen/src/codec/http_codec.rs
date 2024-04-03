@@ -7,26 +7,25 @@ use fusen_common::{error::FusenError, logs::get_uuid, FusenContext, MetaData};
 use http::{HeaderMap, HeaderValue, Response};
 use http_body::Frame;
 use http_body_util::BodyExt;
-use std::{fmt::Debug, marker::PhantomData};
+use std::fmt::Debug;
 
-pub struct FusenHttpCodec<D, E> {
+pub struct FusenHttpCodec<D> {
     json_codec:
-        Box<dyn BodyCodec<D, E, EncodeType = Vec<String>, DecodeType = Vec<String>> + Sync + Send>,
+        Box<dyn BodyCodec<D, EncodeType = Vec<String>, DecodeType = Vec<String>> + Sync + Send>,
     grpc_codec: Box<
-        (dyn BodyCodec<D, E, DecodeType = TripleRequestWrapper, EncodeType = TripleResponseWrapper>
+        (dyn BodyCodec<D, DecodeType = TripleRequestWrapper, EncodeType = TripleResponseWrapper>
              + Sync
              + Send),
     >,
 }
 
-impl<D, E> FusenHttpCodec<D, E>
+impl<D> FusenHttpCodec<D>
 where
     D: bytes::Buf + Debug + Sync + Send + 'static,
-    E: std::marker::Sync + std::marker::Send + 'static,
 {
     pub fn new() -> Self {
-        let json_codec = JsonBodyCodec::<D, E>::new();
-        let grpc_codec = GrpcBodyCodec::<D, E, TripleRequestWrapper, TripleResponseWrapper>::new();
+        let json_codec = JsonBodyCodec::<D>::new();
+        let grpc_codec = GrpcBodyCodec::<D, TripleRequestWrapper, TripleResponseWrapper>::new();
         FusenHttpCodec {
             json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
@@ -34,7 +33,7 @@ where
     }
 }
 
-impl<D, E> HttpCodec<D, E> for FusenHttpCodec<D, E>
+impl<D, E> HttpCodec<D, E> for FusenHttpCodec<D>
 where
     D: bytes::Buf + Debug,
     E: Send + Sync + Debug,

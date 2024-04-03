@@ -65,7 +65,7 @@ impl Register for FusenZookeeper {
     ) -> fusen_common::FusenFuture<Result<super::Directory, crate::Error>> {
         let cluster = self.config.cluster.clone();
         let path = self.root_path.clone();
-        let server_type = self.config.server_type;
+        let server_type = self.config.server_type.clone();
         Box::pin(async move {
             creat_resource_node(cluster.clone(), path.clone(), &resource).await?;
             listener_resource_node_change(cluster, path, server_type, resource).await

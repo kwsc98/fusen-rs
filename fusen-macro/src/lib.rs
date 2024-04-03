@@ -76,7 +76,6 @@ pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     };
-    eprintln!("{:?}",token.to_string());
     token.into()
 }
 
