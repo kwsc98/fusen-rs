@@ -11,7 +11,7 @@ use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
 use http::{HeaderMap, HeaderValue, Request};
 use http_body::Frame;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Full};
 use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
@@ -84,23 +84,18 @@ impl FusenClient {
         let body = match server_type.as_ref() {
             &crate::register::Type::Dubbo => {
                 let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
-                vec![
-                    Ok(self
-                        .grpc_codec
-                        .encode(triple_request_wrapper)
-                        .map_err(|e| FusenError::Client(e.to_string()))?),
-                    Ok(Frame::trailers(HeaderMap::new())),
-                ]
+                self.grpc_codec
+                    .encode(triple_request_wrapper)
+                    .map_err(|e| FusenError::Client(e.to_string()))?
             }
-            _ => vec![Ok(self
+            _ => self
                 .json_codec
                 .encode(msg.req)
-                .map_err(|e| FusenError::Client(e.to_string()))?)],
+                .map_err(|e| FusenError::Client(e.to_string()))?,
         };
-        let stream = futures_util::stream::iter(body);
-        let stream_body = http_body_util::StreamBody::new(stream);
+
         let req = builder
-            .body(stream_body)
+            .body(Full::new(body))
             .map_err(|e| FusenError::Client(e.to_string()))?;
         let mut response = match &socket_info.socket {
             SocketType::HTTP1 => {
@@ -108,23 +103,28 @@ impl FusenClient {
                 let io = get_tcp_stream(&resource)
                     .await
                     .map_err(|e| FusenError::Client(e.to_string()))?;
-                let (mut sender, _) = hyper::client::conn::http1::Builder::new()
+                let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
                     .handshake(io)
                     .await
                     .map_err(|e| FusenError::Client(e.to_string()))?;
+                tokio::spawn(async move {
+                    if let Err(err) = conn.await {
+                        error!("conn err : {}", err);
+                    }
+                });
                 let resource = sender.send_request(req).await.map_err(|e| {
                     error!("error : {:?}", e);
                     FusenError::Client(e.to_string())
                 })?;
                 resource
             }
-            SocketType::HTTP2(sender) => {
-                let sender_read = sender.read().await;
+            SocketType::HTTP2(sender_lock) => {
+                let sender_read = sender_lock.read().await;
                 let mut sender = match sender_read.as_ref() {
                     Some(sender) => sender.clone(),
                     None => {
                         drop(sender_read);
-                        let mut sender_write = sender.write().await;
+                        let mut sender_write = sender_lock.write().await;
                         let sender = match sender_write.as_ref() {
                             Some(sender) => sender.clone(),
                             None => {
@@ -132,12 +132,20 @@ impl FusenClient {
                                 let io = get_tcp_stream(&resource)
                                     .await
                                     .map_err(|e| FusenError::Client(e.to_string()))?;
-                                let (sender, _conn) =
+                                let (sender, conn) =
                                     hyper::client::conn::http2::Builder::new(TokioExecutor)
                                         .adaptive_window(true)
                                         .handshake(io)
                                         .await
                                         .map_err(|e| FusenError::Client(e.to_string()))?;
+                                let sender_lock = sender_lock.clone();
+                                tokio::spawn(async move {
+                                    let sender = sender_lock;
+                                    if let Err(err) = conn.await {
+                                        sender.write().await.take();
+                                        error!("conn err : {}", err);
+                                    }
+                                });
                                 let _ = sender_write.insert(sender.clone());
                                 sender
                             }

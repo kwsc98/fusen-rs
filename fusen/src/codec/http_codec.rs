@@ -91,10 +91,11 @@ where
         };
         let body = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => vec![match context.res {
-                Ok(res) => self
-                    .json_codec
-                    .encode(vec![res])
-                    .map_err(|e| FusenError::Server(e.to_string()))?,
+                Ok(res) => Frame::data(
+                    self.json_codec
+                        .encode(vec![res])
+                        .map_err(|e| FusenError::Server(e.to_string()))?,
+                ),
                 Err(err) => {
                     if let FusenError::Null = err {
                         Frame::data(bytes::Bytes::from("null"))
@@ -111,11 +112,11 @@ where
                 match context.res {
                     Ok(data) => {
                         let res_wrapper = TripleResponseWrapper::form(data);
-                        let f = self
+                        let buf = self
                             .grpc_codec
                             .encode(res_wrapper)
                             .map_err(|e| FusenError::Server(e.to_string()))?;
-                        vec.push(f);
+                        vec.push(Frame::data(buf));
                     }
                     Err(err) => {
                         message = match err {

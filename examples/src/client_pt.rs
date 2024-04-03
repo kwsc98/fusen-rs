@@ -13,8 +13,9 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("fusen-rust-server".to_owned()))
+            .server_type(fusen::register::Type::Dubbo)
             .build()
-            .boxed()
+            .boxed(),
     );
 }
 
@@ -86,7 +87,9 @@ async fn do_run(client: TestServerClient, sender: mpsc::Sender<i32>) {
                     str: "client say hello 1".to_string(),
                 })
                 .await;
-            info!("{:?}", res);
+            if let Err(err) = res {
+                info!("{:?}", err);
+            }
             drop(temp_sender);
         });
     }

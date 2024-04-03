@@ -12,7 +12,7 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("fusen-rust-client".to_owned()))
-            .server_type(fusen::register::Type::Fusen)
+            .server_type(fusen::register::Type::SpringCloud)
             .build()
             .boxed(),
     );

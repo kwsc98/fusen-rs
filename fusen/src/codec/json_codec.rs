@@ -37,7 +37,7 @@ where
         })
     }
 
-    fn encode(&self, mut res: Vec<String>) -> Result<Frame<bytes::Bytes>, crate::Error> {
+    fn encode(&self, mut res: Vec<String>) -> Result<bytes::Bytes, crate::Error> {
         if res.is_empty() {
             return Err("encode err res is empty".into());
         }
@@ -46,6 +46,6 @@ where
         } else {
             serde_json::to_string(&res)?
         };
-        Ok(Frame::data(bytes::Bytes::from(res)))
+        Ok(bytes::Bytes::from(res))
     }
 }

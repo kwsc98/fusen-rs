@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use fusen_common::{net::get_path, server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
+use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 
 use serde::{Deserialize, Serialize};
@@ -132,7 +133,7 @@ pub struct SocketInfo {
 
 pub enum SocketType {
     HTTP1,
-    HTTP2(RwLock<Option<SendRequest<StreamBody<Bytes, hyper::Error>>>>),
+    HTTP2(Arc<RwLock<Option<SendRequest<Full<Bytes>>>>>),
 }
 
 impl Directory {
@@ -161,9 +162,13 @@ impl Directory {
                                 None => Arc::new(SocketInfo {
                                     resource: item,
                                     socket: match server_type_clone.as_ref() {
-                                        Type::Dubbo => SocketType::HTTP2(RwLock::new(None)),
+                                        Type::Dubbo => {
+                                            SocketType::HTTP2(Arc::new(RwLock::new(None)))
+                                        }
                                         Type::SpringCloud => SocketType::HTTP1,
-                                        Type::Fusen => SocketType::HTTP2(RwLock::new(None)),
+                                        Type::Fusen => {
+                                            SocketType::HTTP2(Arc::new(RwLock::new(None)))
+                                        }
                                     },
                                 }),
                             });
