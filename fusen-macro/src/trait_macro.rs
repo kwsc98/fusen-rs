@@ -19,9 +19,15 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let mut methods_cache = HashMap::new();
     let (id, methods_info) = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => {
-            let methods = methods_info.1.iter().fold(vec![], |mut vec, e| {
+            let methods = methods_info.1.into_iter().fold(vec![], |mut vec, e| {
                 vec.push(e.to_json_str());
-                methods_cache.insert(e.get_name(), (e.get_id(), e.get_path()));
+                let MethodResource {
+                    id,
+                    path,
+                    name,
+                    method,
+                } = e;
+                methods_cache.insert(name, (id, path, method));
                 vec
             });
             (methods_info.0, methods)
@@ -64,7 +70,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             }
             ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
-        let (methos_id, methos_path) = methods_cache.get(&ident.to_string()).unwrap();
+        let (methos_id, methos_path, methos_type) = methods_cache.get(&ident.to_string()).unwrap();
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
@@ -81,7 +87,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let group : Option<&str> = #group;
                     let msg = fusen::fusen_common::FusenContext::new (
                         fusen::fusen_common::logs::get_uuid(),
-                        #methos_path.to_string(),
+                        fusen::fusen_common::Path::new(#methos_type,#methos_path.to_string()),
                         fusen::fusen_common::MetaData::new(),
                         version.map(|e|e.to_string()),
                         group.map(|e|e.to_string()),

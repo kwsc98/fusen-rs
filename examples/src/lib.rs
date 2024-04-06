@@ -12,6 +12,7 @@ pub struct ResDto {
 }
 
 #[fusen_trait]
+#[asset(id = "service-provider")]
 pub trait TestServer {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> ResDto;
 

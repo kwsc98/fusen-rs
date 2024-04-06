@@ -41,7 +41,7 @@ async fn main() {
         .add_register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("fusen-rust-server".to_owned()))
+                .app_name(Some("service-provider".to_owned()))
                 .server_type(fusen::register::Type::SpringCloud)
                 .build()
                 .boxed(),

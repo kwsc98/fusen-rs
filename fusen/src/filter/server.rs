@@ -1,5 +1,5 @@
 use super::FusenFilter;
-use fusen_common::{error::FusenError, server::RpcServer, FusenContext};
+use fusen_common::{error::FusenError, server::RpcServer, FusenContext, MethodResource, Path};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Default)]
@@ -14,17 +14,27 @@ impl RpcServerFilter {
         for item in &cache {
             let info = item.1.get_info();
             for method in info.methods {
-                let method_info = method.into();
-                let path_rpc = "/".to_owned() + &info.id + "/" + &method_info.0;
-                let path = method_info.1;
-                path_cache.insert(path_rpc, (info.id.to_string(), method_info.2.clone()));
-                path_cache.insert(path, (info.id.to_string(), method_info.2));
+                let MethodResource {
+                    id,
+                    path,
+                    name,
+                    method,
+                } = method;
+                let path_rpc = "/".to_owned() + &info.id + "/" + &id;
+                path_cache.insert(
+                    Path::POST(path_rpc).get_key(),
+                    (info.id.to_string(), name.clone()),
+                );
+                path_cache.insert(
+                    Path::new(&method, path).get_key(),
+                    (info.id.to_string(), name),
+                );
             }
         }
         return RpcServerFilter { cache, path_cache };
     }
     pub fn get_server(&self, msg: &mut FusenContext) -> Option<Arc<Box<dyn RpcServer>>> {
-        let info = self.path_cache.get(&msg.path)?;
+        let info = self.path_cache.get(&msg.path.get_key())?;
         msg.class_name = info.0.clone();
         msg.method_name = info.1.clone();
         let mut class_name = msg.class_name.clone();

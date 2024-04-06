@@ -65,13 +65,12 @@ impl MetaData {
 #[derive(Debug)]
 pub struct FusenContext {
     pub unique_identifier: String,
-    pub path: String,
+    pub path: Path,
     pub meta_data: MetaData,
     pub class_name: String,
     pub method_name: String,
     pub version: Option<String>,
     pub group: Option<String>,
-
     pub req: Vec<String>,
     pub res: core::result::Result<String, FusenError>,
 }
@@ -79,7 +78,7 @@ pub struct FusenContext {
 impl FusenContext {
     pub fn new(
         unique_identifier: String,
-        path: String,
+        path: Path,
         meta_data: MetaData,
         version: Option<String>,
         group: Option<String>,
@@ -103,16 +102,45 @@ impl FusenContext {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MethodResource {
-    id: String,
-    name: String,
-    path: String,
-    method: String,
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub method: String,
+}
+
+#[derive(Debug)]
+pub enum Path {
+    GET(String),
+    POST(String),
+}
+
+impl Path {
+    pub fn get_key(&self) -> String {
+        let mut key = String::new();
+        match self {
+            Path::GET(path) => {
+                key.push_str("get:");
+                key.push_str(&path);
+            }
+            Path::POST(path) => {
+                key.push_str("post:");
+                key.push_str(&path);
+            }
+        };
+        key
+    }
+
+    pub fn new(method: &str, path: String) -> Self {
+        if method.to_lowercase().contains("get") {
+            Self::GET(path)
+        } else {
+            Self::POST(path)
+        }
+    }
 }
 
 impl MethodResource {
-    pub fn into(self) -> (String, String, String) {
-        return (self.id, self.path, self.name);
-    }
+
     pub fn get_id(&self) -> String {
         return self.id.to_string();
     }
@@ -121,6 +149,9 @@ impl MethodResource {
     }
     pub fn get_path(&self) -> String {
         return self.path.to_string();
+    }
+    pub fn get_method(&self) -> String {
+        return self.method.to_string();
     }
     pub fn new(id: String, name: String, path: String, method: String) -> Self {
         Self {

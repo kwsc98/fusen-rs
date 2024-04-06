@@ -80,7 +80,11 @@ impl Register for FusenNacos {
     fn subscribe(&self, resource: super::Resource) -> FusenFuture<Result<Directory, crate::Error>> {
         let nacos = self.clone();
         Box::pin(async move {
-            let nacos_service_name = get_service_name(&resource);
+            let nacos_service_name = if let Type::SpringCloud = &nacos.config.server_type {
+                get_application_name(&resource)
+            } else {
+                get_service_name(&resource)
+            };
             info!("subscribe service: {}", nacos_service_name);
             let directory = Directory::new(Arc::new(nacos.config.server_type.clone())).await;
             let directory_clone = directory.clone();
@@ -235,6 +239,10 @@ fn get_service_name(resource: &super::Resource) -> String {
         resource.version.as_ref().map_or("", |e| &e),
         resource.group.as_ref().map_or("", |e| &e),
     )
+}
+
+fn get_application_name(resource: &super::Resource) -> String {
+    resource.server_name.clone()
 }
 
 fn get_instance(ip: String, port: String, params: HashMap<String, String>) -> ServiceInstance {

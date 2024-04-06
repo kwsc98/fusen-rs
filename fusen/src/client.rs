@@ -9,8 +9,7 @@ use fusen_common::error::FusenError;
 use fusen_common::net::get_path;
 use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
-use http::{HeaderMap, HeaderValue, Request};
-use http_body::Frame;
+use http::{HeaderValue, Method, Request};
 use http_body_util::{BodyExt, Full};
 use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
@@ -64,23 +63,25 @@ impl FusenClient {
 
         let path = match server_type.as_ref() {
             &crate::register::Type::SpringCloud => msg.path,
-            _ => "/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name,
+            _ => fusen_common::Path::POST(
+                "/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name,
+            ),
         };
-
         let content_type = match server_type.as_ref() {
             &crate::register::Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
         };
-        let mut builder = Request::builder()
-            .uri(path)
-            .header("content-type", content_type.0);
+        let builder = Request::builder().header("content-type", content_type.0);
+        let mut builder = match path {
+            fusen_common::Path::GET(path) => builder.method("GET").uri(path),
+            fusen_common::Path::POST(path) => builder.method("POST").uri(path),
+        };
         if let Some(version) = msg.version {
             builder
                 .headers_mut()
                 .unwrap()
                 .insert(content_type.1, HeaderValue::from_str(&version).unwrap());
         }
-
         let body = match server_type.as_ref() {
             &crate::register::Type::Dubbo => {
                 let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
@@ -93,10 +94,13 @@ impl FusenClient {
                 .encode(msg.req)
                 .map_err(|e| FusenError::Client(e.to_string()))?,
         };
-
         let req = builder
+            .header("accept", "*/*")
+            .header("connection", "keep-alive")
+            // .header("Content-Length", body.len())
             .body(Full::new(body))
             .map_err(|e| FusenError::Client(e.to_string()))?;
+        println!("{:?}", req);
         let mut response = match &socket_info.socket {
             SocketType::HTTP1 => {
                 let resource = &socket_info.resource;
@@ -238,6 +242,7 @@ async fn get_tcp_stream(resource: &Resource) -> Result<TokioIo<TcpStream>, crate
     let url = get_path(resource.ip.clone(), resource.port.as_deref())
         .parse::<hyper::Uri>()
         .map_err(|e| FusenError::Client(e.to_string()))?;
+    println!("{:?}",url);
     let host = url.host().expect("uri has no host");
     let port = url.port_u16().unwrap_or(80);
     let addr = format!("{}:{}", host, port);

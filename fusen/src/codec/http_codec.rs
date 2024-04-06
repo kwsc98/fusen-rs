@@ -3,7 +3,7 @@ use crate::{
     support::triple::{TripleRequestWrapper, TripleResponseWrapper},
     BoxBody, StreamBody,
 };
-use fusen_common::{error::FusenError, logs::get_uuid, FusenContext, MetaData};
+use fusen_common::{error::FusenError, logs::get_uuid, FusenContext, MetaData, Path};
 use http::{HeaderMap, HeaderValue, Response};
 use http_body::Frame;
 use http_body_util::BodyExt;
@@ -44,6 +44,7 @@ where
     ) -> Result<FusenContext, FusenError> {
         let meta_data = MetaData::from(req.headers());
         let path = req.uri().path().to_string();
+        let method = req.method().to_string();
         let mut frame_vec = vec![];
         while let Some(frame) = req.body_mut().frame().await {
             if let Ok(frame) = frame {
@@ -70,7 +71,7 @@ where
             .map(|e| e.clone());
         Ok(FusenContext::new(
             unique_identifier,
-            path,
+            Path::new(&method, path),
             meta_data,
             version,
             None,
@@ -100,7 +101,7 @@ where
                     if let FusenError::Null = err {
                         Frame::data(bytes::Bytes::from("null"))
                     } else {
-                        Frame::trailers(HeaderMap::new())
+                        return Err(err);
                     }
                 }
             }],

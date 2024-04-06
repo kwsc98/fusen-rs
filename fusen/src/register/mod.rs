@@ -9,9 +9,6 @@ use tokio::sync::{
     mpsc::{self, UnboundedSender},
     oneshot, RwLock,
 };
-
-use crate::StreamBody;
-
 use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 pub mod nacos;
 pub mod zookeeper;
