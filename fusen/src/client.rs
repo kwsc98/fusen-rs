@@ -9,7 +9,7 @@ use fusen_common::error::FusenError;
 use fusen_common::net::get_path;
 use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
-use http::{HeaderValue, Method, Request};
+use http::{HeaderValue, Request, Version};
 use http_body_util::{BodyExt, Full};
 use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
@@ -94,15 +94,14 @@ impl FusenClient {
                 .encode(msg.req)
                 .map_err(|e| FusenError::Client(e.to_string()))?,
         };
-        let req = builder
-            .header("accept", "*/*")
+        let mut req = builder
             .header("connection", "keep-alive")
-            // .header("Content-Length", body.len())
+            .header("Content-Length", body.len())
             .body(Full::new(body))
             .map_err(|e| FusenError::Client(e.to_string()))?;
-        println!("{:?}", req);
         let mut response = match &socket_info.socket {
             SocketType::HTTP1 => {
+                *req.version_mut() = Version::HTTP_10;
                 let resource = &socket_info.resource;
                 let io = get_tcp_stream(&resource)
                     .await
@@ -242,7 +241,6 @@ async fn get_tcp_stream(resource: &Resource) -> Result<TokioIo<TcpStream>, crate
     let url = get_path(resource.ip.clone(), resource.port.as_deref())
         .parse::<hyper::Uri>()
         .map_err(|e| FusenError::Client(e.to_string()))?;
-    println!("{:?}",url);
     let host = url.host().expect("uri has no host");
     let port = url.port_u16().unwrap_or(80);
     let addr = format!("{}:{}", host, port);

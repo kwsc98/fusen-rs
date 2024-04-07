@@ -14,7 +14,7 @@ struct TestServerImpl {
     _db: String,
 }
 
-#[fusen_server]
+#[fusen_server(version = "1.0.0")]
 impl TestServer for TestServerImpl {
     async fn do_run1(&self, req1: ReqDto, req2: ReqDto) -> FusenResult<ResDto> {
         info!("req1 : {:?} , req1 : {:?}", req1, req2);
@@ -41,13 +41,12 @@ async fn main() {
         .add_register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("service-provider".to_owned()))
+                .app_name(Some("springcloud-service".to_owned()))
                 .server_type(fusen::register::Type::SpringCloud)
                 .build()
                 .boxed(),
         )
         .add_protocol(Protocol::HTTP("8081".to_owned()))
-        .add_protocol(Protocol::HTTP2("8082".to_owned()))
         .add_fusen_server(Box::new(server))
         .run()
         .await;

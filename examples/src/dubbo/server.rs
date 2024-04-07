@@ -1,16 +1,12 @@
 use examples::{DemoService, ReqDto, ResDto};
 use fusen::fusen_common::url::UrlConfig;
+use fusen::fusen_macro::asset;
+use fusen::register::nacos::NacosConfig;
 use fusen::{
-    fusen_common::{
-        self,
-        server::{Protocol, RpcServer},
-        FusenResult,
-    },
-    fusen_macro::{self, asset},
-    register::nacos::NacosConfig,
+    fusen_common::{self, server::Protocol, FusenResult},
+    fusen_macro::fusen_server,
     server::FusenServer,
 };
-use fusen_macro::fusen_server;
 use tracing::info;
 
 #[derive(Clone, Debug)]
@@ -40,17 +36,17 @@ async fn main() {
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    let ds = server.get_info();
-    println!("{:?}", ds);
     FusenServer::build()
         .add_register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("fusen-rust-server".to_owned()))
+                .app_name(Some("dubbo-service".to_owned()))
+                .server_type(fusen::register::Type::Dubbo)
                 .build()
                 .boxed(),
         )
-        .add_protocol(Protocol::HTTP2("8081".to_owned()))
+        .add_protocol(Protocol::HTTP("8081".to_owned()))
+        .add_protocol(Protocol::HTTP2("8082".to_owned()))
         .add_fusen_server(Box::new(server))
         .run()
         .await;

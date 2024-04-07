@@ -1,5 +1,4 @@
-use examples::ReqDto;
-use examples::TestServerClient;
+use examples::{ReqDto, TestServerClient};
 use fusen::client::FusenClient;
 use fusen::fusen_common;
 use fusen::fusen_common::url::UrlConfig;
@@ -11,7 +10,7 @@ lazy_static! {
     static ref CLI: FusenClient = FusenClient::build(
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
-            .app_name(Some("fusen-rust-client".to_owned()))
+            .app_name(Some("springcloud-client".to_owned()))
             .server_type(fusen::register::Type::SpringCloud)
             .build()
             .boxed(),
