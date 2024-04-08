@@ -30,6 +30,11 @@ pub fn asset(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn spring_cloud(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+#[proc_macro_attribute]
 pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = UrlConfigAttr::from_attr(attr);
     if let Err(err) = attr {
@@ -39,9 +44,12 @@ pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = attr.attr;
     let org_item = parse_macro_input!(item as DeriveInput);
     let Some(attr) = attr else {
-        return syn::Error::new_spanned(org_item.to_token_stream(), "url_config must label to attr")
-            .into_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            org_item.to_token_stream(),
+            "url_config must label to attr",
+        )
+        .into_compile_error()
+        .into();
     };
     let id = &org_item.ident;
     let token = quote! {
@@ -143,7 +151,8 @@ fusen_attr! {
     ResourceAttr,
     id,
     path,
-    method
+    method,
+    spring_cloud
 }
 
 fusen_attr! {

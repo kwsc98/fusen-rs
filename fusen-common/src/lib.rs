@@ -42,6 +42,16 @@ impl MetaData {
     pub fn get_iter(&self) -> Iter<String, String> {
         self.inner.iter()
     }
+    pub fn clone_map(&self) -> HashMap<String, String> {
+        self.inner.clone()
+    }
+
+    pub fn insert(&mut self, key: String, value: String) -> Option<String> {
+        self.inner.insert(key, value)
+    }
+    pub fn remove(&mut self, key: &str) -> Option<String> {
+        self.inner.remove(key)
+    }
 }
 
 impl From<&HeaderMap<HeaderValue>> for MetaData {
@@ -140,7 +150,6 @@ impl Path {
 }
 
 impl MethodResource {
-
     pub fn get_id(&self) -> String {
         return self.id.to_string();
     }

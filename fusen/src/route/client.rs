@@ -1,5 +1,6 @@
 use crate::register::{Category, Directory, Register, Resource, ResourceInfo};
 use async_recursion::async_recursion;
+use fusen_common::FusenContext;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -49,11 +50,9 @@ impl Route {
     }
 
     #[async_recursion]
-    pub async fn get_server_resource(
-        &self,
-        name: &str,
-        version: std::option::Option<&'async_recursion str>,
-    ) -> crate::Result<ResourceInfo> {
+    pub async fn get_server_resource(&self, context: &FusenContext) -> crate::Result<ResourceInfo> {
+        let name = &context.class_name;
+        let version = context.version.as_ref();
         let mut key = name.to_owned();
         if let Some(version) = version {
             key.push_str(":");
@@ -75,7 +74,7 @@ impl Route {
                         methods: vec![],
                         ip: fusen_common::net::get_ip(),
                         port: None,
-                        params: HashMap::new(),
+                        params: context.meta_data.clone_map(),
                     };
                     let directory = self.register.subscribe(resource_client).await;
                     if let Err(err) = directory {
@@ -91,7 +90,7 @@ impl Route {
                         RouteReceiver::GET(_) => return Err("err receiver".into()),
                         RouteReceiver::CHANGE => {}
                     };
-                    return self.get_server_resource(name, version).await;
+                    return self.get_server_resource(context).await;
                 }
                 let rev = rev.unwrap();
                 let info = rev.get().await?;

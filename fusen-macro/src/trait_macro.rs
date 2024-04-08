@@ -17,9 +17,9 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     };
     let input = parse_macro_input!(item as ItemTrait);
     let mut methods_cache = HashMap::new();
-    let (id, methods_info) = match get_resource_by_trait(input.clone()) {
+    let (id, spring_cloud_name, methods_info) = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => {
-            let methods = methods_info.1.into_iter().fold(vec![], |mut vec, e| {
+            let methods = methods_info.2.into_iter().fold(vec![], |mut vec, e| {
                 vec.push(e.to_json_str());
                 let MethodResource {
                     id,
@@ -30,7 +30,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                 methods_cache.insert(name, (id, path, method));
                 vec
             });
-            (methods_info.0, methods)
+            (methods_info.0, methods_info.1, methods)
         }
         Err(err) => return err.into_compile_error().into(),
     };
@@ -85,10 +85,12 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     )*
                     let version : Option<&str> = #version;
                     let group : Option<&str> = #group;
+                    let mut mate_data = fusen::fusen_common::MetaData::new();
+                    mate_data.insert("spring_cloud_name".to_string(),#spring_cloud_name.to_string());
                     let msg = fusen::fusen_common::FusenContext::new (
                         fusen::fusen_common::logs::get_uuid(),
                         fusen::fusen_common::Path::new(#methos_type,#methos_path.to_string()),
-                        fusen::fusen_common::MetaData::new(),
+                        mate_data,
                         version.map(|e|e.to_string()),
                         group.map(|e|e.to_string()),
                         #package.to_owned(),
@@ -164,13 +166,19 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_trait(item: ItemTrait) -> Result<(String, Vec<MethodResource>), syn::Error> {
+fn get_resource_by_trait(
+    item: ItemTrait,
+) -> Result<(String, String, Vec<MethodResource>), syn::Error> {
     let mut res = vec![];
     let attrs = &item.attrs;
     let resource = get_asset_by_attrs(attrs)?;
     let parent_id = match resource.id {
         Some(id) => id,
         None => item.ident.to_string(),
+    };
+    let spring_cloud_name = match resource.spring_cloud {
+        Some(name) => name,
+        None => parent_id.clone(),
     };
     let parent_path = match resource.path {
         Some(path) => path,
@@ -206,5 +214,5 @@ fn get_resource_by_trait(item: ItemTrait) -> Result<(String, Vec<MethodResource>
             ));
         }
     }
-    return Ok((parent_id, res));
+    return Ok((parent_id, spring_cloud_name, res));
 }

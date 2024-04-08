@@ -23,7 +23,7 @@ where
     ) -> Result<Response<StreamBody<bytes::Bytes, E>>, FusenError>;
 }
 
-pub trait BodyCodec<D> 
+pub trait BodyCodec<D>
 where
     D: bytes::Buf,
 {

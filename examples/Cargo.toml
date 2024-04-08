@@ -8,25 +8,12 @@ description.workspace = true
 
 
 [[bin]]
-name = "fusen-server"
-path = "src/fusen/server.rs"
+name = "client"
+path = "src/client.rs"
 [[bin]]
-name = "fusen-client"
-path = "src/fusen/client.rs"
+name = "server"
+path = "src/server.rs"
 
-[[bin]]
-name = "dubbo-server"
-path = "src/dubbo/server.rs"
-[[bin]]
-name = "dubbo-client"
-path = "src/dubbo/client.rs"
-
-[[bin]]
-name = "springcloud-server"
-path = "src/springcloud/server.rs"
-[[bin]]
-name = "springcloud-client"
-path = "src/springcloud/client.rs"
 
 
 [dependencies]

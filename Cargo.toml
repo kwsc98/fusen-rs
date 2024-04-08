@@ -3,7 +3,6 @@ members = ["fusen-common","fusen-macro","fusen", "examples"]
 resolver = "2"
 
 [workspace.package]
-name = "fusen"
 version = "0.2.0"
 authors = ["kwsc98 <kwsc98@gmail.com>"]
 edition = "2021"

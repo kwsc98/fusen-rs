@@ -60,6 +60,9 @@ impl Register for FusenNacos {
     fn register(&self, resource: super::Resource) -> FusenFuture<Result<(), crate::Error>> {
         let nacos = self.clone();
         Box::pin(async move {
+            if let Type::SpringCloud = nacos.config.server_type {
+                return Ok(());
+            }
             let group = (&resource).group.clone();
             let nacos_service_name = get_service_name(&resource);
             let nacos_service_instance =
@@ -242,7 +245,10 @@ fn get_service_name(resource: &super::Resource) -> String {
 }
 
 fn get_application_name(resource: &super::Resource) -> String {
-    resource.server_name.clone()
+    match resource.params.get("spring_cloud_name") {
+        Some(name) => name.clone(),
+        None => resource.server_name.clone(),
+    }
 }
 
 fn get_instance(ip: String, port: String, params: HashMap<String, String>) -> ServiceInstance {

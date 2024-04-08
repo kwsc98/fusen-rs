@@ -53,7 +53,7 @@ impl FusenClient {
     {
         let resource_info: ResourceInfo = self
             .route
-            .get_server_resource(msg.class_name.as_ref(), msg.version.as_deref())
+            .get_server_resource(&msg)
             .await
             .map_err(|e| FusenError::Client(e.to_string()))?;
         let ResourceInfo { server_type, info } = resource_info;

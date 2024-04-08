@@ -3,13 +3,13 @@ use fusen_common::{net::get_path, server::Protocol, url::UrlConfig, FusenFuture,
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 
+use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{
     mpsc::{self, UnboundedSender},
     oneshot, RwLock,
 };
-use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 pub mod nacos;
 pub mod zookeeper;
 

@@ -6,14 +6,13 @@ use crate::support::triple::get_buf;
 
 use super::BodyCodec;
 
-pub struct GrpcBodyCodec<D,U, T> 
-{   
+pub struct GrpcBodyCodec<D, U, T> {
     _d: PhantomData<D>,
     _u: PhantomData<U>,
     _t: PhantomData<T>,
 }
 
-impl<D,U, T> GrpcBodyCodec<D,U, T> {
+impl<D, U, T> GrpcBodyCodec<D, U, T> {
     pub fn new() -> Self {
         GrpcBodyCodec {
             _d: PhantomData,
@@ -23,9 +22,9 @@ impl<D,U, T> GrpcBodyCodec<D,U, T> {
     }
 }
 
-impl<D,  U, T> BodyCodec<D> for GrpcBodyCodec<D,U, T>
+impl<D, U, T> BodyCodec<D> for GrpcBodyCodec<D, U, T>
 where
-    D: bytes::Buf ,
+    D: bytes::Buf,
     U: Message + Send + 'static + Default,
     T: Message + Default + Send + 'static,
 {

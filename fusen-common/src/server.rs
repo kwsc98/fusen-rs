@@ -25,7 +25,7 @@ pub struct ClientInfo {
     pub version: Option<String>,
     pub group: Option<String>,
     pub methods: Vec<MethodResource>,
-} 
+}
 
 impl ServerInfo {
     pub fn new(
