@@ -57,9 +57,11 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         let asyncable = item.asyncness;
         let ident = item.ident;
         let inputs = item.inputs;
+        let mut fields = vec![];
         let req = inputs.iter().fold(vec![], |mut vec, e| {
             if let FnArg::Typed(req) = e {
                 vec.push(req.pat.clone());
+                fields.push(req.pat.to_token_stream().to_string());
             }
             vec
         });
@@ -76,6 +78,10 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     #[allow(non_snake_case)]
                     pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen::fusen_common::error::FusenError> {
                     let mut req_vec : Vec<String> = vec![];
+                    let mut fields : Vec<String> = vec![];
+                    #(
+                        fields.push(#fields.to_string());
+                    )*
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
@@ -95,7 +101,8 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         group.map(|e|e.to_string()),
                         #package.to_owned(),
                         #methos_id.to_string(),
-                        req_vec
+                        req_vec,
+                        fields
                     );
                     let res : Result<#output_type,fusen::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(msg).await;
                     return res;

@@ -47,19 +47,11 @@ async fn main() {
 
     //进行Dubbo3协议调用HTTP2 + GRPC
     let client = DemoServiceClient::new(&CLI_DUBBO);
-    let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
-        .await;
+    let res = client.sayHello("world".to_string()).await;
     info!("rev dubbo3 msg : {:?}", res);
 
     //进行Dubbo3协议调用HTTP1 + JSON
     let client = DemoServiceClient::new(&CLI_SPRINGCLOUD);
-    let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
-        .await;
+    let res = client.divideV2(1, 2).await;
     info!("rev springcloud msg : {:?}", res);
 }

@@ -11,11 +11,13 @@ pub struct ResDto {
     pub str: String,
 }
 
-#[fusen_trait(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
-#[asset(path = "/DemoServiceHttp", spring_cloud = "springcloud-service")]
+#[fusen_trait(package = "org.apache.dubbo.springboot.demo")]
+#[asset(spring_cloud = "service-provider")]
 pub trait DemoService {
-    #[asset(path="/sayHello-http",method = POST)]
     async fn sayHello(&self, name: String) -> String;
 
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
+
+    #[asset(path="/divide",method = GET)]
+    async fn divideV2(&self, a: i32, b: i32) -> String;
 }

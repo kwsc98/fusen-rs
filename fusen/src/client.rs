@@ -5,6 +5,7 @@ use crate::register::{RegisterBuilder, Resource, ResourceInfo, SocketType};
 use crate::route::client::Route;
 use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
 use crate::support::{TokioExecutor, TokioIo};
+use bytes::Bytes;
 use fusen_common::error::FusenError;
 use fusen_common::net::get_path;
 use fusen_common::url::UrlConfig;
@@ -60,7 +61,6 @@ impl FusenClient {
         let socket_info = info
             .choose(&mut rand::thread_rng())
             .ok_or(FusenError::Client("not find server".into()))?;
-
         let path = match server_type.as_ref() {
             &crate::register::Type::SpringCloud => msg.path,
             _ => fusen_common::Path::POST(
@@ -72,9 +72,37 @@ impl FusenClient {
             _ => ("application/json", "version"),
         };
         let builder = Request::builder().header("content-type", content_type.0);
-        let mut builder = match path {
-            fusen_common::Path::GET(path) => builder.method("GET").uri(path),
-            fusen_common::Path::POST(path) => builder.method("POST").uri(path),
+        let (mut builder, body) = match path {
+            fusen_common::Path::GET(path) => {
+                let fields = msg.fields;
+                let mut path = String::from(path);
+                if fields.len() > 0 {
+                    path.push_str("?");
+                    for idx in 0..fields.len() {
+                        path.push_str(&fields[idx]);
+                        path.push_str("=");
+                        path.push_str(&msg.req[idx]);
+                        path.push_str("&");
+                    }
+                    path.remove(path.len() - 1);
+                }
+                (builder.method("GET").uri(path), Bytes::new())
+            }
+            fusen_common::Path::POST(path) => {
+                let body = match server_type.as_ref() {
+                    &crate::register::Type::Dubbo => {
+                        let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
+                        self.grpc_codec
+                            .encode(triple_request_wrapper)
+                            .map_err(|e| FusenError::Client(e.to_string()))?
+                    }
+                    _ => self
+                        .json_codec
+                        .encode(msg.req)
+                        .map_err(|e| FusenError::Client(e.to_string()))?,
+                };
+                (builder.method("POST").uri(path), body)
+            }
         };
         if let Some(version) = msg.version {
             builder
@@ -82,18 +110,6 @@ impl FusenClient {
                 .unwrap()
                 .insert(content_type.1, HeaderValue::from_str(&version).unwrap());
         }
-        let body = match server_type.as_ref() {
-            &crate::register::Type::Dubbo => {
-                let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
-                self.grpc_codec
-                    .encode(triple_request_wrapper)
-                    .map_err(|e| FusenError::Client(e.to_string()))?
-            }
-            _ => self
-                .json_codec
-                .encode(msg.req)
-                .map_err(|e| FusenError::Client(e.to_string()))?,
-        };
         let mut req = builder
             .header("connection", "keep-alive")
             .header("Content-Length", body.len())

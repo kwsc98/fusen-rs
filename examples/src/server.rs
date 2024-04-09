@@ -14,8 +14,7 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[fusen_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
-#[asset(path = "/DemoServiceHttp")]
+#[fusen_server(package = "org.apache.dubbo.springboot.demo")]
 impl DemoService for DemoServiceImpl {
     #[asset(path="/sayHello-http",method = POST)]
     async fn sayHello(&self, req: String) -> FusenResult<String> {
@@ -27,6 +26,11 @@ impl DemoService for DemoServiceImpl {
         return Ok(ResDto {
             str: "Hello ".to_owned() + &req.str + " V2",
         });
+    }
+
+    #[asset(path="/divide",method = GET)]
+    async fn divideV2(&self, a: i32, b: i32) -> FusenResult<String> {
+        Ok((a + b).to_string())
     }
 }
 
@@ -50,7 +54,7 @@ async fn main() {
         .add_register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("springcloud-service".to_owned()))
+                .app_name(Some("service-provider".to_owned()))
                 .server_type(fusen::register::Type::SpringCloud)
                 .build()
                 .boxed(),

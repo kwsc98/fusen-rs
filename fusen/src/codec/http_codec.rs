@@ -44,23 +44,37 @@ where
     ) -> Result<FusenContext, FusenError> {
         let meta_data = MetaData::from(req.headers());
         let path = req.uri().path().to_string();
-        let method = req.method().to_string();
+        let method = req.method().to_string().to_lowercase();
         let mut frame_vec = vec![];
-        while let Some(frame) = req.body_mut().frame().await {
-            if let Ok(frame) = frame {
-                frame_vec.push(frame);
+        let msg = if method.contains("get") {
+            let url = req.uri().to_string();
+            let url: Vec<&str> = url.split("?").collect();
+            let mut vec = vec![];
+            if url.len() > 1 {
+                let params: Vec<&str> = url[1].split("&").collect();
+                for item in params {
+                    let item: Vec<&str> = item.split("=").collect();
+                    vec.push(item[1].to_owned());
+                }
             }
-        }
-        let msg = match meta_data.get_codec() {
-            fusen_common::codec::CodecType::JSON => self
-                .json_codec
-                .decode(frame_vec)
-                .map_err(|e| FusenError::Server(e.to_string()))?,
-            fusen_common::codec::CodecType::GRPC => self
-                .grpc_codec
-                .decode(frame_vec)
-                .map_err(|e| FusenError::Server(e.to_string()))?
-                .get_req(),
+            vec
+        } else {
+            while let Some(frame) = req.body_mut().frame().await {
+                if let Ok(frame) = frame {
+                    frame_vec.push(frame);
+                }
+            }
+            match meta_data.get_codec() {
+                fusen_common::codec::CodecType::JSON => self
+                    .json_codec
+                    .decode(frame_vec)
+                    .map_err(|e| FusenError::Server(e.to_string()))?,
+                fusen_common::codec::CodecType::GRPC => self
+                    .grpc_codec
+                    .decode(frame_vec)
+                    .map_err(|e| FusenError::Server(e.to_string()))?
+                    .get_req(),
+            }
         };
         let unique_identifier = meta_data
             .get_value("unique_identifier")
@@ -78,6 +92,7 @@ where
             "".to_string(),
             "".to_string(),
             msg,
+            vec![],
         ))
     }
 

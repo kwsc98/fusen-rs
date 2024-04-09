@@ -33,7 +33,12 @@ where
                 Err(err) => return Err(err.into()),
             }
         } else {
-            vec![String::from_utf8(data.to_vec()).unwrap()]
+            let mut pre = String::new();
+            if !data.starts_with(b"\"") {
+                pre.push_str("\"\"");
+            }
+            pre.insert_str(1, std::str::from_utf8(data).unwrap());
+            vec![pre]
         })
     }
 

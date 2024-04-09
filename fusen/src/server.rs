@@ -5,6 +5,7 @@ use crate::{
 use fusen_common::{
     server::{Protocol, RpcServer, ServerInfo},
     url::UrlConfig,
+    MetaData,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -57,12 +58,12 @@ impl FusenServer {
                     let resource = Resource {
                         server_name,
                         category: Category::Server,
-                        group: None,
+                        group: info.group,
                         version: info.version,
                         methods: info.methods,
                         ip: fusen_common::net::get_ip(),
                         port: Some(port.clone()),
-                        params: HashMap::new(),
+                        params: MetaData::default().inner,
                     };
                     let _ = register.register(resource).await;
                 }

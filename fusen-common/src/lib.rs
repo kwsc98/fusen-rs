@@ -21,7 +21,7 @@ pub mod url;
 
 #[derive(Debug)]
 pub struct MetaData {
-    inner: HashMap<String, String>,
+    pub inner: HashMap<String, String>,
 }
 
 impl MetaData {
@@ -66,9 +66,16 @@ impl From<&HeaderMap<HeaderValue>> for MetaData {
 
 impl MetaData {
     pub fn new() -> Self {
-        MetaData {
-            inner: HashMap::new(),
-        }
+        MetaData::default()
+    }
+}
+
+impl Default for MetaData {
+    fn default() -> Self {
+        let mut inner = HashMap::new();
+        inner.insert("prefer.serialization".to_owned(), "fastjson".to_owned());
+        inner.insert("protocol".to_owned(), "tri".to_owned());
+        Self { inner }
     }
 }
 
@@ -82,6 +89,7 @@ pub struct FusenContext {
     pub version: Option<String>,
     pub group: Option<String>,
     pub req: Vec<String>,
+    pub fields: Vec<String>,
     pub res: core::result::Result<String, FusenError>,
 }
 
@@ -95,6 +103,7 @@ impl FusenContext {
         class_name: String,
         method_name: String,
         req: Vec<String>,
+        fields: Vec<String>,
     ) -> FusenContext {
         return FusenContext {
             unique_identifier,
@@ -105,6 +114,7 @@ impl FusenContext {
             class_name,
             method_name,
             req,
+            fields,
             res: Err(FusenError::Null),
         };
     }
