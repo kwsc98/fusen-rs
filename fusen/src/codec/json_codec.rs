@@ -36,8 +36,10 @@ where
             let mut pre = String::new();
             if !data.starts_with(b"\"") {
                 pre.push_str("\"\"");
+                pre.insert_str(1, std::str::from_utf8(data).unwrap());
+            } else {
+                pre.push_str(std::str::from_utf8(data).unwrap());
             }
-            pre.insert_str(1, std::str::from_utf8(data).unwrap());
             vec![pre]
         })
     }
