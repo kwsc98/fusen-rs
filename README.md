@@ -158,12 +158,18 @@ Java版本的Dubbo3项目，代码层面不需要改造，只需要添加一些�
 这里我们使用duboo3的官方示例dubbo-samples-spring-boot项目进行演示
 https://github.com/apache/dubbo-samples
 
-首先我们需要把Server和Client的服务的pom.xml都添加fastjson1的maven依赖
+首先我们需要把Server和Client的服务的pom.xml都添加fastjson和nacos的maven依赖
 ```java
 <dependency>
     <groupId>org.apache.dubbo</groupId>
     <artifactId>dubbo-serialization-fastjson</artifactId>
     <version>2.7.23</version>
+</dependency>
+<!-- registry dependency -->
+<dependency>
+    <groupId>com.alibaba.nacos</groupId>
+    <artifactId>nacos-client</artifactId>
+    <version>2.2.0</version>
 </dependency>
 ```
 
