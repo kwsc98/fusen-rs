@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "examples"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-common"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "http 1.0.0",
@@ -481,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-macro"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fusen-common",
  "proc-macro2",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-rs"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-recursion",
  "async-trait",
