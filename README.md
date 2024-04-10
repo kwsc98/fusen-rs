@@ -21,7 +21,8 @@ pub struct ResDto {
 #[asset(spring_cloud = "service-provider")]
 pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
-
+    
+    #[asset(path="/sayHelloV2-http",method = POST)]
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
 
     #[asset(path="/divide",method = GET)]
@@ -39,11 +40,12 @@ struct DemoServiceImpl {
 
 #[fusen_server(package = "org.apache.dubbo.springboot.demo")]
 impl DemoService for DemoServiceImpl {
-    #[asset(path="/sayHello-http",method = POST)]
+
     async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
         return Ok("Hello ".to_owned() + &req);
     }
+    #[asset(path="/sayHelloV2-http",method = POST)]
     async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
         info!("res : {:?}", req);
         return Ok(ResDto {
