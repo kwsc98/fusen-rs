@@ -22,11 +22,11 @@ pub struct FusenNacos {
 #[url_config(attr = register)]
 pub struct NacosConfig {
     server_addr: String,
-    namespace: Option<String>,
+    namespace: String,
     group: Option<String>,
     app_name: Option<String>,
-    username: Option<String>,
-    password: Option<String>,
+    username: String,
+    password: String,
     server_type: Type,
 }
 
@@ -34,21 +34,17 @@ impl FusenNacos {
     pub fn init(url: &str) -> crate::Result<Self> {
         let mut client_props = ClientProps::new();
         let config = NacosConfig::from_url(url)?;
-        let namespace = config
-            .namespace
-            .as_ref()
-            .map_or("public".to_owned(), |e| e.to_owned());
         let app_name = config
             .app_name
             .as_ref()
             .map_or("fusen".to_owned(), |e| e.to_owned());
         client_props = client_props
             .server_addr(config.server_addr.clone())
-            .namespace(namespace)
+            .namespace(config.namespace.clone())
             .app_name(app_name.clone())
-            .auth_username(String::default())
-            .auth_password(String::default());
-        let naming_service = NamingServiceBuilder::new(client_props).build()?;
+            .auth_username(config.username.clone())
+            .auth_password(config.password.clone());
+        let naming_service = NamingServiceBuilder::new(client_props).enable_auth_plugin_http().build()?;
         Ok(Self {
             naming_service: Arc::new(naming_service),
             config: Arc::new(config),
