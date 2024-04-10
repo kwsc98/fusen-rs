@@ -44,9 +44,14 @@ impl FusenNacos {
             .app_name(app_name.clone())
             .auth_username(config.username.clone())
             .auth_password(config.password.clone());
-        let naming_service = NamingServiceBuilder::new(client_props).enable_auth_plugin_http().build()?;
+        let builder = NamingServiceBuilder::new(client_props);
+        let builder = if config.username.len() != 0 {
+            builder.enable_auth_plugin_http()
+        } else {
+            builder
+        };
         Ok(Self {
-            naming_service: Arc::new(naming_service),
+            naming_service: Arc::new(builder.build()?),
             config: Arc::new(config),
         })
     }
