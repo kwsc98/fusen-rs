@@ -1,6 +1,6 @@
 
-# `fusen-rust` 一个最像RPC框架的Rust-RPC框架
-fusen-rust是一个高性能，轻量级的rpc框架，通过使用Rust宏来解决目前主流rpc框架使用复杂，性能低等问题，不需要通过脚本和脚手架生成rpc调用代码，通过宏来进行编译期"反射"来实现高性能的调用，来满足rpc调用的简易性，同时支持Dubbo3服务的注册发现和互相调用;
+# `fusen-rs` 一个最像RPC框架的Rust-RPC框架
+fusen-rust是一个高性能，轻量级的微服务框架，通过使用Rust宏来解决目前主流rpc框架使用复杂，性能低等问题，不需要通过脚本和脚手架生成RPC调用代码，通过宏来进行编译期"反射"来实现高性能的调用，满足RPC调用的简易性，同时支持Dubbo3,SpringCloud微服务生态可以与Java项目进行服务注册发现与互相调用.
 
 
 ## 快速开始
@@ -12,93 +12,141 @@ pub struct ReqDto {
     pub str: String,
 }
 
-//#[rpc_trait(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
-#[rpc_trait(package = "org.apache.dubbo.springboot.demo")]
-pub trait DemoService {
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct ResDto {
+    pub str: String,
+}
 
+#[fusen_trait(package = "org.apache.dubbo.springboot.demo")]
+#[asset(spring_cloud = "service-provider")]
+pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
 
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
 
+    #[asset(path="/divide",method = GET)]
+    async fn divideV2(&self, a: i32, b: i32) -> String;
 }
 ```
 
 
 ### Server
 ```rust
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DemoServiceImpl {
     _db: String,
 }
 
-//#[fusen_server(package = "org.apache.dubbo.springboot.demo", version = "1.0.0")]
-//设置包路径和版本
 #[fusen_server(package = "org.apache.dubbo.springboot.demo")]
 impl DemoService for DemoServiceImpl {
-    async fn sayHello(&self, req: String) -> RpcResult<String> {
+    #[asset(path="/sayHello-http",method = POST)]
+    async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
         return Ok("Hello ".to_owned() + &req);
     }
-    async fn sayHelloV2(&self, req: ReqDto) -> RpcResult<ResDto> {
+    async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
         info!("res : {:?}", req);
         return Ok(ResDto {
             str: "Hello ".to_owned() + &req.str + " V2",
         });
     }
+
+    #[asset(path="/divide",method = GET)]
+    async fn divideV2(&self, a: i32, b: i32) -> FusenResult<String> {
+        info!("res : a={:?},b={:?}", a, b);
+        Ok((a + b).to_string())
+    }
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    fusen_common::init_log();
+    fusen_common::logs::init_log();
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    FusenServer::build(
-        //设置注册中心配置
-        RegisterBuilder::new(
-            &format!("127.0.0.1:{}", "2181"),
-            "default",
-            RegisterType::ZooKeeper,
-        ),
-        "8081",
-    )
-    //注册rpc服务
-    .add_fusen_server(Box::new(server))
-    .run()
-    .await;
+    //支持多协议，多注册中心的接口暴露
+    FusenServer::build()
+        //初始化Fusen注册中心,同时支持Dubbo3协议与Fusen协议
+        .add_register_builder(
+            NacosConfig::builder()
+                .server_addr("127.0.0.1:8848".to_owned())
+                .app_name(Some("fusen-service".to_owned()))
+                .server_type(fusen_rs::register::Type::Fusen)
+                .build()
+                .boxed(),
+        )
+        //初始化SpringCloud注册中心
+        .add_register_builder(
+            NacosConfig::builder()
+                .server_addr("127.0.0.1:8848".to_owned())
+                .app_name(Some("service-provider".to_owned()))
+                .server_type(fusen_rs::register::Type::SpringCloud)
+                .build()
+                .boxed(),
+        )
+        //同时兼容RPC协议与HTTP协议
+        .add_protocol(Protocol::HTTP("8081".to_owned()))
+        .add_protocol(Protocol::HTTP2("8082".to_owned()))
+        .add_fusen_server(Box::new(server))
+        .run()
+        .await;
 }
 ```
 
 ### Client
 ```rust
-//初始化RpcClient
 lazy_static! {
-    static ref CLI: FusenClient = FusenClient::build(
-        //设置注册中心配置
-        RegisterBuilder::new(
-        &format!("127.0.0.1:{}", "2181"),
-        "default",
-        RegisterType::ZooKeeper,
-    ));
+    static ref CLI_FUSEN: FusenClient = FusenClient::build(
+        NacosConfig::builder()
+            .server_addr("127.0.0.1:8848".to_owned())
+            .app_name(Some("fusen-client".to_owned()))
+            .server_type(fusen_rs::register::Type::Fusen)
+            .build()
+            .boxed()
+    );
+    static ref CLI_DUBBO: FusenClient = FusenClient::build(
+        NacosConfig::builder()
+            .server_addr("127.0.0.1:8848".to_owned())
+            .app_name(Some("dubbo-client".to_owned()))
+            .server_type(fusen_rs::register::Type::Dubbo)
+            .build()
+            .boxed()
+    );
+    static ref CLI_SPRINGCLOUD: FusenClient = FusenClient::build(
+        NacosConfig::builder()
+            .server_addr("127.0.0.1:8848".to_owned())
+            .app_name(Some("springcloud-client".to_owned()))
+            .server_type(fusen_rs::register::Type::SpringCloud)
+            .build()
+            .boxed()
+    );
 }
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
-    fusen_common::init_log();
-    let client = DemoServiceRpc::new(&CLI);
-    let res = client.sayHello("world".to_string()).await;
-    info!("{:?}", res);
+    fusen_common::logs::init_log();
+    //进行Fusen协议调用HTTP2 + JSON
+    let client = DemoServiceClient::new(&CLI_FUSEN);
     let res = client
         .sayHelloV2(ReqDto {
             str: "world".to_string(),
         })
         .await;
-    info!("{:?}", res);
-}
+    info!("rev fusen msg : {:?}", res);
 
+    //进行Dubbo3协议调用HTTP2 + GRPC
+    let client = DemoServiceClient::new(&CLI_DUBBO);
+    let res = client.sayHello("world".to_string()).await;
+    info!("rev dubbo3 msg : {:?}", res);
+
+    //进行SpringCloud协议调用HTTP1 + JSON
+    let client = DemoServiceClient::new(&CLI_SPRINGCLOUD);
+    let res = client.divideV2(1, 2).await;
+    info!("rev springcloud msg : {:?}", res);
+}
 ```
 
-### Dubbo3
+## Dubbo3
 本项目同时兼容dubbo3协议，可以很方便的与Java版本的Dubbo3项目通过接口暴露的方式进行服务注册发现和互调。
 
 Rust的Server和Client完全不用改造就如上示例即可。
@@ -141,7 +189,7 @@ dubbo:
     //添加fastjson的支持
     prefer-serialization: fastjson
   registry:
-    address: zookeeper://${zookeeper.address:127.0.0.1}:2181
+    address: nacos://${nacos.address:127.0.0.1}:8848
 ```
 
 ### Java-Client
@@ -177,5 +225,79 @@ dubbo:
   application:
     name: dubbo-springboot-demo-consumer
   registry:
-    address: zookeeper://${zookeeper.address:127.0.0.1}:2181
+    address: nacos://${nacos.address:127.0.0.1}:8848
+```
+
+## SpringCloud
+同时本项目还拓展了HTTP接口可以当做一个WebServer框架，并且还支持了SpringCloud服务注册与发现，用户可以灵活的选择和切换需要暴露的协议，并且支持同时暴露。
+
+这里我们使用spring-cloud-alibaba项目进行演示
+https://github.com/alibaba/spring-cloud-alibaba
+
+Rust的Server和Client端的代码无需改造就如上示例即可。
+Java的Server和Client端的代码也无需改造。直接启动即可。
+
+### Server
+Provider启动类
+package com.alibaba.cloud.examples.ProviderApplication
+```java
+//EchoController
+@RestController
+public class EchoController {
+...
+	@GetMapping("/divide")
+	public String divide(@RequestParam Integer a, @RequestParam Integer b) {
+		if (b == 0) {
+			return String.valueOf(0);
+		}
+		else {
+			return String.valueOf(a / b);
+		}
+	}
+...
+}
+```
+
+### Client
+Consumer启动类
+package com.alibaba.cloud.examples.ConsumerApplication
+```java
+//TestController
+@RestController
+public class TestController {
+...
+	@GetMapping("/divide-feign")
+	public String divide(@RequestParam Integer a, @RequestParam Integer b) {
+		return echoClient.divide(a, b);
+	}
+...
+}
+
+```
+
+测试curl ( curl => SpringCloud => fusen-rust )
+http://127.0.0.1:18083/divide-feign?a=1&b=2
+```rust
+2024-04-10T06:52:32.737307Z  INFO ThreadId(07) server: 33: res : a=1,b=2
+```
+
+测试curl ( curl => fusen-rust )
+
+http://127.0.0.1:8081/divide?a=2&b=3
+
+```rust
+2024-04-10T06:54:26.436416Z  INFO ThreadId(512) server: 33: res : a=2,b=3
+```
+
+测试curl ( curl => fusen-rust )
+
+curl --location --request POST 'http://127.0.0.1:8081/sayHelloV2-http' \
+--header 'Content-Type: application/json' \
+--header 'Connection: keep-alive' \
+--data-raw '{
+    "str" : "World"
+}'
+
+```rust
+2024-04-10T07:02:50.138057Z  INFO ThreadId(03) server: 26: res : ReqDto { str: "World" }
 ```

@@ -47,7 +47,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let token = quote! {
                      let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
-                        param.res = Err(fusen::fusen_common::error::FusenError::Server(err.to_string()));
+                        param.res = Err(fusen_rs::fusen_common::error::FusenError::Server(err.to_string()));
                         return param;
                     }
                     let #req : #req_type = result.unwrap();
@@ -76,7 +76,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         let res = serde_json::to_string(&res);
                         match res {
                             Ok(res) => Ok(res),
-                            Err(err) => Err(fusen::fusen_common::error::FusenError::Server(err.to_string()))
+                            Err(err) => Err(fusen_rs::fusen_common::error::FusenError::Server(err.to_string()))
                         }
                     },
                     Err(info) => Err(info)
@@ -92,25 +92,25 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
 
         #org_item
 
-        impl fusen::fusen_common::server::RpcServer for #item_self {
-            fn invoke (&self, param : fusen::fusen_common::FusenContext) -> fusen::fusen_common::FusenFuture<fusen::fusen_common::FusenContext> {
+        impl fusen_rs::fusen_common::server::RpcServer for #item_self {
+            fn invoke (&self, param : fusen_rs::fusen_common::FusenContext) -> fusen_rs::fusen_common::FusenFuture<fusen_rs::fusen_common::FusenContext> {
                 let rpc = self.clone();
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
-            fn get_info(&self) -> fusen::fusen_common::server::ServerInfo {
+            fn get_info(&self) -> fusen_rs::fusen_common::server::ServerInfo {
 
-               let mut methods : Vec<fusen::fusen_common::MethodResource> = vec![];
+               let mut methods : Vec<fusen_rs::fusen_common::MethodResource> = vec![];
                #(
-                methods.push(fusen::fusen_common::MethodResource::form_json_str(#methods_info));
+                methods.push(fusen_rs::fusen_common::MethodResource::form_json_str(#methods_info));
                )*
-               fusen::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
+               fusen_rs::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
             }
         }
 
         impl #item_self {
-            async fn prv_invoke (&self, mut param : fusen::fusen_common::FusenContext) -> fusen::fusen_common::FusenContext {
+            async fn prv_invoke (&self, mut param : fusen_rs::fusen_common::FusenContext) -> fusen_rs::fusen_common::FusenContext {
                 #(#items_fn)*
-                param.res = Err(fusen::fusen_common::error::FusenError::Server(format!("not find method by {}",param.method_name)));
+                param.res = Err(fusen_rs::fusen_common::error::FusenError::Server(format!("not find method by {}",param.method_name)));
                 return param;
             }
         }

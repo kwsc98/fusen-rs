@@ -1,8 +1,8 @@
 use examples::{DemoServiceClient, ReqDto};
-use fusen::client::FusenClient;
-use fusen::fusen_common;
-use fusen::fusen_common::url::UrlConfig;
-use fusen::register::nacos::NacosConfig;
+use fusen_rs::client::FusenClient;
+use fusen_rs::fusen_common;
+use fusen_rs::fusen_common::url::UrlConfig;
+use fusen_rs::register::nacos::NacosConfig;
 use lazy_static::lazy_static;
 use tracing::info;
 
@@ -11,7 +11,7 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("fusen-client".to_owned()))
-            .server_type(fusen::register::Type::Fusen)
+            .server_type(fusen_rs::register::Type::Fusen)
             .build()
             .boxed()
     );
@@ -19,7 +19,7 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("dubbo-client".to_owned()))
-            .server_type(fusen::register::Type::Dubbo)
+            .server_type(fusen_rs::register::Type::Dubbo)
             .build()
             .boxed()
     );
@@ -27,7 +27,7 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("springcloud-client".to_owned()))
-            .server_type(fusen::register::Type::SpringCloud)
+            .server_type(fusen_rs::register::Type::SpringCloud)
             .build()
             .boxed()
     );
@@ -50,7 +50,7 @@ async fn main() {
     let res = client.sayHello("world".to_string()).await;
     info!("rev dubbo3 msg : {:?}", res);
 
-    //进行Dubbo3协议调用HTTP1 + JSON
+    //进行SpringCloud协议调用HTTP1 + JSON
     let client = DemoServiceClient::new(&CLI_SPRINGCLOUD);
     let res = client.divideV2(1, 2).await;
     info!("rev springcloud msg : {:?}", res);

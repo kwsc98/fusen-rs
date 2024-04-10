@@ -17,7 +17,7 @@ path = "src/server.rs"
 
 
 [dependencies]
-fusen.workspace = true
+fusen-rs.workspace = true
 
 #网络协议处理
 tokio.workspace = true

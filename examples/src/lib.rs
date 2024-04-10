@@ -1,4 +1,4 @@
-use fusen::fusen_macro::{asset, fusen_trait};
+use fusen_rs::fusen_macro::{asset, fusen_trait};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -15,7 +15,8 @@ pub struct ResDto {
 #[asset(spring_cloud = "service-provider")]
 pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
-
+    
+    #[asset(path="/sayHelloV2-http",method = POST)]
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
 
     #[asset(path="/divide",method = GET)]

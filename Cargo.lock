@@ -406,7 +406,7 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
- "fusen",
+ "fusen-rs",
  "futures",
  "http 1.0.0",
  "http-body 1.0.0",
@@ -464,7 +464,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "fusen"
+name = "fusen-common"
+version = "0.2.0"
+dependencies = [
+ "bytes",
+ "http 1.0.0",
+ "percent-encoding",
+ "pretty_env_logger",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "fusen-macro"
+version = "0.2.0"
+dependencies = [
+ "fusen-common",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.50",
+]
+
+[[package]]
+name = "fusen-rs"
 version = "0.2.0"
 dependencies = [
  "async-recursion",
@@ -498,34 +526,6 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zookeeper-client",
-]
-
-[[package]]
-name = "fusen-common"
-version = "0.2.0"
-dependencies = [
- "bytes",
- "http 1.0.0",
- "percent-encoding",
- "pretty_env_logger",
- "serde",
- "serde_json",
- "tracing",
- "tracing-futures",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "fusen-macro"
-version = "0.2.0"
-dependencies = [
- "fusen-common",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 2.0.50",
 ]
 
 [[package]]

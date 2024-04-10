@@ -1,5 +1,5 @@
 [package]
-name = "fusen"
+name = "fusen-rs"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

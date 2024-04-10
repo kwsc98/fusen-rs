@@ -12,7 +12,7 @@ description = "RPC framework for service registration and discovery through API 
 
 [workspace.dependencies]
 fusen-common = { path = "fusen-common"  }
-fusen = { path = "fusen" }
+fusen-rs = { path = "fusen" }
 fusen-macro = { path = "fusen-macro" }
 
 #网络协议处理

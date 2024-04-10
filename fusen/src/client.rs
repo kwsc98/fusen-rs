@@ -6,6 +6,7 @@ use crate::route::client::Route;
 use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
 use crate::support::{TokioExecutor, TokioIo};
 use bytes::Bytes;
+use fusen_common::codec::json_field_compatible;
 use fusen_common::error::FusenError;
 use fusen_common::net::get_path;
 use fusen_common::url::UrlConfig;
@@ -48,7 +49,7 @@ impl FusenClient {
         }
     }
 
-    pub async fn invoke<Res>(&self, msg: FusenContext) -> Result<Res, FusenError>
+    pub async fn invoke<Res>(&self, msg: FusenContext, return_ty: &str) -> Result<Res, FusenError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
@@ -207,8 +208,7 @@ impl FusenClient {
                             else_status => {
                                 let msg = match trailers.get("grpc-message") {
                                     Some(value) => {
-                                        "grpc-message=".to_owned()
-                                            + &String::from_utf8(value.as_bytes().to_vec()).unwrap()
+                                        String::from_utf8(value.as_bytes().to_vec()).unwrap()
                                     }
                                     None => {
                                         "grpc-status=".to_owned()
@@ -248,6 +248,7 @@ impl FusenClient {
                 response.remove(0)
             }
         };
+        let res = json_field_compatible(return_ty, res);
         let res: Res = serde_json::from_str(&res).map_err(|e| FusenError::Client(e.to_string()))?;
         return Ok(res);
     }

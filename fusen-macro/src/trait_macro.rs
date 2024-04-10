@@ -76,7 +76,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
-                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen::fusen_common::error::FusenError> {
+                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::fusen_common::error::FusenError> {
                     let mut req_vec : Vec<String> = vec![];
                     let mut fields : Vec<String> = vec![];
                     #(
@@ -85,17 +85,17 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
-                            return Err(fusen::fusen_common::error::FusenError::Client(err.to_string()));
+                            return Err(fusen_rs::fusen_common::error::FusenError::Client(err.to_string()));
                         }
                         req_vec.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
                     let group : Option<&str> = #group;
-                    let mut mate_data = fusen::fusen_common::MetaData::new();
+                    let mut mate_data = fusen_rs::fusen_common::MetaData::new();
                     mate_data.insert("spring_cloud_name".to_string(),#spring_cloud_name.to_string());
-                    let msg = fusen::fusen_common::FusenContext::new (
-                        fusen::fusen_common::logs::get_uuid(),
-                        fusen::fusen_common::Path::new(#methos_type,#methos_path.to_string()),
+                    let msg = fusen_rs::fusen_common::FusenContext::new (
+                        fusen_rs::fusen_common::logs::get_uuid(),
+                        fusen_rs::fusen_common::Path::new(#methos_type,#methos_path.to_string()),
                         mate_data,
                         version.map(|e|e.to_string()),
                         group.map(|e|e.to_string()),
@@ -104,7 +104,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         req_vec,
                         fields
                     );
-                    let res : Result<#output_type,fusen::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(msg).await;
+                    let res : Result<#output_type,fusen_rs::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(msg,stringify!(#output_type)).await;
                     return res;
                 }
             }
@@ -117,22 +117,22 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
 
         #[derive(Clone)]
         #vis struct #rpc_client {
-            client : &'static fusen::client::FusenClient
+            client : &'static fusen_rs::client::FusenClient
         }
         impl #rpc_client {
         #(
             #fn_quote
         )*
-        pub fn new(client : &'static fusen::client::FusenClient) -> #rpc_client {
+        pub fn new(client : &'static fusen_rs::client::FusenClient) -> #rpc_client {
             #rpc_client {client}
         }
 
-        pub fn get_info(&self) -> fusen::fusen_common::server::ServerInfo {
-            let mut methods : Vec<fusen::fusen_common::MethodResource> = vec![];
+        pub fn get_info(&self) -> fusen_rs::fusen_common::server::ServerInfo {
+            let mut methods : Vec<fusen_rs::fusen_common::MethodResource> = vec![];
             #(
-                methods.push(fusen::fusen_common::MethodResource::form_json_str(#methods_info));
+                methods.push(fusen_rs::fusen_common::MethodResource::form_json_str(#methods_info));
             )*
-            fusen::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
+            fusen_rs::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
         }
 
        }
@@ -157,7 +157,7 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
             };
             vec.push(quote! {
                    #(#attrs)*
-                   #asyncable fn #ident (#inputs) -> fusen::fusen_common::FusenResult<#output_type>;
+                   #asyncable fn #ident (#inputs) -> fusen_rs::fusen_common::FusenResult<#output_type>;
             });
         }
         vec
