@@ -1,5 +1,6 @@
 use crate::codec::grpc_codec::GrpcBodyCodec;
 use crate::codec::json_codec::JsonBodyCodec;
+use crate::codec::request_codec::RequestHandler;
 use crate::codec::BodyCodec;
 use crate::register::{RegisterBuilder, Resource, ResourceInfo, SocketType};
 use crate::route::client::Route;
@@ -9,16 +10,19 @@ use bytes::Bytes;
 use fusen_common::codec::json_field_compatible;
 use fusen_common::error::FusenError;
 use fusen_common::net::get_path;
+use fusen_common::register::Type;
 use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
-use http::{HeaderValue, Request, Version};
+use http::{request, HeaderValue, Request, Version};
 use http_body_util::{BodyExt, Full};
 use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tracing::error;
+use crate::codec::request_codec::RequestCodec;
 
 pub struct FusenClient {
+    request_handle: RequestHandler<Full<Bytes>>,
     route: Route,
     json_codec: Box<
         dyn BodyCodec<bytes::Bytes, EncodeType = Vec<String>, DecodeType = Vec<String>>
@@ -43,13 +47,18 @@ impl FusenClient {
         let grpc_codec =
             GrpcBodyCodec::<bytes::Bytes, TripleResponseWrapper, TripleRequestWrapper>::new();
         FusenClient {
+            request_handle: RequestHandler::<Full<Bytes>>::new(),
             route: Route::new(register),
             json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
         }
     }
 
-    pub async fn invoke<Res>(&self, msg: FusenContext, return_ty: &str) -> Result<Res, FusenError>
+    pub async fn invoke<Res>(
+        &self,
+        mut msg: FusenContext,
+        return_ty: &str,
+    ) -> Result<Res, FusenError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
@@ -62,14 +71,10 @@ impl FusenClient {
         let socket_info = info
             .choose(&mut rand::thread_rng())
             .ok_or(FusenError::Client("not find server".into()))?;
-        let path = match server_type.as_ref() {
-            &crate::register::Type::SpringCloud => msg.path,
-            _ => fusen_common::Path::POST(
-                "/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name,
-            ),
-        };
+        let request = self.request_handle.encode(msg);
+
         let content_type = match server_type.as_ref() {
-            &crate::register::Type::Dubbo => ("application/grpc", "tri-service-version"),
+            &Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
         };
         let builder = Request::builder().header("content-type", content_type.0);

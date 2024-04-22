@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use fusen_common::{net::get_path, server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
+use fusen_common::{net::get_path, register::{RegisterType, Type}, server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
 use http_body_util::Full;
 use hyper::client::conn::http2::SendRequest;
 
@@ -46,23 +46,7 @@ impl RegisterBuilder {
     }
 }
 
-pub enum RegisterType {
-    ZooKeeper(Box<dyn UrlConfig>),
-    Nacos(Box<dyn UrlConfig>),
-}
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Type {
-    Dubbo,
-    SpringCloud,
-    Fusen,
-}
-
-impl Default for Type {
-    fn default() -> Self {
-        Type::Fusen
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Resource {

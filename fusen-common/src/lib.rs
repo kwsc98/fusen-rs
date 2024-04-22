@@ -1,10 +1,9 @@
 use std::collections::{hash_map::Iter, HashMap};
-
 use codec::CodecType;
 use error::FusenError;
 use http::{HeaderMap, HeaderValue};
+use register::Type;
 use serde::{Deserialize, Serialize};
-
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
@@ -18,6 +17,7 @@ pub mod r#macro;
 pub mod net;
 pub mod server;
 pub mod url;
+pub mod register;
 
 #[derive(Debug)]
 pub struct MetaData {
@@ -83,6 +83,7 @@ impl Default for MetaData {
 pub struct FusenContext {
     pub unique_identifier: String,
     pub path: Path,
+    pub server_tyep : Type, 
     pub meta_data: MetaData,
     pub class_name: String,
     pub method_name: String,
@@ -108,6 +109,7 @@ impl FusenContext {
         return FusenContext {
             unique_identifier,
             path,
+            server_tyep : Type::default(),
             meta_data,
             version,
             group,

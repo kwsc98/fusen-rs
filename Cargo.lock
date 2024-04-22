@@ -469,14 +469,20 @@ version = "0.3.1"
 dependencies = [
  "bytes",
  "http 1.0.0",
+ "http-body-util",
+ "hyper 1.1.0",
+ "nacos-sdk",
  "percent-encoding",
  "pretty_env_logger",
+ "rand",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
  "uuid",
+ "zookeeper-client",
 ]
 
 [[package]]

@@ -9,6 +9,7 @@ use std::fmt::Debug;
 pub mod grpc_codec;
 pub mod http_codec;
 pub mod json_codec;
+pub mod request_codec;
 
 #[allow(async_fn_in_trait)]
 pub trait HttpCodec<D, E>

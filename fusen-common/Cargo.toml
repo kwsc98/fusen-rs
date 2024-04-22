@@ -8,6 +8,12 @@ description.workspace = true
 
 
 [dependencies]
+#网络协议处理
+tokio.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+
+
 #json序列化
 serde.workspace = true 
 serde_json.workspace = true 
@@ -22,3 +28,8 @@ tracing-subscriber.workspace = true
 pretty_env_logger.workspace = true 
 
 http.workspace = true
+
+#注册中心
+zookeeper-client.workspace = true
+nacos-sdk.workspace = true
+rand.workspace = true
