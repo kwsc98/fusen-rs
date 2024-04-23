@@ -7,6 +7,7 @@ use crate::filter::server::RpcServerFilter;
 
 mod http_handler;
 pub mod server;
+pub mod socket;
 
 pub struct StreamHandler {
     pub tcp_stream: TcpStream,

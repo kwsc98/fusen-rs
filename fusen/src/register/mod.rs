@@ -1,7 +1,12 @@
-use bytes::Bytes;
-use fusen_common::{net::get_path, register::{RegisterType, Type}, server::Protocol, url::UrlConfig, FusenFuture, MethodResource};
-use http_body_util::Full;
-use hyper::client::conn::http2::SendRequest;
+use fusen_common::{
+    net::get_path,
+    register::{RegisterType, Type},
+    server::Protocol,
+    url::UrlConfig,
+    FusenFuture, MethodResource,
+};
+
+use crate::protocol::socket::{Socket, SocketAssets};
 
 use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 use serde::{Deserialize, Serialize};
@@ -45,8 +50,6 @@ impl RegisterBuilder {
         }
     }
 }
-
-
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Resource {
@@ -92,7 +95,7 @@ pub enum DirectorySender {
 }
 
 pub enum DirectoryReceiver {
-    GET(Vec<Arc<SocketInfo>>),
+    GET(Vec<Arc<SocketAssets>>),
     CHANGE,
 }
 
@@ -104,17 +107,7 @@ pub struct Directory {
 
 pub struct ResourceInfo {
     pub server_type: Arc<Type>,
-    pub info: Vec<Arc<SocketInfo>>,
-}
-
-pub struct SocketInfo {
-    pub resource: Resource,
-    pub socket: SocketType,
-}
-
-pub enum SocketType {
-    HTTP1,
-    HTTP2(Arc<RwLock<Option<SendRequest<Full<Bytes>>>>>),
+    pub socket : Vec<Arc<SocketAssets>>,
 }
 
 impl Directory {
@@ -123,7 +116,7 @@ impl Directory {
             mpsc::unbounded_channel::<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>();
         let server_type_clone = server_type.clone();
         tokio::spawn(async move {
-            let mut cache: Vec<Arc<SocketInfo>> = vec![];
+            let mut cache: Vec<Arc<SocketAssets>> = vec![];
             while let Some(msg) = r.recv().await {
                 match msg.0 {
                     DirectorySender::GET => {
@@ -140,16 +133,12 @@ impl Directory {
                             let key = get_path(item.ip.clone(), item.port.as_deref());
                             res.push(match map.get(&key) {
                                 Some(info) => info.clone(),
-                                None => Arc::new(SocketInfo {
+                                None => Arc::new(SocketAssets {
                                     resource: item,
                                     socket: match server_type_clone.as_ref() {
-                                        Type::Dubbo => {
-                                            SocketType::HTTP2(Arc::new(RwLock::new(None)))
-                                        }
-                                        Type::SpringCloud => SocketType::HTTP1,
-                                        Type::Fusen => {
-                                            SocketType::HTTP2(Arc::new(RwLock::new(None)))
-                                        }
+                                        Type::Dubbo => Socket::HTTP2(Arc::new(RwLock::new(None))),
+                                        Type::SpringCloud => Socket::HTTP1,
+                                        Type::Fusen => Socket::HTTP2(Arc::new(RwLock::new(None))),
                                     },
                                 }),
                             });

@@ -105,6 +105,7 @@ impl FusenContext {
         method_name: String,
         req: Vec<String>,
         fields: Vec<String>,
+        return_ty : Option<&str>
     ) -> FusenContext {
         return FusenContext {
             unique_identifier,
