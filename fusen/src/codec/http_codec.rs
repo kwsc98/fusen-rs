@@ -68,11 +68,11 @@ where
                 fusen_common::codec::CodecType::JSON => self
                     .json_codec
                     .decode(frame_vec)
-                    .map_err(|e| FusenError::Server(e.to_string()))?,
+                    .map_err(|e| FusenError::from(e))?,
                 fusen_common::codec::CodecType::GRPC => self
                     .grpc_codec
                     .decode(frame_vec)
-                    .map_err(|e| FusenError::Server(e.to_string()))?
+                    .map_err(|e| FusenError::from(e))?
                     .get_req(),
             }
         };
@@ -93,7 +93,7 @@ where
             "".to_string(),
             msg,
             vec![],
-            None
+            None,
         ))
     }
 
@@ -111,7 +111,7 @@ where
                 Ok(res) => Frame::data(
                     self.json_codec
                         .encode(vec![res])
-                        .map_err(|e| FusenError::Server(e.to_string()))?,
+                        .map_err(|e| FusenError::from(e))?,
                 ),
                 Err(err) => {
                     if let FusenError::Null = err {
@@ -132,29 +132,21 @@ where
                         let buf = self
                             .grpc_codec
                             .encode(res_wrapper)
-                            .map_err(|e| FusenError::Server(e.to_string()))?;
+                            .map_err(|e| FusenError::from(e))?;
                         vec.push(Frame::data(buf));
                     }
                     Err(err) => {
                         message = match err {
-                            FusenError::Client(msg) => {
+                            FusenError::Null => {
                                 status = "90";
-                                msg
+                                "null value".to_owned()
                             }
-                            FusenError::Method(msg) => {
+                            FusenError::NotFind(msg) => {
                                 status = "91";
                                 msg
                             }
-                            FusenError::Null => {
+                            FusenError::Info(msg) => {
                                 status = "92";
-                                "FusenError::Null".to_string()
-                            }
-                            FusenError::ResourceEmpty(msg) => {
-                                status = "93";
-                                msg
-                            }
-                            FusenError::Server(msg) => {
-                                status = "94";
                                 msg
                             }
                         }
@@ -176,7 +168,7 @@ where
         let response = Response::builder()
             .header("content-type", content_type)
             .body(stream_body)
-            .map_err(|e| FusenError::Server(e.to_string()))?;
+            .map_err(|e| FusenError::from(e))?;
         Ok(response)
     }
 }

@@ -107,7 +107,7 @@ pub struct Directory {
 
 pub struct ResourceInfo {
     pub server_type: Arc<Type>,
-    pub socket : Vec<Arc<SocketAssets>>,
+    pub socket: Vec<Arc<SocketAssets>>,
 }
 
 impl Directory {
@@ -162,7 +162,7 @@ impl Directory {
         match rev {
             DirectoryReceiver::GET(rev) => Ok(ResourceInfo {
                 server_type: self.server_type.clone(),
-                info: rev,
+                socket: rev,
             }),
             DirectoryReceiver::CHANGE => Err("err receiver".into()),
         }

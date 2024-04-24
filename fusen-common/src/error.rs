@@ -1,21 +1,40 @@
-use std::fmt::{self, Display, Formatter};
-
 use serde::{Deserialize, Serialize};
-
+use std::fmt::{self, Display, Formatter};
 pub type BoxFusenError = Box<FusenError>;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum FusenError {
     Null,
-    ResourceEmpty(String),
-    Client(String),
-    Server(String),
-    Method(String),
+    NotFind(String),
+    Info(String),
 }
 
 impl FusenError {
     pub fn boxed(self) -> BoxFusenError {
         Box::new(self)
+    }
+}
+
+impl From<&str> for FusenError {
+    fn from(value: &str) -> Self {
+        FusenError::Info(value.to_string())
+    }
+}
+
+impl From<String> for FusenError {
+    fn from(value: String) -> Self {
+        FusenError::Info(value)
+    }
+}
+
+impl From<crate::Error> for FusenError {
+    fn from(value: crate::Error) -> Self {
+        FusenError::Info(value.to_string())
+    }
+}
+impl From<http::Error> for FusenError {
+    fn from(value: http::Error) -> Self {
+        FusenError::Info(value.to_string())
     }
 }
 
@@ -26,11 +45,9 @@ unsafe impl Sync for FusenError {}
 impl Display for FusenError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            FusenError::Null => write!(f, "Bad value"),
-            FusenError::Client(msg) => write!(f, "FusenError::Client {}", msg),
-            FusenError::Server(msg) => write!(f, "FusenError::Server {}", msg),
-            FusenError::Method(msg) => write!(f, "FusenError::Method {}", msg),
-            FusenError::ResourceEmpty(msg) => write!(f, "FusenError::ResourceEmpty {}", msg),
+            FusenError::Null => write!(f, "null value"),
+            FusenError::Info(msg) => write!(f, "{}", msg),
+            FusenError::NotFind(msg) => write!(f, "{}", msg),
         }
     }
 }

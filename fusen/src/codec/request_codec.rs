@@ -1,18 +1,14 @@
-use std::{fmt::Pointer, marker::PhantomData};
-
-use bytes::Bytes;
-use fusen_common::{error::FusenError, register::Type, FusenContext};
-use http::{request, HeaderValue, Request};
-use http_body_util::{BodyExt, Full};
-
-use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
-
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
+use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
+use bytes::Bytes;
+use fusen_common::{register::Type, FusenContext};
+use http::{HeaderValue, Request};
+use http_body_util::Full;
 
-pub(crate) trait RequestCodec<T, E> {
-    fn encode(&self, msg: FusenContext) -> Result<Request<T>, E>;
+pub(crate) trait RequestCodec<T> {
+    fn encode(&self, msg: FusenContext) -> Result<Request<T>, crate::Error>;
 
-    fn decode(&self, request: Request<T>) -> Result<FusenContext, E>;
+    async fn decode(&self, request: Request<T>) -> Result<FusenContext, crate::Error>;
 }
 
 pub struct RequestHandler {
@@ -43,8 +39,8 @@ impl RequestHandler {
     }
 }
 
-impl RequestCodec<Full<Bytes>, FusenError> for RequestHandler {
-    fn encode(&self, mut msg: FusenContext) -> Result<Request<Full<Bytes>>, FusenError> {
+impl RequestCodec<Full<Bytes>> for RequestHandler {
+    fn encode(&self, msg: FusenContext) -> Result<Request<Full<Bytes>>, crate::Error> {
         let content_type = match &msg.server_tyep {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
@@ -52,7 +48,7 @@ impl RequestCodec<Full<Bytes>, FusenError> for RequestHandler {
         let mut builder = Request::builder()
             .header("content-type", content_type.0)
             .header("connection", "keep-alive");
-        if let Some(version) = msg.version {
+        if let Some(version) = &msg.version {
             builder
                 .headers_mut()
                 .unwrap()
@@ -71,17 +67,12 @@ impl RequestCodec<Full<Bytes>, FusenError> for RequestHandler {
         let body = match msg.server_tyep {
             Type::Dubbo => {
                 let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
-                self.grpc_codec
-                    .encode(triple_request_wrapper)
-                    .map_err(|e| FusenError::Client(e.to_string()))?
+                self.grpc_codec.encode(triple_request_wrapper)?
             }
-            _ => self
-                .json_codec
-                .encode(msg.req)
-                .map_err(|e| FusenError::Client(e.to_string()))?,
+            _ => self.json_codec.encode(msg.req)?,
         };
-        builder.header("content-length", body.len());
-        let mut request = match msg.path {
+        let builder = builder.header("content-length", body.len());
+        let request = match path {
             fusen_common::Path::GET(path) => builder
                 .method("GET")
                 .uri(get_path(path, &msg.fields, &msg.req))
@@ -89,17 +80,12 @@ impl RequestCodec<Full<Bytes>, FusenError> for RequestHandler {
             fusen_common::Path::POST(path) => {
                 builder.method("POST").uri(path).body(Full::new(body))
             }
-        }
-        .map_err(|e| FusenError::Client(e.to_string()))?;
+        }?;
         Ok(request)
     }
 
-    fn decode(&self, request: Request<T>) -> FusenContext {
-        // if request.method().to_string().to_lowercase().contains("get") {
-        //     self.get_handler.decode(request)
-        // } else {
-        //     self.post_handler.decode(request)
-        // }
+    async fn decode(&self, request: Request<Full<Bytes>>) -> Result<FusenContext, crate::Error> {
+        todo!()
     }
 }
 

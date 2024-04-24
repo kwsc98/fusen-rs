@@ -61,7 +61,7 @@ impl FusenFilter for RpcServerFilter {
         match server {
             Some(server) => Box::pin(async move { Ok(server.invoke(msg).await) }),
             None => Box::pin(async move {
-                msg.res = Err(FusenError::ResourceEmpty(format!(
+                msg.res = Err(FusenError::NotFind(format!(
                     "not find server by {:?} version {:?}",
                     msg.class_name, msg.version
                 )));
