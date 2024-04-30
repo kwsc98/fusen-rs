@@ -1,4 +1,5 @@
 use examples::{DemoService, ReqDto, ResDto};
+use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::fusen_macro::asset;
 use fusen_rs::register::nacos::NacosConfig;
@@ -49,7 +50,7 @@ async fn main() {
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
                 .app_name(Some("fusen-service".to_owned()))
-                .server_type(fusen_rs::register::Type::Fusen)
+                .server_type(Type::Fusen)
                 .build()
                 .boxed(),
         )
@@ -58,7 +59,7 @@ async fn main() {
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
                 .app_name(Some("service-provider".to_owned()))
-                .server_type(fusen_rs::register::Type::SpringCloud)
+                .server_type(Type::SpringCloud)
                 .build()
                 .boxed(),
         )

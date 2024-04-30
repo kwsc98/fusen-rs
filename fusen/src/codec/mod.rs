@@ -29,11 +29,11 @@ pub trait BodyCodec<D>
 where
     D: bytes::Buf,
 {
-    type DecodeType: Send;
+    type DecodeType;
 
-    type EncodeType: Send;
+    type EncodeType;
 
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Self::DecodeType, crate::Error>;
+    fn decode(&self, body: Frame<D>) -> Result<Self::DecodeType, crate::Error>;
 
     fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error>;
 }

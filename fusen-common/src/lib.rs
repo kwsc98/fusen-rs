@@ -1,9 +1,12 @@
-use std::collections::{hash_map::Iter, HashMap};
 use codec::CodecType;
 use error::FusenError;
 use http::{HeaderMap, HeaderValue};
 use register::Type;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::{hash_map::Iter, HashMap},
+    sync::Arc,
+};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
@@ -15,9 +18,9 @@ pub mod error;
 pub mod logs;
 pub mod r#macro;
 pub mod net;
+pub mod register;
 pub mod server;
 pub mod url;
-pub mod register;
 
 #[derive(Debug)]
 pub struct MetaData {
@@ -83,7 +86,7 @@ impl Default for MetaData {
 pub struct FusenContext {
     pub unique_identifier: String,
     pub path: Path,
-    pub server_tyep : Type, 
+    pub server_tyep: Option<Arc<Type>>,
     pub meta_data: MetaData,
     pub class_name: String,
     pub method_name: String,
@@ -92,6 +95,7 @@ pub struct FusenContext {
     pub req: Vec<String>,
     pub fields: Vec<String>,
     pub res: core::result::Result<String, FusenError>,
+    pub return_ty: &'static str,
 }
 
 impl FusenContext {
@@ -105,12 +109,11 @@ impl FusenContext {
         method_name: String,
         req: Vec<String>,
         fields: Vec<String>,
-        return_ty : Option<&str>
     ) -> FusenContext {
         return FusenContext {
             unique_identifier,
             path,
-            server_tyep : Type::default(),
+            server_tyep: None,
             meta_data,
             version,
             group,
@@ -119,7 +122,11 @@ impl FusenContext {
             req,
             fields,
             res: Err(FusenError::Null),
+            return_ty: "",
         };
+    }
+    pub fn set_return_ty(&mut self, ty: &'static str) {
+        self.return_ty = ty
     }
 }
 

@@ -24,7 +24,7 @@ where
     D: bytes::Buf + Debug + Sync + Send + 'static,
 {
     pub fn new() -> Self {
-        let json_codec = JsonBodyCodec::<D>::new();
+        let json_codec = JsonBodyCodec::<D, Vec<String>, Vec<String>>::new();
         let grpc_codec = GrpcBodyCodec::<D, TripleRequestWrapper, TripleResponseWrapper>::new();
         FusenHttpCodec {
             json_codec: Box::new(json_codec),
@@ -93,7 +93,6 @@ where
             "".to_string(),
             msg,
             vec![],
-            None,
         ))
     }
 
@@ -111,7 +110,8 @@ where
                 Ok(res) => Frame::data(
                     self.json_codec
                         .encode(vec![res])
-                        .map_err(|e| FusenError::from(e))?,
+                        .map_err(|e| FusenError::from(e))?
+                        .into(),
                 ),
                 Err(err) => {
                     if let FusenError::Null = err {
@@ -132,7 +132,8 @@ where
                         let buf = self
                             .grpc_codec
                             .encode(res_wrapper)
-                            .map_err(|e| FusenError::from(e))?;
+                            .map_err(|e| FusenError::from(e))?
+                            .into();
                         vec.push(Frame::data(buf));
                     }
                     Err(err) => {

@@ -85,7 +85,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
-                            return Err(fusen_rs::fusen_common::error::FusenError::Client(err.to_string()));
+                            return Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
                         }
                         req_vec.push(res_poi_str.unwrap());
                     )*
@@ -93,7 +93,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let group : Option<&str> = #group;
                     let mut mate_data = fusen_rs::fusen_common::MetaData::new();
                     mate_data.insert("spring_cloud_name".to_string(),#spring_cloud_name.to_string());
-                    let msg = fusen_rs::fusen_common::FusenContext::new (
+                    let mut msg = fusen_rs::fusen_common::FusenContext::new (
                         fusen_rs::fusen_common::logs::get_uuid(),
                         fusen_rs::fusen_common::Path::new(#methos_type,#methos_path.to_string()),
                         mate_data,
@@ -104,7 +104,8 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         req_vec,
                         fields
                     );
-                    let res : Result<#output_type,fusen_rs::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(msg,stringify!(#output_type)).await;
+                    msg.set_return_ty(stringify!(#output_type));
+                    let res : Result<#output_type,fusen_rs::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(msg).await;
                     return res;
                 }
             }

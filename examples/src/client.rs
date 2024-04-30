@@ -1,6 +1,7 @@
 use examples::{DemoServiceClient, ReqDto};
 use fusen_rs::client::FusenClient;
 use fusen_rs::fusen_common;
+use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::register::nacos::NacosConfig;
 use lazy_static::lazy_static;
@@ -11,7 +12,7 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("fusen-client".to_owned()))
-            .server_type(fusen_rs::register::Type::Fusen)
+            .server_type(Type::Fusen)
             .build()
             .boxed()
     );
@@ -19,7 +20,7 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("dubbo-client".to_owned()))
-            .server_type(fusen_rs::register::Type::Dubbo)
+            .server_type(Type::Dubbo)
             .build()
             .boxed()
     );
@@ -27,7 +28,7 @@ lazy_static! {
         NacosConfig::builder()
             .server_addr("127.0.0.1:8848".to_owned())
             .app_name(Some("springcloud-client".to_owned()))
-            .server_type(fusen_rs::register::Type::SpringCloud)
+            .server_type(Type::SpringCloud)
             .build()
             .boxed()
     );

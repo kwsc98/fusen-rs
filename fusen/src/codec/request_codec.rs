@@ -29,7 +29,7 @@ pub struct RequestHandler {
 
 impl RequestHandler {
     pub fn new() -> Self {
-        let json_codec = JsonBodyCodec::<bytes::Bytes>::new();
+        let json_codec = JsonBodyCodec::<bytes::Bytes, Vec<String>, Vec<String>>::new();
         let grpc_codec =
             GrpcBodyCodec::<bytes::Bytes, TripleResponseWrapper, TripleRequestWrapper>::new();
         RequestHandler {
@@ -41,7 +41,7 @@ impl RequestHandler {
 
 impl RequestCodec<Full<Bytes>> for RequestHandler {
     fn encode(&self, msg: FusenContext) -> Result<Request<Full<Bytes>>, crate::Error> {
-        let content_type = match &msg.server_tyep {
+        let content_type = match msg.server_tyep.as_ref().unwrap().as_ref() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
         };
@@ -54,7 +54,7 @@ impl RequestCodec<Full<Bytes>> for RequestHandler {
                 .unwrap()
                 .insert(content_type.1, HeaderValue::from_str(&version).unwrap());
         }
-        let path = match &msg.server_tyep {
+        let path = match msg.server_tyep.as_ref().unwrap().as_ref() {
             &Type::SpringCloud => msg.path,
             _ => {
                 let path = "/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name;
@@ -64,20 +64,20 @@ impl RequestCodec<Full<Bytes>> for RequestHandler {
                 }
             }
         };
-        let body = match msg.server_tyep {
-            Type::Dubbo => {
-                let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
-                self.grpc_codec.encode(triple_request_wrapper)?
-            }
-            _ => self.json_codec.encode(msg.req)?,
-        };
-        let builder = builder.header("content-length", body.len());
         let request = match path {
             fusen_common::Path::GET(path) => builder
                 .method("GET")
                 .uri(get_path(path, &msg.fields, &msg.req))
                 .body(Full::new(Bytes::new())),
             fusen_common::Path::POST(path) => {
+                let body: Bytes = match msg.server_tyep.as_ref().unwrap().as_ref() {
+                    &Type::Dubbo => {
+                        let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
+                        self.grpc_codec.encode(triple_request_wrapper)?.into()
+                    }
+                    _ => self.json_codec.encode(msg.req)?.into(),
+                };
+                let builder = builder.header("content-length", body.len());
                 builder.method("POST").uri(path).body(Full::new(body))
             }
         }?;

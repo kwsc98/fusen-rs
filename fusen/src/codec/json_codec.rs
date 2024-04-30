@@ -1,51 +1,44 @@
+use bytes::BufMut;
 use http_body::Frame;
+use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use super::BodyCodec;
 
-pub struct JsonBodyCodec<D> {
+pub struct JsonBodyCodec<D, U, T> {
     _d: PhantomData<D>,
+    _u: PhantomData<U>,
+    _t: PhantomData<T>,
 }
 
-impl<D> JsonBodyCodec<D> {
+impl<D, U, T> JsonBodyCodec<D, U, T> {
     pub fn new() -> Self {
-        Self { _d: PhantomData }
+        Self {
+            _d: PhantomData,
+            _u: PhantomData,
+            _t: PhantomData,
+        }
     }
 }
 
-impl<D> BodyCodec<D> for JsonBodyCodec<D>
+impl<'b, D, U, T> BodyCodec<D> for JsonBodyCodec<D, U, T>
 where
     D: bytes::Buf,
+    U: Deserialize<'b>,
+    T: Serialize,
 {
-    type DecodeType = Vec<String>;
+    type DecodeType = U;
 
-    type EncodeType = Vec<String>;
+    type EncodeType = T;
 
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Vec<String>, crate::Error> {
-        let data = if body.is_empty() || body[0].is_trailers() {
-            return Err("receive frame err".into());
-        } else {
-            body[0].data_ref().unwrap().chunk()
-        };
-        Ok(if data.starts_with(b"[") {
-            match serde_json::from_slice(&data) {
-                Ok(req) => req,
-                Err(err) => return Err(err.into()),
-            }
-        } else {
-            vec![String::from_utf8(data.to_vec())?]
-        })
+    fn decode(&self, body: Frame<D>) -> Result<Self::DecodeType, crate::Error> {
+        let data = body.data_ref().unwrap().chunk();
+        serde_json::from_slice(data).map_err(|e| e.into())
     }
 
-    fn encode(&self, mut res: Vec<String>) -> Result<bytes::Bytes, crate::Error> {
-        if res.is_empty() {
-            return Err("encode err res is empty".into());
-        }
-        let res = if res.len() == 1 {
-            res.remove(0)
-        } else {
-            serde_json::to_string(&res)?
-        };
-        Ok(bytes::Bytes::from(res))
+    fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
+        let byte = bytes::BytesMut::new();
+        serde_json::to_writer(byte.writer(), &res).map_err(|e| Box::new(e))?;
+        Ok(byte.into())
     }
 }

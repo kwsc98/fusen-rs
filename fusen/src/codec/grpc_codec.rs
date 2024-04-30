@@ -32,12 +32,8 @@ where
 
     type EncodeType = T;
 
-    fn decode(&self, body: Vec<Frame<D>>) -> Result<Self::DecodeType, crate::Error> {
-        let data = if body.is_empty() || body[0].is_trailers() {
-            return Err("decode frame err".into());
-        } else {
-            body[0].data_ref().unwrap().chunk()
-        };
+    fn decode(&self, body: Frame<D>) -> Result<Self::DecodeType, crate::Error> {
+        let data = body.data_ref().unwrap().chunk();
         let wrapper = Self::DecodeType::decode(&data[5..])?;
         Ok(wrapper)
     }
@@ -45,6 +41,6 @@ where
     fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
         let buf = res.encode_to_vec();
         let buf = get_buf(buf);
-        Ok(bytes::Bytes::from(buf))
+        Ok(bytes::Bytes::from(buf).into())
     }
 }
