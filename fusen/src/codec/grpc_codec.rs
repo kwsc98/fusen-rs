@@ -32,8 +32,8 @@ where
 
     type EncodeType = T;
 
-    fn decode(&self, body: Frame<D>) -> Result<Self::DecodeType, crate::Error> {
-        let data = body.data_ref().unwrap().chunk();
+    fn decode(&self, body: &D) -> Result<Self::DecodeType, crate::Error> {
+        let data = body.chunk();
         let wrapper = Self::DecodeType::decode(&data[5..])?;
         Ok(wrapper)
     }

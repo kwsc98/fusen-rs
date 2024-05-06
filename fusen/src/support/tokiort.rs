@@ -7,7 +7,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::executor::block_on;
 use hyper::rt::{Sleep, Timer};
 use pin_project_lite::pin_project;
 
@@ -234,23 +233,4 @@ where
     ) -> Poll<Result<usize, std::io::Error>> {
         hyper::rt::Write::poll_write_vectored(self.project().inner, cx, bufs)
     }
-}
-
-
-async fn add(n:i32) -> i32{
-    n+1
-}
-
-async fn test() -> i32{
-    let ok = Ok(1);
-    match ok {
-        
-    }
-    // Ok(1).map(|n| add(n).await )
-    // .unwrap_or_else(|_|  0 ).await
-}
-
-fn main() {
-    let n = block_on(test());
-    println!("{}", n);
 }

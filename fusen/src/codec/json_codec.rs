@@ -1,4 +1,4 @@
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use http_body::Frame;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -23,7 +23,7 @@ impl<D, U, T> JsonBodyCodec<D, U, T> {
 
 impl<'b, D, U, T> BodyCodec<D> for JsonBodyCodec<D, U, T>
 where
-    D: bytes::Buf,
+    D: bytes::Buf + 'b,
     U: Deserialize<'b>,
     T: Serialize,
 {
@@ -31,14 +31,17 @@ where
 
     type EncodeType = T;
 
-    fn decode(&self, body: Frame<D>) -> Result<Self::DecodeType, crate::Error> {
-        let data = body.data_ref().unwrap().chunk();
-        serde_json::from_slice(data).map_err(|e| e.into())
+    fn decode(&self, body: &D) -> Result<Self::DecodeType, crate::Error> {
+        let data = body.chunk();
+        println!("{:?}",String::from_utf8(data.to_vec()));
+        let mut de = serde_json::Deserializer::from_reader(data.reader());
+        Ok(U::deserialize(&mut de).unwrap())
     }
 
     fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
-        let byte = bytes::BytesMut::new();
-        serde_json::to_writer(byte.writer(), &res).map_err(|e| Box::new(e))?;
+        let mut byte = bytes::BytesMut::new();
+        let mut_bytes = &mut byte;
+        serde_json::to_writer(mut_bytes.writer(), &res).map_err(|e| Box::new(e))?;
         Ok(byte.into())
     }
 }

@@ -16,7 +16,7 @@ use crate::{
 #[derive(Clone)]
 pub struct FusenRouter<KF: 'static> {
     fusen_filter: Arc<&'static KF>,
-    http_codec: Arc<FusenHttpCodec<bytes::Bytes>>,
+    http_codec: Arc<FusenHttpCodec>,
 }
 
 impl<KF> FusenRouter<KF>
@@ -26,13 +26,13 @@ where
     pub fn new(fusen_filter: &'static KF) -> Self {
         return FusenRouter {
             fusen_filter: Arc::new(fusen_filter),
-            http_codec: Arc::new(FusenHttpCodec::<bytes::Bytes>::new()),
+            http_codec: Arc::new(FusenHttpCodec::new()),
         };
     }
 
     async fn call(
         req: Request<hyper::body::Incoming>,
-        http_codec: Arc<FusenHttpCodec<bytes::Bytes>>,
+        http_codec: Arc<FusenHttpCodec>,
         fusen_filter: Arc<&'static KF>,
     ) -> Result<Response<StreamBody<Bytes, hyper::Error>>, FusenError> {
         let req = req.map(|e| e.boxed());

@@ -87,6 +87,9 @@ impl ResponseCodec<Incoming> for ResponseHandler {
                 break;
             }
         }
+        if frame_vec.is_empty() {
+            return Err(FusenError::from("empty frame"));
+        }
         let codec_type = response
             .headers()
             .iter()
@@ -96,11 +99,13 @@ impl ResponseCodec<Incoming> for ResponseHandler {
                 Ok(coder) => CodecType::from(coder),
                 Err(_) => CodecType::JSON,
             });
-        frame_vec.
+        let byte = frame_vec[0]
+            .data_ref()
+            .map_or(Err(FusenError::from("empty body")), |e| Ok(e))?;
         let res = match codec_type {
-            CodecType::JSON => self.json_codec.decode(frame_vec.remove(0))?,
+            CodecType::JSON => self.json_codec.decode(byte)?,
             CodecType::GRPC => {
-                let response = self.grpc_codec.decode(frame_vec.remove(0))?;
+                let response = self.grpc_codec.decode(byte)?;
                 String::from_utf8(response.data).map_err(|e| FusenError::from(e.to_string()))?
             }
         };
