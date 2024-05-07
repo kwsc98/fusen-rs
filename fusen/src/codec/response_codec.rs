@@ -1,7 +1,8 @@
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
 use fusen_common::{codec::CodecType, error::FusenError, FusenContext};
-use http::Response;
+use http::{HeaderMap, HeaderValue, Response};
+use http_body::Frame;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 
@@ -13,13 +14,13 @@ pub(crate) trait ResponseCodec<T> {
 
 pub struct ResponseHandler {
     json_codec: Box<
-        dyn BodyCodec<bytes::Bytes, EncodeType = Vec<String>, DecodeType = String> + Sync + Send,
+        dyn BodyCodec<bytes::Bytes, EncodeType = String, DecodeType = String> + Sync + Send,
     >,
     grpc_codec: Box<
         (dyn BodyCodec<
             bytes::Bytes,
             DecodeType = TripleResponseWrapper,
-            EncodeType = TripleRequestWrapper,
+            EncodeType = TripleResponseWrapper,
         > + Sync
              + Send),
     >,
@@ -27,10 +28,10 @@ pub struct ResponseHandler {
 
 impl ResponseHandler {
     pub fn new() -> Self {
-        let json_codec: JsonBodyCodec<bytes::Bytes, String, Vec<String>> =
-            JsonBodyCodec::<bytes::Bytes, String, Vec<String>>::new();
+        let json_codec: JsonBodyCodec<bytes::Bytes, String, String> =
+            JsonBodyCodec::<bytes::Bytes, String, String>::new();
         let grpc_codec =
-            GrpcBodyCodec::<bytes::Bytes, TripleResponseWrapper, TripleRequestWrapper>::new();
+            GrpcBodyCodec::<bytes::Bytes, TripleResponseWrapper, TripleResponseWrapper>::new();
         ResponseHandler {
             json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
@@ -39,8 +40,78 @@ impl ResponseHandler {
 }
 
 impl ResponseCodec<Incoming> for ResponseHandler {
-    fn encode(&self, mut msg: FusenContext) -> Result<Response<Incoming>, crate::Error> {
-        todo!()
+    fn encode(&self, mut context: FusenContext) -> Result<Response<Incoming>, crate::Error> {
+        let meta_data = &context.meta_data;
+        let content_type = match meta_data.get_codec() {
+            fusen_common::codec::CodecType::JSON => "application/json",
+            fusen_common::codec::CodecType::GRPC => "application/grpc",
+        };
+        let body = match meta_data.get_codec() {
+            fusen_common::codec::CodecType::JSON => vec![match context.res {
+                Ok(res) => Frame::data(
+                    self.json_codec
+                        .encode(res)
+                        .map_err(|e| FusenError::from(e))?
+                        .into(),
+                ),
+                Err(err) => {
+                    if let FusenError::Null = err {
+                        Frame::data(bytes::Bytes::from("null"))
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }],
+            fusen_common::codec::CodecType::GRPC => {
+                let mut status = "0";
+                let mut message = String::from("success");
+                let mut trailers = HeaderMap::new();
+                let mut vec = vec![];
+                match context.res {
+                    Ok(data) => {
+                        let res_wrapper = TripleResponseWrapper::form(data);
+                        let buf = self
+                            .grpc_codec
+                            .encode(res_wrapper)
+                            .map_err(|e| FusenError::from(e))?
+                            .into();
+                        vec.push(Frame::data(buf));
+                    }
+                    Err(err) => {
+                        message = match err {
+                            FusenError::Null => {
+                                status = "90";
+                                "null value".to_owned()
+                            }
+                            FusenError::NotFind(msg) => {
+                                status = "91";
+                                msg
+                            }
+                            FusenError::Info(msg) => {
+                                status = "92";
+                                msg
+                            }
+                        }
+                    }
+                }
+                trailers.insert("grpc-status", HeaderValue::from_str(status).unwrap());
+                trailers.insert("grpc-message", HeaderValue::from_str(&message).unwrap());
+                vec.push(Frame::trailers(trailers));
+                vec
+            }
+        };
+
+        let chunks = body.into_iter().fold(vec![], |mut vec, e| {
+            vec.push(Ok(e));
+            vec
+        });
+        let stream = futures_util::stream::iter(chunks);
+        let stream_body = http_body_util::StreamBody::new(stream);
+        let response = Response::builder()
+            .header("content-type", content_type)
+            .body(stream_body)
+            .map_err(|e| FusenError::from(e))?;
+        Ok(response)
     }
 
     async fn decode(&self, mut response: Response<Incoming>) -> Result<String, FusenError> {
