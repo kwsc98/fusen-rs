@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use fusen_common::{error::FusenError, net::get_path};
 use http::{Request, Response, Version};
-use http_body_util::Full;
+use http_body_util::{combinators::BoxBody, Full};
 use hyper::{body::Incoming, client::conn::http2::SendRequest};
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 use tokio::{net::TcpStream, sync::RwLock};
 use tracing::error;
 
@@ -19,13 +19,13 @@ pub struct SocketAssets {
 
 pub enum Socket {
     HTTP1,
-    HTTP2(Arc<RwLock<Option<SendRequest<Full<Bytes>>>>>),
+    HTTP2(Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes,Infallible>>>>>),
 }
 
 impl SocketAssets {
     pub async fn send_request(
         &self,
-        request: Request<Full<bytes::Bytes>>,
+        request: Request<BoxBody<bytes::Bytes,Infallible>>,
     ) -> Result<Response<Incoming>, FusenError> {
         match &self.socket {
             Socket::HTTP1 => send_http1_request(&self.resource, request).await,
@@ -51,7 +51,7 @@ async fn get_tcp_stream(resource: &Resource) -> Result<TokioIo<TcpStream>, crate
 
 async fn send_http1_request(
     resource: &Resource,
-    mut request: Request<Full<bytes::Bytes>>,
+    mut request: Request<BoxBody<bytes::Bytes,Infallible>>,
 ) -> Result<Response<Incoming>, FusenError> {
     *request.version_mut() = Version::HTTP_10;
     let io = get_tcp_stream(resource)
@@ -75,8 +75,8 @@ async fn send_http1_request(
 
 async fn send_http2_request(
     resource: &Resource,
-    request: Request<Full<Bytes>>,
-    sender_lock: &Arc<RwLock<Option<SendRequest<Full<Bytes>>>>>,
+    request: Request<BoxBody<bytes::Bytes,Infallible>>,
+    sender_lock: &Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes,Infallible>>>>>,
 ) -> Result<Response<Incoming>, FusenError> {
     let sender_read = sender_lock.read().await;
     let mut sender = match sender_read.as_ref() {

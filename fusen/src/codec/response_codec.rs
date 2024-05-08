@@ -1,9 +1,12 @@
+use std::convert::Infallible;
+
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
+use bytes::Bytes;
 use fusen_common::{codec::CodecType, error::FusenError, FusenContext};
 use http::{HeaderMap, HeaderValue, Response};
 use http_body::Frame;
-use http_body_util::BodyExt;
+use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::body::Incoming;
 
 pub(crate) trait ResponseCodec<T> {
@@ -40,7 +43,7 @@ impl ResponseHandler {
 }
 
 impl ResponseCodec<Incoming> for ResponseHandler {
-    fn encode(&self, mut context: FusenContext) -> Result<Response<Incoming>, crate::Error> {
+    fn encode(&self, mut context: FusenContext) -> Result<Response<BoxBody<Bytes,Infallible>>, crate::Error> {
         let meta_data = &context.meta_data;
         let content_type = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => "application/json",
@@ -58,7 +61,7 @@ impl ResponseCodec<Incoming> for ResponseHandler {
                     if let FusenError::Null = err {
                         Frame::data(bytes::Bytes::from("null"))
                     } else {
-                        return Err(err);
+                        return Err(Box::new(err));
                     }
                 }
             }],
