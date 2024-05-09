@@ -3,7 +3,6 @@ use crate::protocol::StreamHandler;
 use fusen_common::server::Protocol;
 use fusen_common::server::RpcServer;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::mpsc::Receiver;
@@ -13,13 +12,13 @@ use tracing::{debug, error};
 #[derive(Clone)]
 pub struct TcpServer {
     protocol: Vec<Protocol>,
-    fusen_servers: HashMap<String, Arc<&'static dyn RpcServer>>,
+    fusen_servers: HashMap<String, &'static dyn RpcServer>,
 }
 
 impl TcpServer {
     pub fn init(
         protocol: Vec<Protocol>,
-        fusen_servers: HashMap<String, Arc<&'static dyn RpcServer>>,
+        fusen_servers: HashMap<String, &'static dyn RpcServer>,
     ) -> Self {
         return TcpServer {
             protocol,

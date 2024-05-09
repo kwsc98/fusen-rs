@@ -49,7 +49,7 @@ impl Register for FusenZookeeper {
                     return Ok(port.clone());
                 }
             }
-            return Err("need monitor Http2".into());
+            Err("need monitor Http2".into())
         })
     }
 
@@ -75,7 +75,7 @@ impl Register for FusenZookeeper {
 
 #[async_recursion]
 async fn connect(cluster: &str, chroot: &str) -> zk::Client {
-    let client = match zk::Client::connect(&cluster).await {
+    let client = match zk::Client::connect(cluster).await {
         Ok(client) => client,
         Err(err) => {
             tokio::time::sleep(Duration::from_secs(30)).await;
@@ -122,14 +122,14 @@ async fn creat_resource_node(
     resource: &Resource,
 ) -> crate::Result<()> {
     match &resource.category {
-        &Category::Client => {
+        Category::Client => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/consumers"));
         }
-        &Category::Server => {
+        Category::Server => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/providers"));
         }
     };
-    let node_name = encode_url(&resource);
+    let node_name = encode_url(resource);
     let node_data = serde_json::to_string(&resource).unwrap();
     let client = connect(&cluster, &path).await;
     match client
@@ -178,11 +178,12 @@ async fn listener_resource_node_change(
     server_type: Type,
     resource: Resource,
 ) -> Result<super::Directory, crate::Error> {
+    let version = resource.version;
     match &resource.category {
-        &Category::Client => {
+        Category::Client => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/providers"));
         }
-        &Category::Server => return Err("server cloud be listener".into()),
+        Category::Server => return Err("server cloud be listener".into()),
     };
     let directory = super::Directory::new(Arc::new(server_type)).await;
     let directory_clone = directory.clone();
@@ -194,11 +195,11 @@ async fn listener_resource_node_change(
         };
     let mut server_list = vec![];
     for node in watcher.0 {
-        let resource = decode_url(&node);
-        if let Ok(resource) = resource {
-            if let &Category::Server = &resource.category {
-                if &resource.version == &resource.version {
-                    server_list.push(resource);
+        let resource_tmp = decode_url(&node);
+        if let Ok(resource_tmp) = resource_tmp {
+            if let &Category::Server = &resource_tmp.category {
+                if version == resource_tmp.version {
+                    server_list.push(resource_tmp);
                 }
             }
         }
@@ -216,11 +217,11 @@ async fn listener_resource_node_change(
             };
             let mut server_list = vec![];
             for node in watcher.0 {
-                let resource = decode_url(&node);
-                if let Ok(resource) = resource {
-                    if let &Category::Server = &resource.category {
-                        if &resource.version == &resource.version {
-                            server_list.push(resource);
+                let resource_tmp = decode_url(&node);
+                if let Ok(resource_tmp) = resource_tmp {
+                    if let &Category::Server = &resource_tmp.category {
+                        if version == resource_tmp.version {
+                            server_list.push(resource_tmp);
                         }
                     }
                 }

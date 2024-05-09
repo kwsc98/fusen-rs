@@ -1,15 +1,15 @@
 use super::FusenFilter;
 use fusen_common::{error::FusenError, server::RpcServer, FusenContext, MethodResource, Path};
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 #[derive(Clone, Default)]
 pub struct RpcServerFilter {
-    cache: HashMap<String, Arc<&'static dyn RpcServer>>,
+    cache: HashMap<String, &'static dyn RpcServer>,
     path_cache: HashMap<String, (String, String)>,
 }
 
 impl RpcServerFilter {
-    pub fn new(cache: HashMap<String, Arc<&'static dyn RpcServer>>) -> Self {
+    pub fn new(cache: HashMap<String, &'static dyn RpcServer>) -> Self {
         let mut path_cache = HashMap::new();
         for item in &cache {
             let info = item.1.get_info();
@@ -33,7 +33,7 @@ impl RpcServerFilter {
         }
         return RpcServerFilter { cache, path_cache };
     }
-    pub fn get_server(&self, msg: &mut FusenContext) -> Option<Arc<&'static dyn RpcServer>> {
+    pub fn get_server(&self, msg: &mut FusenContext) -> Option<&'static dyn RpcServer> {
         let info = self.path_cache.get(&msg.path.get_key())?;
         msg.class_name = info.0.clone();
         msg.method_name = info.1.clone();
@@ -42,7 +42,7 @@ impl RpcServerFilter {
             class_name.push_str(":");
             class_name.push_str(version);
         }
-        self.cache.get(&class_name).map(|e| e.clone())
+        self.cache.get(&class_name).map(|e| *e)
     }
 }
 

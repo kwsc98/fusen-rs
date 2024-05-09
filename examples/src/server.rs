@@ -17,17 +17,16 @@ struct DemoServiceImpl {
 
 #[fusen_server(package = "org.apache.dubbo.springboot.demo")]
 impl DemoService for DemoServiceImpl {
-
     async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
-        return Ok("Hello ".to_owned() + &req);
+        Ok("Hello ".to_owned() + &req)
     }
     #[asset(path="/sayHelloV2-http",method = POST)]
     async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
         info!("res : {:?}", req);
-        return Ok(ResDto {
+        Ok(ResDto {
             str: "Hello ".to_owned() + &req.str + " V2",
-        });
+        })
     }
 
     #[asset(path="/divide",method = GET)]

@@ -15,7 +15,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct FusenRouter<KF: 'static> {
-    fusen_filter: Arc<&'static KF>,
+    fusen_filter: &'static KF,
     http_codec: Arc<FusenHttpCodec>,
 }
 
@@ -24,16 +24,16 @@ where
     KF: FusenFilter<Request = FusenContext, Response = FusenContext, Error = FusenError> + Clone,
 {
     pub fn new(fusen_filter: &'static KF) -> Self {
-        return FusenRouter {
-            fusen_filter: Arc::new(fusen_filter),
+        FusenRouter {
+            fusen_filter: fusen_filter,
             http_codec: Arc::new(FusenHttpCodec::new()),
-        };
+        }
     }
 
     async fn call(
         request: Request<hyper::body::Incoming>,
         http_codec: Arc<FusenHttpCodec>,
-        fusen_filter: Arc<&'static KF>,
+        fusen_filter: &'static KF,
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, FusenError> {
         let request = request.map(|e| e.boxed());
         let context = http_codec.as_ref().decode(request).await?;
@@ -56,7 +56,7 @@ where
     type Future = FusenFuture<Result<Self::Response, Self::Error>>;
 
     fn call(&self, req: Request<hyper::body::Incoming>) -> Self::Future {
-        let fusen_filter = self.fusen_filter.clone();
+        let fusen_filter = self.fusen_filter;
         let http_codec = self.http_codec.clone();
         Box::pin(async move {
             Ok(match Self::call(req, http_codec, fusen_filter).await {

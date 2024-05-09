@@ -1,4 +1,3 @@
-use bytes::BufMut;
 use prost::Message;
 
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -38,59 +37,64 @@ pub struct TripleExceptionWrapper {
 
 impl TripleRequestWrapper {
     pub fn from(strs: Vec<String>) -> Self {
-        let mut trip = TripleRequestWrapper::default();
-        trip.serialize_type = "fastjson".to_string();
+        let mut trip = TripleRequestWrapper {
+            serialize_type: "fastjson".to_string(),
+            args: Default::default(),
+            arg_types: Default::default(),
+        };
         trip.args = vec![];
         for str in strs {
             trip.args.push(str.as_bytes().to_vec());
         }
-        return trip;
+        trip
     }
     pub fn get_req(self) -> Vec<String> {
         let mut res = vec![];
         for str in self.args {
             res.push(String::from_utf8(str).unwrap());
         }
-        return res;
+        res
     }
 }
 
 impl TripleResponseWrapper {
     pub fn form(strs: String) -> Self {
-        let mut trip = TripleResponseWrapper::default();
-        trip.serialize_type = "fastjson".to_string();
+        let mut trip = TripleResponseWrapper {
+            serialize_type: "fastjson".to_string(),
+            data: Default::default(),
+            r#type: Default::default(),
+        };
         trip.data = strs.as_bytes().to_vec();
-        return trip;
+        trip
     }
     pub fn is_empty_body(&self) -> bool {
-        return self.data.starts_with("null".as_bytes());
+        self.data.starts_with("null".as_bytes())
     }
 }
 
 impl TripleExceptionWrapper {
     pub fn get_buf(strs: String) -> Vec<u8> {
-        let mut trip = TripleExceptionWrapper::default();
-        trip.serialization = "fastjson".to_string();
+        let mut trip = TripleExceptionWrapper {
+            language: Default::default(),
+            serialization: "fastjson".to_string(),
+            class_name: Default::default(),
+            data: Default::default(),
+        };
         trip.data = strs.as_bytes().to_vec();
-        return get_buf(trip.encode_to_vec());
+        get_buf(trip.encode_to_vec())
     }
     pub fn get_err_info(&self) -> String {
-        return serde_json::from_slice(&self.data[..]).unwrap_or("rpc error".to_owned());
+        serde_json::from_slice(&self.data[..]).unwrap_or("rpc error".to_owned())
     }
 }
 
-pub fn get_buf(data: Vec<u8>) -> Vec<u8> {
+pub fn get_buf(mut data: Vec<u8>) -> Vec<u8> {
     let mut len = data.len();
-    let mut u8_array = [0 as u8; 4];
-    for idx in 0..4 {
-        u8_array[idx] = len as u8 | 0;
+    let mut u8_array = vec![0_u8; 5];
+    for idx in (1..5).rev() {
+        u8_array[idx] = len as u8;
         len >>= 8;
     }
-    let mut buf = bytes::BytesMut::default();
-    buf.put_u8(0);
-    for item in u8_array.iter().rev() {
-        buf.put_u8(*item);
-    }
-    buf.put_slice(&data);
-    return buf.to_vec();
+    u8_array.append(&mut data);
+    u8_array
 }

@@ -14,8 +14,8 @@ pub fn encode_url(resource: &Resource) -> String {
         Category::Client => url.push_str("consumer://"),
         Category::Server => url.push_str("tri://"),
     }
-    url.push_str(&(get_path(resource) + &"/"));
-    url.push_str(&(resource.server_name.clone() + &"?"));
+    url.push_str(&(get_path(resource) + "/"));
+    url.push_str(&(resource.server_name.clone() + "?"));
     url.push_str(&("interface=".to_owned() + &resource.server_name));
     url.push_str(&get_field_url(
         "&methods",
@@ -34,25 +34,25 @@ pub fn encode_url(resource: &Resource) -> String {
             "&dubbo=2.0.2&prefer.serialization=fastjson&release=3.3.0-beta.1&side=provider",
         ),
     }
-    return "/".to_string() + &fusen_common::url::encode_url(&url);
+    "/".to_string() + &fusen_common::url::encode_url(&url)
 }
 
 fn get_ip(path: &str) -> (String, Option<String>) {
-    let path: Vec<&str> = path.split(":").collect();
+    let path: Vec<&str> = path.split(':').collect();
     let mut port = None;
     if path.len() > 1 {
         let _ = port.insert(path[1].to_string());
     }
-    return (path[0].to_string(), port);
+    (path[0].to_string(), port)
 }
 
 fn get_path(info: &Resource) -> String {
     let mut ip = info.ip.clone();
     if let Some(port) = info.port.clone() {
-        ip.push_str(":");
+        ip.push(':');
         ip.push_str(&port);
     }
-    return ip.to_string();
+    ip.to_string()
 }
 
 fn get_info(mut url: &str) -> crate::Result<Resource> {
@@ -65,9 +65,9 @@ fn get_info(mut url: &str) -> crate::Result<Resource> {
     } else {
         return Err(format!("err url : {}", url).into());
     }
-    let info: Vec<&str> = url.split("/").collect();
+    let info: Vec<&str> = url.split('/').collect();
     let path = get_ip(info[0]);
-    let info: Vec<&str> = info[1].split("?").collect();
+    let info: Vec<&str> = info[1].split('?').collect();
     let server_name = info[0].to_string();
     let vision = get_field_values(info[1], "version");
     let mut revision = None;
@@ -99,16 +99,16 @@ fn get_info(mut url: &str) -> crate::Result<Resource> {
         port: path.1,
         params: HashMap::new(),
     };
-    return Ok(info);
+    Ok(info)
 }
 
 fn get_field_values(str: &str, key: &str) -> Vec<String> {
-    let fields: Vec<&str> = str.split("&").collect();
+    let fields: Vec<&str> = str.split('&').collect();
     let mut res = vec![];
     for field in fields {
-        let field: Vec<&str> = field.split("=").collect();
+        let field: Vec<&str> = field.split('=').collect();
         if field[0] == key {
-            let velues: Vec<&str> = field[1].split(",").collect();
+            let velues: Vec<&str> = field[1].split(',').collect();
             res = velues.iter().fold(res, |mut res, &e| {
                 res.push(e.to_string());
                 res
@@ -116,7 +116,7 @@ fn get_field_values(str: &str, key: &str) -> Vec<String> {
             break;
         }
     }
-    return res;
+    res
 }
 
 fn get_field_url(key: &str, values: &Vec<String>) -> String {
@@ -127,5 +127,5 @@ fn get_field_url(key: &str, values: &Vec<String>) -> String {
     for value in values {
         res.push_str(&(value.to_owned() + ","));
     }
-    return key.to_string() + "=" + &res[..res.len() - 1];
+    key.to_string() + "=" + &res[..res.len() - 1]
 }

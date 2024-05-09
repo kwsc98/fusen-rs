@@ -29,7 +29,7 @@ impl RegisterBuilder {
         if info[0] != "register" {
             return Err(format!("config url err is not register : {:?}", config_url).into());
         }
-        let info: Vec<&str> = info[1].split("?").collect();
+        let info: Vec<&str> = info[1].split('?').collect();
         let info = info[0].to_lowercase();
         let register_type = if info.contains("nacos") {
             RegisterType::Nacos(config)
@@ -38,7 +38,7 @@ impl RegisterBuilder {
         } else {
             return Err(format!("config url err : {:?}", config_url).into());
         };
-        return Ok(RegisterBuilder { register_type });
+        Ok(RegisterBuilder { register_type })
     }
 
     pub fn init(self) -> Box<dyn Register> {
@@ -70,7 +70,7 @@ impl Resource {
             ip.push(':');
             ip.push_str(port);
         }
-        return ip;
+        ip
     }
 }
 

@@ -7,31 +7,31 @@ use fusen_common::{
     url::UrlConfig,
     MetaData,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 pub struct FusenServer {
     protocol: Vec<Protocol>,
-    fusen_servers: HashMap<String, Arc<&'static dyn RpcServer>>,
+    fusen_servers: HashMap<String, &'static dyn RpcServer>,
     register_config: Vec<Box<dyn UrlConfig>>,
     register: Vec<Box<dyn Register>>,
 }
 
 impl FusenServer {
     pub fn build() -> FusenServer {
-        return FusenServer {
+        FusenServer {
             protocol: vec![],
             register_config: vec![],
             register: vec![],
             fusen_servers: HashMap::new(),
-        };
+        }
     }
     pub fn add_protocol(mut self, protocol: Protocol) -> FusenServer {
         self.protocol.push(protocol);
-        return self;
+        self
     }
     pub fn add_register_builder(mut self, register_config: Box<dyn UrlConfig>) -> FusenServer {
         self.register_config.push(register_config);
-        return self;
+        self
     }
 
     pub fn add_fusen_server(mut self, server: Box<dyn RpcServer>) -> FusenServer {
@@ -39,11 +39,11 @@ impl FusenServer {
         let server_name = info.id.to_string();
         let mut key = server_name.clone();
         if let Some(version) = info.version {
-            key.push_str(":");
+            key.push(':');
             key.push_str(&version);
         }
-        self.fusen_servers.insert(key, Arc::new(Box::leak(server)));
-        return self;
+        self.fusen_servers.insert(key, Box::leak(server));
+        self
     }
 
     pub async fn run(mut self) {
@@ -67,7 +67,7 @@ impl FusenServer {
                     };
                     let _ = register.register(resource).await;
                 }
-                let _ = self.register.push(register);
+                self.register.push(register);
             }
         }
         let _ = shutdown_complete_rx.recv().await;
