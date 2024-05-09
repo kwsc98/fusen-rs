@@ -1,24 +1,22 @@
 use std::convert::Infallible;
 
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
-use crate::support::triple::{TripleRequestWrapper, TripleResponseWrapper};
+use crate::support::triple::TripleResponseWrapper;
 use bytes::Bytes;
 use fusen_common::{codec::CodecType, error::FusenError, FusenContext};
 use http::{HeaderMap, HeaderValue, Response};
 use http_body::Frame;
 use http_body_util::{combinators::BoxBody, BodyExt};
-use hyper::body::Incoming;
 
-pub(crate) trait ResponseCodec<T> {
-    fn encode(&self, msg: FusenContext) -> Result<Response<T>, crate::Error>;
+pub(crate) trait ResponseCodec<T, E> {
+    fn encode(&self, msg: FusenContext) -> Result<Response<BoxBody<T, Infallible>>, crate::Error>;
 
-    async fn decode(&self, request: Response<Incoming>) -> Result<String, FusenError>;
+    async fn decode(&self, request: Response<BoxBody<T, E>>) -> Result<String, FusenError>;
 }
 
 pub struct ResponseHandler {
-    json_codec: Box<
-        dyn BodyCodec<bytes::Bytes, EncodeType = String, DecodeType = String> + Sync + Send,
-    >,
+    json_codec:
+        Box<dyn BodyCodec<bytes::Bytes, EncodeType = String, DecodeType = String> + Sync + Send>,
     grpc_codec: Box<
         (dyn BodyCodec<
             bytes::Bytes,
@@ -42,8 +40,11 @@ impl ResponseHandler {
     }
 }
 
-impl ResponseCodec<Incoming> for ResponseHandler {
-    fn encode(&self, mut context: FusenContext) -> Result<Response<BoxBody<Bytes,Infallible>>, crate::Error> {
+impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
+    fn encode(
+        &self,
+        context: FusenContext,
+    ) -> Result<Response<BoxBody<Bytes, Infallible>>, crate::Error> {
         let meta_data = &context.meta_data;
         let content_type = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => "application/json",
@@ -112,12 +113,15 @@ impl ResponseCodec<Incoming> for ResponseHandler {
         let stream_body = http_body_util::StreamBody::new(stream);
         let response = Response::builder()
             .header("content-type", content_type)
-            .body(stream_body)
+            .body(stream_body.boxed())
             .map_err(|e| FusenError::from(e))?;
         Ok(response)
     }
 
-    async fn decode(&self, mut response: Response<Incoming>) -> Result<String, FusenError> {
+    async fn decode(
+        &self,
+        mut response: Response<BoxBody<Bytes, hyper::Error>>,
+    ) -> Result<String, FusenError> {
         if !response.status().is_success() {
             return Err(FusenError::from(format!(
                 "err code : {}",

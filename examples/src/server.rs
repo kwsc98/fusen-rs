@@ -10,7 +10,7 @@ use fusen_rs::{
 };
 use tracing::info;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct DemoServiceImpl {
     _db: String,
 }

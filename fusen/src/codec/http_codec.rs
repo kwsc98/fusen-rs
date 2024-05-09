@@ -1,55 +1,43 @@
-use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec, HttpCodec};
-use crate::{
-    support::triple::{TripleRequestWrapper, TripleResponseWrapper},
-    BoxBody, StreamBody,
+use std::convert::Infallible;
+
+use super::{
+    request_codec::RequestHandler,
+    response_codec::{ResponseCodec, ResponseHandler},
+    HttpCodec,
 };
+use crate::{codec::request_codec::RequestCodec, BoxBody};
 use bytes::Bytes;
-use fusen_common::{
-    error::FusenError,
-    logs::get_uuid,
-    FusenContext, MetaData, Path,
-};
-use http::{HeaderMap, HeaderValue, Response};
-use http_body::Frame;
+use fusen_common::FusenContext;
 use http_body_util::BodyExt;
-use std::fmt::Debug;
 
 pub struct FusenHttpCodec {
-    json_codec:
-        Box<dyn BodyCodec<Bytes, EncodeType = String, DecodeType = Vec<String>> + Sync + Send>,
-    grpc_codec: Box<
-        (dyn BodyCodec<Bytes, DecodeType = TripleRequestWrapper, EncodeType = TripleResponseWrapper>
-             + Sync
-             + Send),
-    >,
+    request_handle: RequestHandler,
+    response_handle: ResponseHandler,
 }
 
 impl FusenHttpCodec {
     pub fn new() -> Self {
-        let json_codec = JsonBodyCodec::<Bytes, Vec<String>, String>::new();
-        let grpc_codec = GrpcBodyCodec::<Bytes, TripleRequestWrapper, TripleResponseWrapper>::new();
         FusenHttpCodec {
-            json_codec: Box::new(json_codec),
-            grpc_codec: Box::new(grpc_codec),
+            request_handle: RequestHandler::new(),
+            response_handle: ResponseHandler::new(),
         }
     }
 }
 
-impl<E> HttpCodec<Bytes, E> for FusenHttpCodec
-where
-    E: Send + Sync + Debug,
-{
+impl HttpCodec<Bytes, hyper::Error> for FusenHttpCodec {
     async fn decode(
         &self,
-        mut req: http::Request<BoxBody<Bytes, E>>,
-    ) -> Result<FusenContext, FusenError> {
-       todo!()
+        request: http::Request<BoxBody<Bytes, hyper::Error>>,
+    ) -> Result<FusenContext, crate::Error> {
+        self.request_handle
+            .decode(request.map(|e| e.map_err(|e| e.into()).boxed()))
+            .await
     }
 
     async fn encode(
         &self,
         context: fusen_common::FusenContext,
-    ) -> Result<http::Response<StreamBody<bytes::Bytes, E>>, FusenError> {
-        todo!()
+    ) -> Result<http::Response<BoxBody<bytes::Bytes, Infallible>>, crate::Error> {
+        self.response_handle.encode(context)
     }
 }

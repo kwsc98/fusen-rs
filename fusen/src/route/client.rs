@@ -84,13 +84,12 @@ impl Route {
                     let oneshot = oneshot::channel();
                     let _ = self
                         .sender
-                        .send((RouteSender::CHANGE((key, directory)), oneshot.0))?;
+                        .send((RouteSender::CHANGE((key, directory.clone())), oneshot.0))?;
                     let rev = oneshot.1.await.map_err(|e| e.to_string())?;
-                    match rev {
-                        RouteReceiver::GET(_) => return Err("err receiver".into()),
-                        RouteReceiver::CHANGE => {}
+                    return match rev {
+                        RouteReceiver::GET(_) => Err("err receiver".into()),
+                        RouteReceiver::CHANGE => Ok(directory.get().await?),
                     };
-                    return self.get_server_resource(context).await;
                 }
                 let rev = rev.unwrap();
                 let info = rev.get().await?;

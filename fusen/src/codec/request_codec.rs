@@ -1,6 +1,8 @@
+use std::convert::Infallible;
+
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::{
-    support::triple::{TripleRequestWrapper, TripleResponseWrapper},
+    support::triple::TripleRequestWrapper,
     BoxBody,
 };
 use bytes::Bytes;
@@ -9,10 +11,9 @@ use fusen_common::{
 };
 use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
-use std::convert::Infallible;
 
 pub(crate) trait RequestCodec<T, E> {
-    fn encode(&self, msg: FusenContext) -> Result<Request<BoxBody<T, E>>, crate::Error>;
+    fn encode(&self, msg: FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
 
     async fn decode(&self, request: Request<BoxBody<T, E>>) -> Result<FusenContext, crate::Error>;
 }
@@ -45,7 +46,7 @@ impl RequestHandler {
     }
 }
 
-impl RequestCodec<Bytes, Infallible> for RequestHandler {
+impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     fn encode(
         &self,
         msg: FusenContext,
@@ -98,7 +99,7 @@ impl RequestCodec<Bytes, Infallible> for RequestHandler {
 
     async fn decode(
         &self,
-        mut request: Request<BoxBody<Bytes, Infallible>>,
+        mut request: Request<BoxBody<Bytes, hyper::Error>>,
     ) -> Result<FusenContext, crate::Error> {
         let meta_data = MetaData::from(request.headers());
         let path = request.uri().path().to_string();

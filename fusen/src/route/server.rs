@@ -3,14 +3,14 @@ use fusen_common::{
     error::{BoxFusenError, FusenError},
     FusenContext, FusenFuture,
 };
-use http_body_util::BodyExt;
+use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::Service, Request, Response};
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use crate::{
     codec::{http_codec::FusenHttpCodec, HttpCodec},
     filter::FusenFilter,
-    get_empty_body, StreamBody,
+    get_empty_body,
 };
 
 #[derive(Clone)]
@@ -31,15 +31,15 @@ where
     }
 
     async fn call(
-        req: Request<hyper::body::Incoming>,
+        request: Request<hyper::body::Incoming>,
         http_codec: Arc<FusenHttpCodec>,
         fusen_filter: Arc<&'static KF>,
-    ) -> Result<Response<StreamBody<Bytes, hyper::Error>>, FusenError> {
-        let req = req.map(|e| e.boxed());
-        let context = http_codec.as_ref().decode(req).await?;
+    ) -> Result<Response<BoxBody<Bytes, Infallible>>, FusenError> {
+        let request = request.map(|e| e.boxed());
+        let context = http_codec.as_ref().decode(request).await?;
         let context = fusen_filter.call(context).await?;
-        let res = http_codec.encode(context).await?;
-        Ok(res)
+        let response = http_codec.encode(context).await?;
+        Ok(response)
     }
 }
 
@@ -51,7 +51,7 @@ where
         + 'static
         + Sync,
 {
-    type Response = Response<StreamBody<Bytes, hyper::Error>>;
+    type Response = Response<BoxBody<Bytes, Infallible>>;
     type Error = BoxFusenError;
     type Future = FusenFuture<Result<Self::Response, Self::Error>>;
 

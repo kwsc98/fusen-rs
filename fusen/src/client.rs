@@ -8,6 +8,7 @@ use fusen_common::codec::json_field_compatible;
 use fusen_common::error::FusenError;
 use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
+use http_body_util::BodyExt;
 use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +49,7 @@ impl FusenClient {
             .ok_or(FusenError::from("not find server"))?;
         let request = self.request_handle.encode(msg)?;
         let response: http::Response<hyper::body::Incoming> = socket.send_request(request).await?;
-        let res = self.response_handle.decode(response).await?;
+        let res = self.response_handle.decode(response.map(|e|e.boxed())).await?;
         let res = json_field_compatible(return_ty, res);
         let res: Res = serde_json::from_str(&res).map_err(|e| FusenError::from(e.to_string()))?;
         return Ok(res);

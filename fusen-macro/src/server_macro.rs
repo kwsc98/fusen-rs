@@ -93,8 +93,8 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         #org_item
 
         impl fusen_rs::fusen_common::server::RpcServer for #item_self {
-            fn invoke (&self, param : fusen_rs::fusen_common::FusenContext) -> fusen_rs::fusen_common::FusenFuture<fusen_rs::fusen_common::FusenContext> {
-                let rpc = self.clone();
+            fn invoke (&'static self, param : fusen_rs::fusen_common::FusenContext) -> fusen_rs::fusen_common::FusenFuture<fusen_rs::fusen_common::FusenContext> {
+                let rpc = self;
                 Box::pin(async move {rpc.prv_invoke(param).await})
             }
             fn get_info(&self) -> fusen_rs::fusen_common::server::ServerInfo {

@@ -11,6 +11,9 @@ description.workspace = true
 name = "client"
 path = "src/client.rs"
 [[bin]]
+name = "client-pt"
+path = "src/client_pt.rs"
+[[bin]]
 name = "server"
 path = "src/server.rs"
 

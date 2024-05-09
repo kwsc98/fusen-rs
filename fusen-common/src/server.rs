@@ -7,7 +7,7 @@ pub enum Protocol {
 }
 
 pub trait RpcServer: Send + Sync {
-    fn invoke(&self, msg: FusenContext) -> FusenFuture<FusenContext>;
+    fn invoke(&'static self, msg: FusenContext) -> FusenFuture<FusenContext>;
     fn get_info(&self) -> ServerInfo;
 }
 

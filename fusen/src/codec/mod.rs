@@ -1,11 +1,9 @@
+use std::convert::Infallible;
+
 use crate::BoxBody;
-use crate::StreamBody;
-use fusen_common::error::FusenError;
 use fusen_common::FusenContext;
 use http::Request;
 use http::Response;
-use http_body::Frame;
-use std::fmt::Debug;
 pub mod grpc_codec;
 pub mod http_codec;
 pub mod json_codec;
@@ -17,12 +15,12 @@ pub trait HttpCodec<D, E>
 where
     D: bytes::Buf,
 {
-    async fn decode(&self, req: Request<BoxBody<D, E>>) -> Result<FusenContext, FusenError>;
+    async fn decode(&self, req: Request<BoxBody<D, E>>) -> Result<FusenContext, crate::Error>;
 
     async fn encode(
         &self,
         context: FusenContext,
-    ) -> Result<Response<StreamBody<bytes::Bytes, E>>, FusenError>;
+    ) -> Result<Response<BoxBody<D, Infallible>>, crate::Error>;
 }
 
 pub trait BodyCodec<D>

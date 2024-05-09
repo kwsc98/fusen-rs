@@ -1,5 +1,4 @@
 use bytes::{Buf, BufMut};
-use http_body::Frame;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -33,7 +32,6 @@ where
 
     fn decode(&self, body: &D) -> Result<Self::DecodeType, crate::Error> {
         let data = body.chunk();
-        println!("{:?}",String::from_utf8(data.to_vec()));
         let mut de = serde_json::Deserializer::from_reader(data.reader());
         Ok(U::deserialize(&mut de).unwrap())
     }

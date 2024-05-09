@@ -1,7 +1,6 @@
-use bytes::Bytes;
 use fusen_common::{error::FusenError, net::get_path};
 use http::{Request, Response, Version};
-use http_body_util::{combinators::BoxBody, Full};
+use http_body_util::combinators::BoxBody;
 use hyper::{body::Incoming, client::conn::http2::SendRequest};
 use std::{convert::Infallible, sync::Arc};
 use tokio::{net::TcpStream, sync::RwLock};
@@ -12,11 +11,13 @@ use crate::{
     support::{TokioExecutor, TokioIo},
 };
 
+#[derive(Debug)]
 pub struct SocketAssets {
     pub resource: Resource,
     pub socket: Socket,
 }
 
+#[derive(Debug)]
 pub enum Socket {
     HTTP1,
     HTTP2(Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes,Infallible>>>>>),

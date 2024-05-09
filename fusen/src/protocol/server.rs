@@ -13,13 +13,13 @@ use tracing::{debug, error};
 #[derive(Clone)]
 pub struct TcpServer {
     protocol: Vec<Protocol>,
-    fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
+    fusen_servers: HashMap<String, Arc<&'static dyn RpcServer>>,
 }
 
 impl TcpServer {
     pub fn init(
         protocol: Vec<Protocol>,
-        fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
+        fusen_servers: HashMap<String, Arc<&'static dyn RpcServer>>,
     ) -> Self {
         return TcpServer {
             protocol,

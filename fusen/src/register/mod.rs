@@ -105,6 +105,7 @@ pub struct Directory {
     sender: UnboundedSender<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>,
 }
 
+#[derive(Debug)]
 pub struct ResourceInfo {
     pub server_type: Arc<Type>,
     pub socket: Vec<Arc<SocketAssets>>,

@@ -11,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 
 pub struct FusenServer {
     protocol: Vec<Protocol>,
-    fusen_servers: HashMap<String, Arc<Box<dyn RpcServer>>>,
+    fusen_servers: HashMap<String, Arc<&'static dyn RpcServer>>,
     register_config: Vec<Box<dyn UrlConfig>>,
     register: Vec<Box<dyn Register>>,
 }
@@ -42,7 +42,7 @@ impl FusenServer {
             key.push_str(":");
             key.push_str(&version);
         }
-        self.fusen_servers.insert(key, Arc::new(server));
+        self.fusen_servers.insert(key, Arc::new(Box::leak(server)));
         return self;
     }
 

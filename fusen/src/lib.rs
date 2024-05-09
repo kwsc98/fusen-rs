@@ -7,6 +7,7 @@ pub mod route;
 pub mod server;
 pub mod support;
 pub mod handler;
+use bytes::Buf;
 pub use fusen_common;
 pub use fusen_macro;
 use std::convert::Infallible;
@@ -22,8 +23,9 @@ pub type StreamBody<D, E> = http_body_util::StreamBody<
     futures_util::stream::Iter<std::vec::IntoIter<std::result::Result<http_body::Frame<D>, E>>>,
 >;
 
-fn get_empty_body<D, E>() -> StreamBody<D, E> {
-    let stream = futures_util::stream::iter(vec![]);
-    http_body_util::StreamBody::new(stream)
+fn get_empty_body<D, E>() -> BoxBody<D, E> 
+where D : Buf + 'static
+{
+    BoxBody::default()
 }
 

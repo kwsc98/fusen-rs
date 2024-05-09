@@ -1,4 +1,3 @@
-use http_body::Frame;
 use prost::Message;
 use std::marker::PhantomData;
 
