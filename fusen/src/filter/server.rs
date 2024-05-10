@@ -31,18 +31,18 @@ impl RpcServerFilter {
                 );
             }
         }
-        return RpcServerFilter { cache, path_cache };
+        RpcServerFilter { cache, path_cache }
     }
     pub fn get_server(&self, msg: &mut FusenContext) -> Option<&'static dyn RpcServer> {
         let info = self.path_cache.get(&msg.path.get_key())?;
-        msg.class_name = info.0.clone();
-        msg.method_name = info.1.clone();
+        msg.class_name.clone_from(&info.0);
+        msg.method_name.clone_from(&info.1);
         let mut class_name = msg.class_name.clone();
         if let Some(version) = &msg.version {
-            class_name.push_str(":");
+            class_name.push(':');
             class_name.push_str(version);
         }
-        self.cache.get(&class_name).map(|e| *e)
+        self.cache.get(&class_name).copied()
     }
 }
 

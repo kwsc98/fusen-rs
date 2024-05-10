@@ -35,7 +35,7 @@ impl MetaData {
                 return CodecType::GRPC;
             }
         }
-        return CodecType::JSON;
+        CodecType::JSON
     }
 
     pub fn get_value(&self, key: &str) -> Option<&String> {
@@ -110,7 +110,7 @@ impl FusenContext {
         req: Vec<String>,
         fields: Vec<String>,
     ) -> FusenContext {
-        return FusenContext {
+        FusenContext {
             unique_identifier,
             path,
             server_tyep: None,
@@ -123,7 +123,7 @@ impl FusenContext {
             fields,
             res: Err(FusenError::Null),
             return_ty: "",
-        };
+        }
     }
     pub fn set_return_ty(&mut self, ty: &'static str) {
         self.return_ty = ty
@@ -150,11 +150,11 @@ impl Path {
         match self {
             Path::GET(path) => {
                 key.push_str("get:");
-                key.push_str(&path);
+                key.push_str(path);
             }
             Path::POST(path) => {
                 key.push_str("post:");
-                key.push_str(&path);
+                key.push_str(path);
             }
         };
         key
@@ -171,16 +171,16 @@ impl Path {
 
 impl MethodResource {
     pub fn get_id(&self) -> String {
-        return self.id.to_string();
+        self.id.to_string()
     }
     pub fn get_name(&self) -> String {
-        return self.name.to_string();
+        self.name.to_string()
     }
     pub fn get_path(&self) -> String {
-        return self.path.to_string();
+        self.path.to_string()
     }
     pub fn get_method(&self) -> String {
-        return self.method.to_string();
+        self.method.to_string()
     }
     pub fn new(id: String, name: String, path: String, method: String) -> Self {
         Self {

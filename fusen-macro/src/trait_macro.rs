@@ -222,5 +222,5 @@ fn get_resource_by_trait(
             ));
         }
     }
-    return Ok((parent_id, spring_cloud_name, res));
+    Ok((parent_id, spring_cloud_name, res))
 }

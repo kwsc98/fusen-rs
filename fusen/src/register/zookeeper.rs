@@ -41,7 +41,7 @@ impl FusenZookeeper {
 }
 
 impl Register for FusenZookeeper {
-    fn check(&self, protocol: &Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
+    fn check(&self, protocol: Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
         let protocol = protocol.clone();
         Box::pin(async move {
             for protocol in protocol {

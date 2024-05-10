@@ -20,6 +20,12 @@ impl<D, U, T> JsonBodyCodec<D, U, T> {
     }
 }
 
+impl<D, U, T> Default for JsonBodyCodec<D, U, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'b, D, U, T> BodyCodec<D> for JsonBodyCodec<D, U, T>
 where
     D: bytes::Buf + 'b,
@@ -39,7 +45,7 @@ where
     fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
         let mut byte = bytes::BytesMut::new();
         let mut_bytes = &mut byte;
-        serde_json::to_writer(mut_bytes.writer(), &res).map_err(|e| Box::new(e))?;
+        serde_json::to_writer(mut_bytes.writer(), &res).map_err(Box::new)?;
         Ok(byte.into())
     }
 }

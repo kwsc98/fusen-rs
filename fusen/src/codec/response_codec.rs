@@ -40,6 +40,12 @@ impl ResponseHandler {
     }
 }
 
+impl Default for ResponseHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
     fn encode(
         &self,
@@ -52,12 +58,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
         };
         let body = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => vec![match context.res {
-                Ok(res) => Frame::data(
-                    self.json_codec
-                        .encode(res)
-                        .map_err(|e| FusenError::from(e))?
-                        .into(),
-                ),
+                Ok(res) => Frame::data(self.json_codec.encode(res).map_err(FusenError::from)?),
                 Err(err) => {
                     if let FusenError::Null = err {
                         Frame::data(bytes::Bytes::from("null"))
@@ -77,8 +78,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                         let buf = self
                             .grpc_codec
                             .encode(res_wrapper)
-                            .map_err(|e| FusenError::from(e))?
-                            .into();
+                            .map_err(FusenError::from)?;
                         vec.push(Frame::data(buf));
                     }
                     Err(err) => {
@@ -114,7 +114,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
         let response = Response::builder()
             .header("content-type", content_type)
             .body(stream_body.boxed())
-            .map_err(|e| FusenError::from(e))?;
+            .map_err(FusenError::from)?;
         Ok(response)
     }
 
@@ -134,7 +134,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                 if body.is_trailers() {
                     let trailers = body
                         .trailers_ref()
-                        .map_or(Err(FusenError::from("error trailers N1")), |e| Ok(e))?;
+                        .ok_or(FusenError::from("error trailers N1"))?;
                     match trailers.get("grpc-status") {
                         Some(status) => match status.as_bytes() {
                             b"0" => {
@@ -179,7 +179,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
             });
         let byte = frame_vec[0]
             .data_ref()
-            .map_or(Err(FusenError::from("empty body")), |e| Ok(e))?;
+            .ok_or(FusenError::from("empty body"))?;
         let res = match codec_type {
             CodecType::JSON => self.json_codec.decode(byte)?,
             CodecType::GRPC => {

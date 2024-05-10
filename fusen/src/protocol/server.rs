@@ -20,10 +20,10 @@ impl TcpServer {
         protocol: Vec<Protocol>,
         fusen_servers: HashMap<String, &'static dyn RpcServer>,
     ) -> Self {
-        return TcpServer {
+        TcpServer {
             protocol,
             fusen_servers,
-        };
+        }
     }
     pub async fn run(self) -> Receiver<()> {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
@@ -32,7 +32,7 @@ impl TcpServer {
             tokio::spawn(Self::monitor(protocol, route, shutdown_complete_tx.clone()));
         }
         drop(shutdown_complete_tx);
-        return shutdown_complete_rx;
+        shutdown_complete_rx
     }
 
     async fn monitor(
@@ -60,7 +60,7 @@ impl TcpServer {
                 Ok(stream) => {
                     let stream_handler = StreamHandler {
                         tcp_stream: stream.0,
-                        route: route,
+                        route,
                         shutdown: notify_shutdown.subscribe(),
                         _shutdown_complete: shutdown_complete_tx.clone(),
                     };

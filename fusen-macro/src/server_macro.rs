@@ -180,5 +180,5 @@ fn get_resource_by_server(item: ItemImpl) -> Result<(String, Vec<MethodResource>
             ));
         }
     }
-    return Ok((parent_id, res));
+    Ok((parent_id, res))
 }

@@ -21,6 +21,12 @@ impl<D, U, T> GrpcBodyCodec<D, U, T> {
     }
 }
 
+impl<D, U, T> Default for GrpcBodyCodec<D, U, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<D, U, T> BodyCodec<D> for GrpcBodyCodec<D, U, T>
 where
     D: bytes::Buf,
@@ -40,6 +46,6 @@ where
     fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
         let buf = res.encode_to_vec();
         let buf = get_buf(buf);
-        Ok(bytes::Bytes::from(buf).into())
+        Ok(bytes::Bytes::from(buf))
     }
 }

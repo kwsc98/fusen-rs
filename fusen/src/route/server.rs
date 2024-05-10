@@ -25,7 +25,7 @@ where
 {
     pub fn new(fusen_filter: &'static KF) -> Self {
         FusenRouter {
-            fusen_filter: fusen_filter,
+            fusen_filter,
             http_codec: Arc::new(FusenHttpCodec::new()),
         }
     }

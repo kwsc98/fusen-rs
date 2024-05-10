@@ -22,10 +22,10 @@ pub fn encode_url(url: &str) -> String {
 }
 
 pub fn from_url<'a, T: Deserialize<'a>>(url: &str) -> Result<T, crate::Error> {
-    let info: Vec<&str> = url.split("&").collect();
+    let info: Vec<&str> = url.split('&').collect();
     let mut map = HashMap::new();
     for item in info {
-        let item: Vec<&str> = item.split("=").collect();
+        let item: Vec<&str> = item.split('=').collect();
         map.insert(item[0], item[1]);
     }
     let json_str = serde_json::to_vec(&map)?;
@@ -36,7 +36,7 @@ pub fn from_url<'a, T: Deserialize<'a>>(url: &str) -> Result<T, crate::Error> {
 pub fn to_url<T: Serialize>(t: &T) -> Result<String, crate::Error> {
     let value = serde_json::to_value(t)?;
     let mut str = String::new();
-    for item in value.as_object().map_or(Err("err serialize"), |e| Ok(e))? {
+    for item in value.as_object().ok_or("err serialize")? {
         if let Some(value) = item.1.as_str() {
             str.push('&');
             str.push_str(item.0);
@@ -44,10 +44,10 @@ pub fn to_url<T: Serialize>(t: &T) -> Result<String, crate::Error> {
             str.push_str(value);
         }
     }
-    if str.len() > 0 {
+    if !str.is_empty() {
         str.remove(0);
     }
-    return Ok(str);
+    Ok(str)
 }
 
 pub trait UrlConfig {

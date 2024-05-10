@@ -138,8 +138,8 @@ fn get_asset_by_attrs(attrs: &Vec<Attribute>) -> Result<ResourceAttr, syn::Error
     for attr in attrs {
         if let Meta::List(list) = &attr.meta {
             if let Some(segment) = list.path.segments.first() {
-                if &segment.ident.to_string() == &"asset" {
-                    return Ok(ResourceAttr::from_attr(list.tokens.clone().into())?);
+                if segment.ident == "asset" {
+                    return ResourceAttr::from_attr(list.tokens.clone().into());
                 }
             }
         }

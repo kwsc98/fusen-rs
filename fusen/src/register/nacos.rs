@@ -125,9 +125,8 @@ impl Register for FusenNacos {
         })
     }
 
-    fn check(&self, protocol: &Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
+    fn check(&self, protocol: Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
         let nacos = self.clone();
-        let protocol = protocol.clone();
         Box::pin(async move {
             let protocol = match &nacos.config.server_type {
                 Type::Dubbo => {
@@ -186,6 +185,7 @@ impl Register for FusenNacos {
     }
 }
 
+#[derive(Clone)]
 struct ServiceChangeListener {
     tx: mpsc::UnboundedSender<Vec<ServiceInstance>>,
 }
@@ -204,16 +204,19 @@ impl NamingEventListener for ServiceChangeListener {
     fn event(&self, event: Arc<NamingChangeEvent>) {
         debug!("service change {}", event.service_name.clone());
         debug!("nacos event: {:?}", event);
-
-        let instances = event.instances.as_ref();
-        match instances {
-            None => {
-                let _ = self.changed(Vec::default());
+        let listener = self.clone();
+        let instances = event.instances.to_owned();
+        tokio::spawn(async move {
+            let instances = instances;
+            match instances {
+                None => {
+                    let _ = listener.changed(Vec::default()).await;
+                }
+                Some(instances) => {
+                    let _ = listener.changed(instances).await;
+                }
             }
-            Some(instances) => {
-                let _ = self.changed(instances.clone());
-            }
-        }
+        });
     }
 }
 

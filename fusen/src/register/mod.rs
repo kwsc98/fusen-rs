@@ -85,7 +85,7 @@ pub trait Register: Send + Sync {
 
     fn subscribe(&self, resource: Resource) -> FusenFuture<Result<Directory, crate::Error>>;
 
-    fn check(&self, protocol: &Vec<Protocol>) -> FusenFuture<crate::Result<String>>;
+    fn check(&self, protocol: Vec<Protocol>) -> FusenFuture<crate::Result<String>>;
 }
 
 #[derive(Debug)]

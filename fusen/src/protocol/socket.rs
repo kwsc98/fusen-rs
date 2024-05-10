@@ -5,6 +5,7 @@ use hyper::{body::Incoming, client::conn::http2::SendRequest};
 use std::{convert::Infallible, sync::Arc};
 use tokio::{net::TcpStream, sync::RwLock};
 use tracing::error;
+pub type Http2Socket = Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes,Infallible>>>>>;
 
 use crate::{
     register::Resource,
@@ -20,7 +21,7 @@ pub struct SocketAssets {
 #[derive(Debug)]
 pub enum Socket {
     HTTP1,
-    HTTP2(Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes,Infallible>>>>>),
+    HTTP2(Http2Socket),
 }
 
 impl SocketAssets {
@@ -57,7 +58,7 @@ async fn send_http1_request(
     *request.version_mut() = Version::HTTP_10;
     let io = get_tcp_stream(resource)
         .await
-        .map_err(|e| FusenError::from(e))?;
+        .map_err(FusenError::from)?;
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
         .handshake(io)
         .await
@@ -77,7 +78,7 @@ async fn send_http1_request(
 async fn send_http2_request(
     resource: &Resource,
     request: Request<BoxBody<bytes::Bytes,Infallible>>,
-    sender_lock: &Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes,Infallible>>>>>,
+    sender_lock: &Http2Socket,
 ) -> Result<Response<Incoming>, FusenError> {
     let sender_read = sender_lock.read().await;
     let mut sender = match sender_read.as_ref() {

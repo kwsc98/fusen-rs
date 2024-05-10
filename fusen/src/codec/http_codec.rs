@@ -24,14 +24,18 @@ impl FusenHttpCodec {
     }
 }
 
+impl Default for FusenHttpCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HttpCodec<Bytes, hyper::Error> for FusenHttpCodec {
     async fn decode(
         &self,
         request: http::Request<BoxBody<Bytes, hyper::Error>>,
     ) -> Result<FusenContext, crate::Error> {
-        self.request_handle
-            .decode(request.map(|e| e.map_err(|e| e.into()).boxed()))
-            .await
+        self.request_handle.decode(request.map(|e| e.boxed())).await
     }
 
     async fn encode(

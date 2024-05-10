@@ -7,15 +7,10 @@ pub enum RegisterType {
     Nacos(Box<dyn UrlConfig>),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub enum Type {
     Dubbo,
     SpringCloud,
+    #[default]
     Fusen,
-}
-
-impl Default for Type {
-    fn default() -> Self {
-        Type::Fusen
-    }
 }

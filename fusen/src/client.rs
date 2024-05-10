@@ -49,9 +49,13 @@ impl FusenClient {
             .ok_or(FusenError::from("not find server"))?;
         let request = self.request_handle.encode(msg)?;
         let response: http::Response<hyper::body::Incoming> = socket.send_request(request).await?;
-        let res = self.response_handle.decode(response.map(|e|e.boxed())).await?;
-        let res = json_field_compatible(return_ty, res);
-        let res: Res = serde_json::from_str(&res).map_err(|e| FusenError::from(e.to_string()))?;
-        return Ok(res);
+        let res = self
+            .response_handle
+            .decode(response.map(|e| e.boxed()))
+            .await?;
+        let response = json_field_compatible(return_ty, res);
+        let response: Res =
+            serde_json::from_str(&response).map_err(|e| FusenError::from(e.to_string()))?;
+        Ok(response)
     }
 }

@@ -1,10 +1,7 @@
 use std::convert::Infallible;
 
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
-use crate::{
-    support::triple::TripleRequestWrapper,
-    BoxBody,
-};
+use crate::{support::triple::TripleRequestWrapper, BoxBody};
 use bytes::Bytes;
 use fusen_common::{
     error::FusenError, logs::get_uuid, register::Type, FusenContext, MetaData, Path,
@@ -31,7 +28,7 @@ pub struct RequestHandler {
             EncodeType = TripleRequestWrapper,
         > + Sync
              + Send),
-    >
+    >,
 }
 
 impl RequestHandler {
@@ -43,6 +40,12 @@ impl RequestHandler {
             json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
         }
+    }
+}
+
+impl Default for RequestHandler {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -62,7 +65,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             builder
                 .headers_mut()
                 .unwrap()
-                .insert(content_type.1, HeaderValue::from_str(&version).unwrap());
+                .insert(content_type.1, HeaderValue::from_str(version).unwrap());
         }
         let path = match msg.server_tyep.as_ref().unwrap().as_ref() {
             &Type::SpringCloud => msg.path,
@@ -83,9 +86,9 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 let body: Bytes = match msg.server_tyep.as_ref().unwrap().as_ref() {
                     &Type::Dubbo => {
                         let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
-                        self.grpc_codec.encode(triple_request_wrapper)?.into()
+                        self.grpc_codec.encode(triple_request_wrapper)?
                     }
-                    _ => self.json_codec.encode(msg.req)?.into(),
+                    _ => self.json_codec.encode(msg.req)?,
                 };
                 let builder = builder.header("content-length", body.len());
                 builder
@@ -107,12 +110,12 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let mut frame_vec = vec![];
         let msg = if method.contains("get") {
             let url = request.uri().to_string();
-            let url: Vec<&str> = url.split("?").collect();
+            let url: Vec<&str> = url.split('?').collect();
             let mut vec = vec![];
             if url.len() > 1 {
-                let params: Vec<&str> = url[1].split("&").collect();
+                let params: Vec<&str> = url[1].split('&').collect();
                 for item in params {
-                    let item: Vec<&str> = item.split("=").collect();
+                    let item: Vec<&str> = item.split('=').collect();
                     vec.push(item[1].to_owned());
                 }
             }
@@ -129,21 +132,19 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             let bytes = frame_vec
                 .remove(0)
                 .into_data()
-                .map_or(Err(FusenError::from("empty body")), |e| Ok(e))?;
+                .map_or(Err(FusenError::from("empty body")), Ok)?;
             match meta_data.get_codec() {
                 fusen_common::codec::CodecType::JSON => {
                     if !bytes.starts_with(b"[") {
                         vec![String::from_utf8_lossy(bytes.as_ref()).to_string()]
                     } else {
-                        self.json_codec
-                            .decode(&bytes)
-                            .map_err(|e| FusenError::from(e))?
+                        self.json_codec.decode(&bytes).map_err(FusenError::from)?
                     }
                 }
                 fusen_common::codec::CodecType::GRPC => self
                     .grpc_codec
                     .decode(&bytes)
-                    .map_err(|e| FusenError::from(e))?
+                    .map_err(FusenError::from)?
                     .get_req(),
             }
         };
@@ -152,8 +153,8 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .map_or(get_uuid(), |e| e.clone());
         let version = meta_data
             .get_value("tri-service-version")
-            .map_or(meta_data.get_value("version"), |e| Some(e))
-            .map(|e| e.clone());
+            .map_or(meta_data.get_value("version"), Some)
+            .cloned();
         Ok(FusenContext::new(
             unique_identifier,
             Path::new(&method, path),
@@ -168,14 +169,14 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     }
 }
 
-fn get_path(mut path: String, fields: &Vec<String>, msg: &Vec<String>) -> String {
-    if fields.len() > 0 {
-        path.push_str("?");
+fn get_path(mut path: String, fields: &[String], msg: &[String]) -> String {
+    if !fields.is_empty() {
+        path.push('?');
         for idx in 0..fields.len() {
             path.push_str(&fields[idx]);
-            path.push_str("=");
+            path.push('=');
             path.push_str(&msg[idx]);
-            path.push_str("&");
+            path.push('&');
         }
         path.remove(path.len() - 1);
     }
