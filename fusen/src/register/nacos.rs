@@ -10,8 +10,7 @@ use nacos_sdk::api::{
     props::ClientProps,
 };
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct FusenNacos {
@@ -93,8 +92,6 @@ impl Register for FusenNacos {
             let directory = Directory::new(Arc::new(nacos.config.server_type.clone())).await;
             let directory_clone = directory.clone();
             let naming_service = nacos.naming_service.clone();
-            let (event_listener, receiver) = ServiceChangeListener::new();
-            let event_listener = Arc::new(event_listener);
             let service_instances = naming_service
                 .get_all_instances(
                     nacos_service_name.clone(),
@@ -105,22 +102,16 @@ impl Register for FusenNacos {
                 .await?;
             let service_instances = to_resources(service_instances);
             directory.change(service_instances).await?;
+            let event_listener = ServiceChangeListener::new(directory);
+            let event_listener = Arc::new(event_listener);
             naming_service
                 .subscribe(
-                    nacos_service_name.clone(),
+                    nacos_service_name,
                     resource.group,
                     Vec::new(),
                     event_listener,
                 )
                 .await?;
-            tokio::spawn(async move {
-                let mut receiver = receiver;
-                let directory = directory;
-                while let Some(change) = receiver.recv().await {
-                    let resources = to_resources(change);
-                    let _ = directory.change(resources).await;
-                }
-            });
             Ok(directory_clone)
         })
     }
@@ -187,35 +178,29 @@ impl Register for FusenNacos {
 
 #[derive(Clone)]
 struct ServiceChangeListener {
-    tx: mpsc::UnboundedSender<Vec<ServiceInstance>>,
+    directory: Directory,
 }
 
 impl ServiceChangeListener {
-    fn new() -> (Self, UnboundedReceiver<Vec<ServiceInstance>>) {
-        let mpsc = mpsc::unbounded_channel();
-        (Self { tx: mpsc.0 }, mpsc.1)
-    }
-    async fn changed(&self, instances: Vec<ServiceInstance>) -> Result<(), crate::Error> {
-        self.tx.send(instances).map_err(|e| e.into())
+    fn new(directory: Directory) -> Self {
+        Self { directory }
     }
 }
 
 impl NamingEventListener for ServiceChangeListener {
     fn event(&self, event: Arc<NamingChangeEvent>) {
-        debug!("service change {}", event.service_name.clone());
-        debug!("nacos event: {:?}", event);
-        let listener = self.clone();
+        info!("service change: {}", event.service_name.clone());
+        info!("nacos event: {:?}", event);
+        let directory = self.directory.clone();
         let instances = event.instances.to_owned();
         tokio::spawn(async move {
             let instances = instances;
-            match instances {
-                None => {
-                    let _ = listener.changed(Vec::default()).await;
-                }
-                Some(instances) => {
-                    let _ = listener.changed(instances).await;
-                }
-            }
+            let resources = if let Some(instances) = instances {
+                to_resources(instances)
+            } else {
+                vec![]
+            };
+            let _ = directory.change(resources).await;
         });
     }
 }
