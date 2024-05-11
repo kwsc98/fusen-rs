@@ -52,26 +52,26 @@ impl Default for RequestHandler {
 impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     fn encode(
         &self,
-        msg: FusenContext,
+        context: FusenContext,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
-        let content_type = match msg.server_tyep.as_ref().unwrap().as_ref() {
+        let content_type = match context.server_tyep.as_ref().unwrap().as_ref() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
         };
         let mut builder = Request::builder()
             .header("content-type", content_type.0)
             .header("connection", "keep-alive");
-        if let Some(version) = &msg.version {
+        if let Some(version) = &context.context_info.version {
             builder
                 .headers_mut()
                 .unwrap()
                 .insert(content_type.1, HeaderValue::from_str(version).unwrap());
         }
-        let path = match msg.server_tyep.as_ref().unwrap().as_ref() {
-            &Type::SpringCloud => msg.path,
+        let path = match context.server_tyep.as_ref().unwrap().as_ref() {
+            &Type::SpringCloud => context.context_info.path,
             _ => {
-                let path = "/".to_owned() + msg.class_name.as_ref() + "/" + &msg.method_name;
-                match msg.path {
+                let path = "/".to_owned() + context.class_name.as_ref() + "/" + &context.method_name;
+                match context.path {
                     fusen_common::Path::GET(_) => fusen_common::Path::GET(path),
                     fusen_common::Path::POST(_) => fusen_common::Path::POST(path),
                 }

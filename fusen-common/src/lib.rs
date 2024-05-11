@@ -5,6 +5,7 @@ use register::Type;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Iter, HashMap},
+    default,
     sync::Arc,
 };
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -82,51 +83,102 @@ impl Default for MetaData {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ContextInfo {
+    pub path: Path,
+    pub class_name: String,
+    method_name: String,
+    pub version: Option<String>,
+    group: Option<String>,
+}
+
+impl ContextInfo {
+    pub fn new(
+        path: Path,
+        class_name: String,
+        method_name: String,
+        version: Option<String>,
+        group: Option<String>,
+    ) -> Self {
+        ContextInfo {
+            path,
+            class_name,
+            method_name,
+            version,
+            group,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FusenRequest {
+    fields: Vec<String>,
+    fields_ty: Option<Vec<&'static str>>,
+}
+
+impl FusenRequest {
+    pub fn new(fields: Vec<String>) -> Self {
+        FusenRequest {
+            fields,
+            fields_ty: None,
+        }
+    }
+    pub fn insert_fields_ty(&mut self, fields_ty: Vec<&'static str>) {
+        let _ = self.fields_ty.insert(fields_ty);
+    }
+}
+
+#[derive(Debug)]
+pub struct FusenResponse {
+    response: std::result::Result<String, FusenError>,
+    response_ty: Option<&'static str>,
+}
+
+impl Default for FusenResponse {
+    fn default() -> Self {
+        Self {
+            response: Err(FusenError::Null),
+            response_ty: Default::default(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct FusenContext {
-    pub unique_identifier: String,
-    pub path: Path,
+    unique_identifier: String,
     pub server_tyep: Option<Arc<Type>>,
     pub meta_data: MetaData,
-    pub class_name: String,
-    pub method_name: String,
-    pub version: Option<String>,
-    pub group: Option<String>,
-    pub req: Vec<String>,
-    pub fields: Vec<String>,
-    pub res: core::result::Result<String, FusenError>,
-    pub return_ty: &'static str,
+    pub context_info: ContextInfo,
+    request: FusenRequest,
+    response: FusenResponse,
 }
 
 impl FusenContext {
     pub fn new(
         unique_identifier: String,
-        path: Path,
-        meta_data: MetaData,
-        version: Option<String>,
-        group: Option<String>,
-        class_name: String,
-        method_name: String,
-        req: Vec<String>,
-        fields: Vec<String>,
+        context_info: ContextInfo,
+        request: FusenRequest,
     ) -> FusenContext {
         FusenContext {
             unique_identifier,
-            path,
+            context_info,
             server_tyep: None,
-            meta_data,
-            version,
-            group,
-            class_name,
-            method_name,
-            req,
-            fields,
-            res: Err(FusenError::Null),
-            return_ty: "",
+            meta_data: Default::default(),
+            request,
+            response: Default::default(),
         }
     }
-    pub fn set_return_ty(&mut self, ty: &'static str) {
-        self.return_ty = ty
+    pub fn insert_server_type(&mut self, server_tyep: Arc<Type>) {
+        let _ = self.server_tyep.insert(server_tyep);
+    }
+    pub fn get_server_type(&self) -> Option<Arc<Type>> {
+        self.server_tyep.clone()
+    }
+    pub fn insert_return_ty(&mut self, ty: &'static str) {
+        let _ = self.response.response_ty.insert(ty);
+    }
+    pub fn get_return_ty(&self) -> Option<&'static str> {
+        self.response.response_ty
     }
 }
 
@@ -142,6 +194,12 @@ pub struct MethodResource {
 pub enum Path {
     GET(String),
     POST(String),
+}
+
+impl Default for Path {
+    fn default() -> Self {
+        Path::GET(Default::default())
+    }
 }
 
 impl Path {

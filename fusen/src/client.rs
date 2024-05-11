@@ -29,25 +29,25 @@ impl FusenClient {
         }
     }
 
-    pub async fn invoke<Res>(&self, mut msg: FusenContext) -> Result<Res, FusenError>
+    pub async fn invoke<Res>(&self, mut context: FusenContext) -> Result<Res, FusenError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
         let resource_info: ResourceInfo = self
             .route
-            .get_server_resource(&msg)
+            .get_server_resource(&context)
             .await
             .map_err(|e| FusenError::Info(e.to_string()))?;
         let ResourceInfo {
             server_type,
             socket,
         } = resource_info;
-        let _ = msg.server_tyep.insert(server_type);
-        let return_ty = msg.return_ty;
+        let _ = context.insert_server_type(server_type);
+        let return_ty = context.get_return_ty().unwrap();
         let socket = socket
             .choose(&mut rand::thread_rng())
             .ok_or(FusenError::from("not find server"))?;
-        let request = self.request_handle.encode(msg)?;
+        let request = self.request_handle.encode(context)?;
         let response: http::Response<hyper::body::Incoming> = socket.send_request(request).await?;
         let res = self
             .response_handle

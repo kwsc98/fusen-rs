@@ -49,8 +49,8 @@ impl Route {
 
     #[async_recursion]
     pub async fn get_server_resource(&self, context: &FusenContext) -> crate::Result<ResourceInfo> {
-        let name = &context.class_name;
-        let version = context.version.as_ref();
+        let name = &context.context_info.class_name;
+        let version = context.context_info.version.as_ref();
         let mut key = name.to_owned();
         if let Some(version) = version {
             key.push(':');

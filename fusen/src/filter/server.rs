@@ -33,12 +33,12 @@ impl RpcServerFilter {
         }
         RpcServerFilter { cache, path_cache }
     }
-    pub fn get_server(&self, msg: &mut FusenContext) -> Option<&'static dyn RpcServer> {
-        let info = self.path_cache.get(&msg.path.get_key())?;
-        msg.class_name.clone_from(&info.0);
-        msg.method_name.clone_from(&info.1);
-        let mut class_name = msg.class_name.clone();
-        if let Some(version) = &msg.version {
+    pub fn get_server(&self, context: &mut FusenContext) -> Option<&'static dyn RpcServer> {
+        let info = self.path_cache.get(&context.path.get_key())?;
+        context.class_name.clone_from(&info.0);
+        context.method_name.clone_from(&info.1);
+        let mut class_name = context.class_name.clone();
+        if let Some(version) = &context.version {
             class_name.push(':');
             class_name.push_str(version);
         }
