@@ -3,7 +3,7 @@ members = ["fusen-common", "fusen-macro", "fusen", "examples"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 authors = ["kwsc98 <kwsc98@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -11,9 +11,9 @@ description = "RPC framework for service registration and discovery through API 
 
 
 [workspace.dependencies]
-fusen-common = { path = "fusen-common", version = "0.3.1" }
-fusen-rs = { path = "fusen", version = "0.3.1" }
-fusen-macro = { path = "fusen-macro", version = "0.3.1" }
+fusen-common = { path = "fusen-common", version = "0.3.2" }
+fusen-rs = { path = "fusen", version = "0.3.2" }
+fusen-macro = { path = "fusen-macro", version = "0.3.2" }
 
 #网络协议处理
 tokio = { version = "1", features = ["full"] }
@@ -31,7 +31,7 @@ futures-util = "0"
 #日志处理
 tracing = "0.1.13"
 tracing-futures = { version = "0.2.3" }
-tracing-subscriber = "0.3.17"
+tracing-subscriber = "0.3"
 pretty_env_logger = "0.5"
 
 #json序列化
