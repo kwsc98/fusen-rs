@@ -83,7 +83,12 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                     Err(err) => {
                         message = match err {
                             FusenError::Null => {
-                                status = "90";
+                                let res_wrapper = TripleResponseWrapper::form("null".to_owned());
+                                let buf = self
+                                    .grpc_codec
+                                    .encode(res_wrapper)
+                                    .map_err(FusenError::from)?;
+                                vec.push(Frame::data(buf));
                                 "null value".to_owned()
                             }
                             FusenError::NotFind(msg) => {
@@ -165,7 +170,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
             }
         }
         if frame_vec.is_empty() {
-            return Err(FusenError::from("empty frame"));
+            return Err(FusenError::Null);
         }
         let codec_type = response
             .headers()
@@ -180,13 +185,15 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
             .data_ref()
             .ok_or(FusenError::from("empty body"))?;
         let res = match codec_type {
-            CodecType::JSON => self.json_codec.decode(byte).map_err(|e| {
-                if byte.starts_with(b"null") {
-                    FusenError::Null
+            CodecType::JSON => {
+                if !byte.to_ascii_lowercase().starts_with(b"\"") {
+                    String::from_utf8(byte.to_vec()).map_err(|e| FusenError::from(e.to_string()))?
                 } else {
-                    FusenError::from(e.to_string())
+                    self.json_codec
+                        .decode(byte)
+                        .map_err(|e| FusenError::from(e.to_string()))?
                 }
-            })?,
+            }
             CodecType::GRPC => {
                 let response = self.grpc_codec.decode(byte)?;
                 String::from_utf8(response.data).map_err(|e| FusenError::from(e.to_string()))?

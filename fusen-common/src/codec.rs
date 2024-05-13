@@ -1,5 +1,7 @@
 use bytes::{Buf, Bytes, BytesMut};
 
+use crate::error::FusenError;
+
 pub enum CodecType {
     JSON,
     GRPC,
@@ -15,12 +17,15 @@ impl From<&str> for CodecType {
     }
 }
 
-pub fn json_field_compatible(ty: &str, mut field: String) -> String {
+pub fn json_field_compatible(ty: &str, mut field: String) -> Result<String, FusenError> {
+    if field.to_lowercase().starts_with("null") {
+        return Err(FusenError::Null);
+    }
     if ty == "String" && !field.starts_with('"') {
         field.insert(0, '"');
         field.insert(field.len(), '"');
     }
-    field
+    Ok(field)
 }
 
 pub fn byte_to_vec(bytes: Bytes) -> Bytes {

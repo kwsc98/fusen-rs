@@ -53,7 +53,7 @@ impl FusenClient {
             .response_handle
             .decode(response.map(|e| e.boxed()))
             .await?;
-        let response = json_field_compatible(return_ty, res);
+        let response = json_field_compatible(return_ty, res)?;
         let response: Res =
             serde_json::from_str(&response).map_err(|e| FusenError::from(e.to_string()))?;
         Ok(response)
