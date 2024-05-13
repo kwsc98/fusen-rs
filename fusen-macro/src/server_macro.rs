@@ -40,38 +40,38 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         if let ImplItem::Fn(fn_item) = e {
             let method = &fn_item.sig.ident;
             let mut req_pat = vec![];
-            let req = fn_item.sig.inputs.iter().fold(vec![], |mut vec, e| {
+            let request = fn_item.sig.inputs.iter().fold(vec![], |mut vec, e| {
                 if let FnArg::Typed(input) = e {
-                    let req = &input.pat;
-                    let req_type = &input.ty;
+                    let request = &input.pat;
+                    let request_type = &input.ty;
                     let token = quote! {
-                     let result : Result<#req_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
+                     let result : Result<#request_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                     if let Err(err) = result {
-                        param.res = Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
+                        param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
                         return param;
                     }
-                    let #req : #req_type = result.unwrap();
+                    let #request : #request_type = result.unwrap();
                     idx += 1;
                     };
-                    req_pat.push(req);
+                    req_pat.push(request);
                     vec.push(token);
                 }
                 vec
             },
             );
             vec.push(quote! {
-                if &param.method_name[..] == stringify!(#method) {
-                let req_poi_param = &param.req;
+                if &param.context_info.method_name[..] == stringify!(#method) {
+                let req_poi_param = &param.request.fields;
                 let mut idx = 0;
                 #(
-                    #req
+                    #request
                 )*
                 let res = self.#method(
                     #(
                         #req_pat,
                     )*
                 ).await;
-                param.res = match res {
+                param.response.response = match res {
                     Ok(res) => {
                         let res = serde_json::to_string(&res);
                         match res {
@@ -110,7 +110,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         impl #item_self {
             async fn prv_invoke (&self, mut param : fusen_rs::fusen_common::FusenContext) -> fusen_rs::fusen_common::FusenContext {
                 #(#items_fn)*
-                param.res = Err(fusen_rs::fusen_common::error::FusenError::from(format!("not find method by {}",param.method_name)));
+                param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(format!("not find method by {}",param.context_info.method_name)));
                 return param;
             }
         }

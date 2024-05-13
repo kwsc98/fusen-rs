@@ -4,7 +4,8 @@ use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::{support::triple::TripleRequestWrapper, BoxBody};
 use bytes::Bytes;
 use fusen_common::{
-    error::FusenError, logs::get_uuid, register::Type, FusenContext, MetaData, Path,
+    error::FusenError, logs::get_uuid, register::Type, ContextInfo, FusenContext, FusenRequest,
+    MetaData, Path,
 };
 use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
@@ -70,8 +71,11 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let path = match context.server_tyep.as_ref().unwrap().as_ref() {
             &Type::SpringCloud => context.context_info.path,
             _ => {
-                let path = "/".to_owned() + context.class_name.as_ref() + "/" + &context.method_name;
-                match context.path {
+                let path = "/".to_owned()
+                    + context.context_info.class_name.as_ref()
+                    + "/"
+                    + context.context_info.method_name.as_ref();
+                match context.context_info.path {
                     fusen_common::Path::GET(_) => fusen_common::Path::GET(path),
                     fusen_common::Path::POST(_) => fusen_common::Path::POST(path),
                 }
@@ -80,15 +84,20 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let request = match path {
             fusen_common::Path::GET(path) => builder
                 .method("GET")
-                .uri(get_path(path, &msg.fields, &msg.req))
+                .uri(get_path(
+                    path,
+                    &context.request.fields_ty.unwrap(),
+                    &context.request.fields,
+                ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::POST(path) => {
-                let body: Bytes = match msg.server_tyep.as_ref().unwrap().as_ref() {
+                let body: Bytes = match context.server_tyep.as_ref().unwrap().as_ref() {
                     &Type::Dubbo => {
-                        let triple_request_wrapper = TripleRequestWrapper::from(msg.req);
+                        let triple_request_wrapper =
+                            TripleRequestWrapper::from(context.request.fields);
                         self.grpc_codec.encode(triple_request_wrapper)?
                     }
-                    _ => self.json_codec.encode(msg.req)?,
+                    _ => self.json_codec.encode(context.request.fields)?,
                 };
                 let builder = builder.header("content-length", body.len());
                 builder
@@ -155,27 +164,25 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .get_value("tri-service-version")
             .map_or(meta_data.get_value("version"), Some)
             .cloned();
-        Ok(FusenContext::new(
+        let context = FusenContext::new(
             unique_identifier,
-            Path::new(&method, path),
+            ContextInfo::default()
+                .path(Path::new(&method, path))
+                .version(version),
+            FusenRequest::new(msg),
             meta_data,
-            version,
-            None,
-            "".to_string(),
-            "".to_string(),
-            msg,
-            vec![],
-        ))
+        );
+        Ok(context)
     }
 }
 
-fn get_path(mut path: String, fields: &[String], msg: &[String]) -> String {
+fn get_path(mut path: String, fields_ty: &[&str], fields: &[String]) -> String {
     if !fields.is_empty() {
         path.push('?');
         for idx in 0..fields.len() {
-            path.push_str(&fields[idx]);
+            path.push_str(fields_ty[idx]);
             path.push('=');
-            path.push_str(&msg[idx]);
+            path.push_str(&fields[idx]);
             path.push('&');
         }
         path.remove(path.len() - 1);

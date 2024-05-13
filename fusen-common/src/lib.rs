@@ -5,7 +5,6 @@ use register::Type;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Iter, HashMap},
-    default,
     sync::Arc,
 };
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -87,7 +86,7 @@ impl Default for MetaData {
 pub struct ContextInfo {
     pub path: Path,
     pub class_name: String,
-    method_name: String,
+    pub method_name: String,
     pub version: Option<String>,
     group: Option<String>,
 }
@@ -108,12 +107,32 @@ impl ContextInfo {
             group,
         }
     }
+    pub fn path(mut self, path: Path) -> Self {
+        self.path = path;
+        self
+    }
+    pub fn class_name(mut self, class_name: String) -> Self {
+        self.class_name = class_name;
+        self
+    }
+    pub fn method_name(mut self, method_name: String) -> Self {
+        self.method_name = method_name;
+        self
+    }
+    pub fn version(mut self, version: Option<String>) -> Self {
+        self.version = version;
+        self
+    }
+    pub fn group(mut self, group: Option<String>) -> Self {
+        self.group = group;
+        self
+    }
 }
 
 #[derive(Debug)]
 pub struct FusenRequest {
-    fields: Vec<String>,
-    fields_ty: Option<Vec<&'static str>>,
+    pub fields: Vec<String>,
+    pub fields_ty: Option<Vec<&'static str>>,
 }
 
 impl FusenRequest {
@@ -130,8 +149,8 @@ impl FusenRequest {
 
 #[derive(Debug)]
 pub struct FusenResponse {
-    response: std::result::Result<String, FusenError>,
-    response_ty: Option<&'static str>,
+    pub response: std::result::Result<String, FusenError>,
+    pub response_ty: Option<&'static str>,
 }
 
 impl Default for FusenResponse {
@@ -143,14 +162,20 @@ impl Default for FusenResponse {
     }
 }
 
+impl FusenResponse {
+    pub fn insert_return_ty(&mut self, ty: &'static str) {
+        let _ = self.response_ty.insert(ty);
+    }
+}
+
 #[derive(Debug)]
 pub struct FusenContext {
-    unique_identifier: String,
+    pub unique_identifier: String,
     pub server_tyep: Option<Arc<Type>>,
     pub meta_data: MetaData,
     pub context_info: ContextInfo,
-    request: FusenRequest,
-    response: FusenResponse,
+    pub request: FusenRequest,
+    pub response: FusenResponse,
 }
 
 impl FusenContext {
@@ -158,12 +183,13 @@ impl FusenContext {
         unique_identifier: String,
         context_info: ContextInfo,
         request: FusenRequest,
+        meta_data: MetaData,
     ) -> FusenContext {
         FusenContext {
             unique_identifier,
             context_info,
             server_tyep: None,
-            meta_data: Default::default(),
+            meta_data,
             request,
             response: Default::default(),
         }
@@ -173,9 +199,6 @@ impl FusenContext {
     }
     pub fn get_server_type(&self) -> Option<Arc<Type>> {
         self.server_tyep.clone()
-    }
-    pub fn insert_return_ty(&mut self, ty: &'static str) {
-        let _ = self.response.response_ty.insert(ty);
     }
     pub fn get_return_ty(&self) -> Option<&'static str> {
         self.response.response_ty

@@ -42,7 +42,7 @@ impl FusenClient {
             server_type,
             socket,
         } = resource_info;
-        let _ = context.insert_server_type(server_type);
+        context.insert_server_type(server_type);
         let return_ty = context.get_return_ty().unwrap();
         let socket = socket
             .choose(&mut rand::thread_rng())

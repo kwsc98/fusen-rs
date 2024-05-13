@@ -57,11 +57,11 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         let asyncable = item.asyncness;
         let ident = item.ident;
         let inputs = item.inputs;
-        let mut fields = vec![];
+        let mut fields_ty = vec![];
         let req = inputs.iter().fold(vec![], |mut vec, e| {
             if let FnArg::Typed(req) = e {
                 vec.push(req.pat.clone());
-                fields.push(req.pat.to_token_stream().to_string());
+                fields_ty.push(req.pat.to_token_stream().to_string());
             }
             vec
         });
@@ -78,10 +78,10 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     #[allow(non_snake_case)]
                     pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::fusen_common::error::FusenError> {
                     let mut req_vec : Vec<String> = vec![];
-                    let mut fields : Vec<String> = vec![];
+                    let fields_ty = [
                     #(
-                        fields.push(#fields.to_string());
-                    )*
+                        #fields_ty,
+                    )*];
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
                         if let Err(err) = res_poi_str {
@@ -93,19 +93,21 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let group : Option<&str> = #group;
                     let mut mate_data = fusen_rs::fusen_common::MetaData::new();
                     mate_data.insert("spring_cloud_name".to_string(),#spring_cloud_name.to_string());
-                    let mut msg = fusen_rs::fusen_common::FusenContext::new (
+                    let mut request = fusen_rs::fusen_common::FusenRequest::new(req_vec);
+                    request.insert_fields_ty(fields_ty.to_vec());
+                    let mut context = fusen_rs::fusen_common::FusenContext::new(
                         fusen_rs::fusen_common::logs::get_uuid(),
-                        fusen_rs::fusen_common::Path::new(#methos_type,#methos_path.to_string()),
+                        fusen_rs::fusen_common::ContextInfo::default()
+                            .path(fusen_rs::fusen_common::Path::new(#methos_type,#methos_path.to_string()))
+                            .version(version.map(|e|e.to_string()))
+                            .class_name(#package.to_owned())
+                            .method_name(#methos_id.to_string())
+                            .group(group.map(|e|e.to_string())),
+                        request,
                         mate_data,
-                        version.map(|e|e.to_string()),
-                        group.map(|e|e.to_string()),
-                        #package.to_owned(),
-                        #methos_id.to_string(),
-                        req_vec,
-                        fields
                     );
-                    msg.set_return_ty(stringify!(#output_type));
-                    let res : Result<#output_type,fusen_rs::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(msg).await;
+                    context.response.insert_return_ty(stringify!(#output_type));
+                    let res : Result<#output_type,fusen_rs::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(context).await;
                     return res;
                 }
             }

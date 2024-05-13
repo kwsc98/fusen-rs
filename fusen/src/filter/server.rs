@@ -34,11 +34,12 @@ impl RpcServerFilter {
         RpcServerFilter { cache, path_cache }
     }
     pub fn get_server(&self, context: &mut FusenContext) -> Option<&'static dyn RpcServer> {
-        let info = self.path_cache.get(&context.path.get_key())?;
-        context.class_name.clone_from(&info.0);
-        context.method_name.clone_from(&info.1);
-        let mut class_name = context.class_name.clone();
-        if let Some(version) = &context.version {
+        let context_info = &mut context.context_info;
+        let info = self.path_cache.get(&context_info.path.get_key())?;
+        context_info.class_name.clone_from(&info.0);
+        context_info.method_name.clone_from(&info.1);
+        let mut class_name = context_info.class_name.clone();
+        if let Some(version) = &context_info.version {
             class_name.push(':');
             class_name.push_str(version);
         }
@@ -56,16 +57,16 @@ impl FusenFilter for RpcServerFilter {
     type Future = crate::FusenFuture<Result<Self::Response, Self::Error>>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        let mut msg: FusenContext = req;
-        let server = self.get_server(&mut msg);
+        let mut context: FusenContext = req;
+        let server = self.get_server(&mut context);
         match server {
-            Some(server) => Box::pin(async move { Ok(server.invoke(msg).await) }),
+            Some(server) => Box::pin(async move { Ok(server.invoke(context).await) }),
             None => Box::pin(async move {
-                msg.res = Err(FusenError::NotFind(format!(
-                    "not find server by {:?} version {:?}",
-                    msg.class_name, msg.version
+                context.response.response = Err(FusenError::NotFind(format!(
+                    "not find server by {:?}",
+                    context.context_info
                 )));
-                Ok(msg)
+                Ok(context)
             }),
         }
     }

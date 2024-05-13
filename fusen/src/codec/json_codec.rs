@@ -39,7 +39,7 @@ where
     fn decode(&self, body: &D) -> Result<Self::DecodeType, crate::Error> {
         let data = body.chunk();
         let mut de = serde_json::Deserializer::from_reader(data.reader());
-        Ok(U::deserialize(&mut de).unwrap())
+        Ok(U::deserialize(&mut de)?)
     }
 
     fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
