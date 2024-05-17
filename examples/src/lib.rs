@@ -1,4 +1,10 @@
-use fusen_rs::fusen_macro::{asset, fusen_trait};
+use std::sync::Arc;
+
+use fusen_rs::{
+    fusen_macro::{asset, fusen_trait, handler},
+    handler::loadbalance::LoadBalance,
+    protocol::socket::InvokerAssets,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -15,10 +21,22 @@ pub struct ResDto {
 #[asset(spring_cloud = "service-provider")]
 pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
-    
-    #[asset(path="/sayHelloV2-http",method = POST)]
+
+    #[asset(path = "/sayHelloV2-http", method = POST)]
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
 
-    #[asset(path="/divide",method = GET)]
+    #[asset(path = "/divide", method = GET)]
     async fn divideV2(&self, a: i32, b: i32) -> String;
+}
+
+struct CustomLoadBalance;
+
+#[handler(id = "CustomLoadBalance")]
+impl LoadBalance for CustomLoadBalance {
+    async fn select(
+        &self,
+        _invokers: Vec<Arc<InvokerAssets>>,
+    ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
+        todo!()
+    }
 }

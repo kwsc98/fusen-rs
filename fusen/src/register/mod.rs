@@ -6,7 +6,7 @@ use fusen_common::{
     FusenFuture, MethodResource,
 };
 
-use crate::protocol::socket::{Socket, SocketAssets};
+use crate::protocol::socket::{Socket, InvokerAssets};
 
 use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,7 @@ pub enum DirectorySender {
 }
 
 pub enum DirectoryReceiver {
-    GET(Vec<Arc<SocketAssets>>),
+    GET(Vec<Arc<InvokerAssets>>),
     CHANGE,
 }
 
@@ -108,7 +108,7 @@ pub struct Directory {
 #[derive(Debug)]
 pub struct ResourceInfo {
     pub server_type: Arc<Type>,
-    pub socket: Vec<Arc<SocketAssets>>,
+    pub socket: Vec<Arc<InvokerAssets>>,
 }
 
 impl Directory {
@@ -117,7 +117,7 @@ impl Directory {
             mpsc::unbounded_channel::<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>();
         let server_type_clone = server_type.clone();
         tokio::spawn(async move {
-            let mut cache: Vec<Arc<SocketAssets>> = vec![];
+            let mut cache: Vec<Arc<InvokerAssets>> = vec![];
             while let Some(msg) = r.recv().await {
                 match msg.0 {
                     DirectorySender::GET => {
@@ -134,7 +134,7 @@ impl Directory {
                             let key = get_path(item.ip.clone(), item.port.as_deref());
                             res.push(match map.get(&key) {
                                 Some(info) => info.clone(),
-                                None => Arc::new(SocketAssets {
+                                None => Arc::new(InvokerAssets {
                                     resource: item,
                                     socket: match server_type_clone.as_ref() {
                                         Type::Dubbo => Socket::HTTP2(Arc::new(RwLock::new(None))),

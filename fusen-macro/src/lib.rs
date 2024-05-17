@@ -5,6 +5,16 @@ use syn::{parse::Parser, parse_macro_input, Attribute, Data, DeriveInput, Meta};
 
 mod server_macro;
 mod trait_macro;
+mod handler_macro;
+
+#[proc_macro_attribute]
+pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = HandlerAttr::from_attr(attr);
+    match attr {
+        Ok(attr) => handler_macro::fusen_handler(attr, item),
+        Err(err) => err.into_compile_error().into(),
+    }
+}
 
 #[proc_macro_attribute]
 pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -165,4 +175,9 @@ fusen_attr! {
     package,
     version,
     group
+}
+
+fusen_attr! {
+    HandlerAttr,
+    id
 }
