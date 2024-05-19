@@ -10,8 +10,8 @@ pub mod support;
 use bytes::Buf;
 pub use fusen_common;
 pub use fusen_macro;
-use handler::Handler;
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use handler::HandlerContext;
+use std::convert::Infallible;
 pub type Error = fusen_common::Error;
 pub type Result<T> = fusen_common::Result<T>;
 pub type FusenFuture<T> = fusen_common::FusenFuture<T>;
@@ -32,5 +32,5 @@ where
 }
 
 struct FusenApplicationContext {
-    handler: HashMap<String, Arc<Handler>>,
+    handler_context: HandlerContext,
 }
