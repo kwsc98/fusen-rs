@@ -6,7 +6,7 @@ use fusen_common::{
     FusenFuture, MethodResource,
 };
 
-use crate::protocol::socket::{Socket, InvokerAssets};
+use crate::protocol::socket::{InvokerAssets, Socket};
 
 use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,8 @@ pub trait Register: Send + Sync {
     fn subscribe(&self, resource: Resource) -> FusenFuture<Result<Directory, crate::Error>>;
 
     fn check(&self, protocol: Vec<Protocol>) -> FusenFuture<crate::Result<String>>;
+
+    fn get_type(&self) -> Type;
 }
 
 #[derive(Debug)]

@@ -71,6 +71,10 @@ impl Register for FusenZookeeper {
             listener_resource_node_change(cluster, path, server_type, resource).await
         })
     }
+
+    fn get_type(&self) -> Type {
+        self.config.server_type.clone()
+    }
 }
 
 #[async_recursion]

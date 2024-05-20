@@ -3,10 +3,10 @@ use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::fusen_macro::asset;
 use fusen_rs::register::nacos::NacosConfig;
+use fusen_rs::FusenApplicationContext;
 use fusen_rs::{
     fusen_common::{self, server::Protocol, FusenResult},
     fusen_macro::fusen_server,
-    server::FusenServer,
 };
 use tracing::info;
 
@@ -43,7 +43,7 @@ async fn main() {
         _db: "我是一个DB数据库".to_string(),
     };
     //支持多协议，多注册中心的接口暴露
-    FusenServer::build()
+    FusenApplicationContext::builder()
         //初始化Fusen注册中心,同时支持Dubbo3协议与Fusen协议
         .add_register_builder(
             NacosConfig::builder()
@@ -66,6 +66,7 @@ async fn main() {
         .add_protocol(Protocol::HTTP("8081".to_owned()))
         .add_protocol(Protocol::HTTP2("8082".to_owned()))
         .add_fusen_server(Box::new(server))
+        .build()
         .run()
         .await;
 }

@@ -1,10 +1,4 @@
-use std::sync::Arc;
-
-use fusen_rs::{
-    fusen_macro::{asset, fusen_trait, handler},
-    handler::loadbalance::LoadBalance,
-    protocol::socket::InvokerAssets,
-};
+use fusen_rs::fusen_macro::{asset, fusen_trait};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -27,16 +21,4 @@ pub trait DemoService {
 
     #[asset(path = "/divide", method = GET)]
     async fn divideV2(&self, a: i32, b: i32) -> String;
-}
-
-struct CustomLoadBalance;
-
-#[handler(id = "CustomLoadBalance")]
-impl LoadBalance for CustomLoadBalance {
-    async fn select(
-        &self,
-        _invokers: Vec<Arc<InvokerAssets>>,
-    ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
-        todo!()
-    }
 }

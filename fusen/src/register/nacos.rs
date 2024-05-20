@@ -174,6 +174,10 @@ impl Register for FusenNacos {
             Ok(port)
         })
     }
+    
+    fn get_type(&self) -> Type {
+        self.config.server_type.clone()
+    }
 }
 
 #[derive(Clone)]

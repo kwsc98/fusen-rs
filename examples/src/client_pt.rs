@@ -1,31 +1,30 @@
 use std::time::Duration;
 
 use examples::{DemoServiceClient, ReqDto};
-use fusen_rs::client::FusenClient;
-use fusen_rs::fusen_common;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::register::nacos::NacosConfig;
-use lazy_static::lazy_static;
+use fusen_rs::{fusen_common, FusenApplicationContext};
 use tokio::sync::mpsc;
 use tracing::info;
-
-lazy_static! {
-    static ref CLI_FUSEN: FusenClient = FusenClient::build(
-        NacosConfig::builder()
-            .server_addr("127.0.0.1:8848".to_owned())
-            .app_name(Some("fusen-client".to_owned()))
-            .server_type(Type::Fusen)
-            .build()
-            .boxed()
-    );
-}
 
 #[tokio::main(worker_threads = 512)]
 async fn main() {
     fusen_common::logs::init_log();
-    let client = Box::leak(Box::new(DemoServiceClient::new(&CLI_FUSEN)));
+    let context = FusenApplicationContext::builder()
+        .add_register_builder(
+            NacosConfig::builder()
+                .server_addr("127.0.0.1:8848".to_owned())
+                .app_name(Some("fusen-service".to_owned()))
+                .server_type(Type::Fusen)
+                .build()
+                .boxed(),
+        )
+        .build();
+    let client = Box::leak(Box::new(DemoServiceClient::new(
+        context.client(Type::Fusen).unwrap(),
+    )));
     let _ = client
         .sayHelloV2(ReqDto {
             str: "world".to_string(),
