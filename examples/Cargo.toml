@@ -48,3 +48,5 @@ prost-build = "0"
 
 pin-project-lite.workspace = true
 lazy_static.workspace = true
+rand.workspace = true
+

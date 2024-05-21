@@ -5,11 +5,13 @@ use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::fusen_macro::handler;
 use fusen_rs::handler::loadbalance::LoadBalance;
-use fusen_rs::handler::HandlerLoad;
+use fusen_rs::handler::{HandlerInfo, HandlerLoad};
 use fusen_rs::protocol::socket::InvokerAssets;
 use fusen_rs::register::nacos::NacosConfig;
 use fusen_rs::{fusen_common, FusenApplicationContext};
 use tracing::info;
+use rand::prelude::SliceRandom;
+
 
 struct CustomLoadBalance;
 
@@ -17,9 +19,12 @@ struct CustomLoadBalance;
 impl LoadBalance for CustomLoadBalance {
     async fn select(
         &self,
-        _invokers: Vec<Arc<InvokerAssets>>,
+        invokers: Vec<Arc<InvokerAssets>>,
     ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
-        todo!()
+        invokers
+            .choose(&mut rand::thread_rng())
+            .ok_or(fusen_rs::Error::from("not find server : CustomLoadBalance"))
+            .cloned()
     }
 }
 
@@ -52,6 +57,11 @@ async fn main() {
                 .boxed(),
         )
         .add_handler(CustomLoadBalance.load())
+        //todo! Need to be optimized for configuration
+        .add_handler_info(HandlerInfo::new(
+            "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
+            vec!["CustomLoadBalance".to_owned()],
+        ))
         .build();
     //进行Fusen协议调用HTTP2 + JSON
     let client = DemoServiceClient::new(context.client(Type::Fusen).unwrap());

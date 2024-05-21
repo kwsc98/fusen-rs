@@ -44,10 +44,12 @@ where
     BoxBody::default()
 }
 
+#[derive(Default)]
 pub struct FusenApplicationBuilder {
     protocol: Vec<Protocol>,
     register_config: Vec<Box<dyn UrlConfig>>,
     handlers: Vec<Handler>,
+    handler_infos: Vec<HandlerInfo>,
     servers: HashMap<String, Box<dyn RpcServer>>,
 }
 
@@ -78,12 +80,17 @@ impl FusenApplicationBuilder {
         self.handlers.push(handler);
         self
     }
+    pub fn add_handler_info(mut self, info: HandlerInfo) -> Self {
+        self.handler_infos.push(info);
+        self
+    }
 
     pub fn build(self) -> FusenApplicationContext {
         let FusenApplicationBuilder {
             protocol,
             register_config,
             handlers,
+            handler_infos,
             servers,
         } = self;
         let mut registers: HashMap<String, Arc<Box<dyn Register>>> = HashMap::new();
@@ -92,8 +99,8 @@ impl FusenApplicationBuilder {
         for handler in handlers {
             handler_context.insert(handler);
         }
-        for (id, _server) in &servers {
-            let _ = handler_context.load_controller(HandlerInfo::new(id.clone(), vec![]));
+        for info in handler_infos {
+            let _ = handler_context.load_controller(info);
         }
         for register_config in register_config {
             let register = Arc::new(RegisterBuilder::new(register_config).unwrap().init());
@@ -121,12 +128,7 @@ pub struct FusenApplicationContext {
 }
 impl FusenApplicationContext {
     pub fn builder() -> FusenApplicationBuilder {
-        FusenApplicationBuilder {
-            protocol: Default::default(),
-            register_config: Default::default(),
-            handlers: Default::default(),
-            servers: Default::default(),
-        }
+        FusenApplicationBuilder::default()
     }
 
     pub fn client(&self, ty: Type) -> Option<Arc<FusenClient>> {
@@ -137,7 +139,7 @@ impl FusenApplicationContext {
         let mut shutdown_complete_rx = self.server.run().await;
         for (_id, register) in self.registers {
             if let Ok(port) = register.check(self.server.protocol.clone()).await {
-                for (_id, server) in &self.server.fusen_servers {
+                for server in self.server.fusen_servers.values() {
                     let info: ServerInfo = server.get_info();
                     let server_name = info.id.to_string();
                     let resource = Resource {

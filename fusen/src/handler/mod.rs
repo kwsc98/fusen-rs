@@ -31,32 +31,30 @@ impl Default for HandlerContext {
 
 impl HandlerContext {
     pub fn insert(&mut self, handler: Handler) {
-        let mut key = String::new();
-        match &handler.handler_invoker {
-            HandlerInvoker::LoadBalance(_) => key.push_str("LoadBalance:"),
-        }
-        key.push_str(&handler.id);
-        self.context.insert(key, Arc::new(handler));
+        self.context.insert(handler.id.clone(), Arc::new(handler));
     }
 
     fn get_handler(&self, key: &str) -> Option<Arc<Handler>> {
         self.context.get(key).cloned()
     }
 
-    pub fn get_controller(&mut self, method_name: &str) -> Option<Arc<HandlerController>> {
-        self.cache.get(method_name).cloned()
+    pub fn get_controller(&self, class_name: &str) -> Option<Arc<HandlerController>> {
+        self.cache
+            .get(class_name)
+            .map_or(self.cache.get("DefaultFusenClientHandlerInfo"), Some)
+            .cloned()
     }
 
     pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), crate::Error> {
         let mut load_balance: Option<&'static dyn LoadBalance_> = None;
         for item in &handler_info.handlers_id {
-            if let Some(handler) = self.get_handler(&item) {
+            if let Some(handler) = self.get_handler(item) {
                 match handler.handler_invoker {
                     HandlerInvoker::LoadBalance(handler) => load_balance.insert(handler),
                 };
             }
         }
-        if let None = load_balance {
+        if load_balance.is_none() {
             if let Some(handler) = self.get_handler("DefaultLoadBalance") {
                 match handler.handler_invoker {
                     HandlerInvoker::LoadBalance(handler) => load_balance.insert(handler),
