@@ -43,7 +43,7 @@ where
         Ok(wrapper)
     }
 
-    fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
+    fn encode(&self, res: &Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
         let buf = res.encode_to_vec();
         let buf = get_buf(buf);
         Ok(bytes::Bytes::from(buf))

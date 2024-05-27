@@ -1,14 +1,8 @@
-use futures::Future;
+use fusen_common::FusenContext;
+
+use crate::FusenFuture;
 pub mod server;
 
-pub trait FusenFilter {
-    type Request;
-
-    type Response: Send;
-
-    type Error: Send;
-
-    type Future: Future<Output = Result<Self::Response, Self::Error>> + Send;
-
-    fn call(&self, req: Self::Request) -> Self::Future;
+pub trait FusenFilter : Send + Sync + 'static {
+    fn call(&'static self, context: FusenContext) -> FusenFuture<Result<FusenContext, crate::Error>>;
 }

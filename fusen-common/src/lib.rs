@@ -221,7 +221,7 @@ pub struct MethodResource {
     pub method: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum Path {
     GET(String),
     POST(String),

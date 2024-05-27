@@ -39,8 +39,26 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                 }
             },
         ),
+        "Aspect" => (
+            quote!(fusen_rs::handler::HandlerInvoker::Aspect(Box::leak(
+                Box::new(self)
+            )),),
+            quote! {
+                impl fusen_rs::handler::aspect::Aspect_ for #item_self {
+                    fn aroud_(
+                        &self,
+                        filter: Box<dyn fusen_rs::filter::FusenFilter>,
+                        context: fusen_rs::fusen_common::FusenContext,
+                    ) -> fusen_rs::fusen_common::FusenFuture<Result<fusen_rs::fusen_common::FusenContext, fusen_rs::Error>> {
+                        Box::pin(async move {
+                            self.aroud(invokers).await
+                        })
+                    }
+                }
+            },
+        ),
         _ => {
-            return syn::Error::new_spanned(trait_ident, "handler must impl 'LoadBalance'")
+            return syn::Error::new_spanned(trait_ident, "handler must impl 'LoadBalance', 'Aspect'")
                 .into_compile_error()
                 .into()
         }

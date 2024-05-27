@@ -1,5 +1,8 @@
+use aspect::{Aspect_, DefaultAspect};
+
 use self::loadbalance::{DefaultLoadBalance, LoadBalance_};
 use std::{collections::HashMap, sync::Arc};
+pub mod aspect;
 pub mod loadbalance;
 
 #[derive(Clone)]
@@ -18,7 +21,12 @@ impl Default for HandlerContext {
             "DefaultLoadBalance".to_string(),
             HandlerInvoker::LoadBalance(Box::leak(Box::new(DefaultLoadBalance))),
         );
+        let aspect = Handler::new(
+            "DefaultAspect".to_string(),
+            HandlerInvoker::Aspect(Box::leak(Box::new(DefaultAspect))),
+        );
         context.insert(handler);
+        context.insert(aspect);
         context
             .load_controller(HandlerInfo::new(
                 "DefaultFusenClientHandlerInfo".to_string(),
@@ -47,10 +55,17 @@ impl HandlerContext {
 
     pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), crate::Error> {
         let mut load_balance: Option<&'static dyn LoadBalance_> = None;
+        let mut aspect: Option<&'static dyn Aspect_> = None;
+
         for item in &handler_info.handlers_id {
             if let Some(handler) = self.get_handler(item) {
                 match handler.handler_invoker {
-                    HandlerInvoker::LoadBalance(handler) => load_balance.insert(handler),
+                    HandlerInvoker::LoadBalance(handler) => {
+                        let _ = load_balance.insert(handler);
+                    }
+                    HandlerInvoker::Aspect(handler) => {
+                        let _ = aspect.insert(handler);
+                    }
                 };
             }
         }
@@ -58,12 +73,22 @@ impl HandlerContext {
             if let Some(handler) = self.get_handler("DefaultLoadBalance") {
                 match handler.handler_invoker {
                     HandlerInvoker::LoadBalance(handler) => load_balance.insert(handler),
+                    _ => return Err(crate::Error::from("DefaultLoadBalance get Error")),
+                };
+            }
+        }
+        if aspect.is_none() {
+            if let Some(handler) = self.get_handler("DefaultAspect") {
+                match handler.handler_invoker {
+                    HandlerInvoker::Aspect(handler) => aspect.insert(handler),
+                    _ => return Err(crate::Error::from("DefaultAspect get Error")),
                 };
             }
         }
         let handler_controller = HandlerController {
             load_balance: load_balance
                 .ok_or_else(|| crate::Error::from("not find load_balance"))?,
+            aspect: aspect.ok_or_else(|| crate::Error::from("not find aspect"))?,
         };
         self.cache
             .insert(handler_info.id, Arc::new(handler_controller));
@@ -73,16 +98,21 @@ impl HandlerContext {
 
 pub struct HandlerController {
     load_balance: &'static dyn LoadBalance_,
+    aspect: &'static dyn Aspect_,
 }
 
 impl HandlerController {
     pub fn get_load_balance(&self) -> &'static dyn LoadBalance_ {
         self.load_balance
     }
+    pub fn get_aspect(&self) -> &'static dyn Aspect_ {
+        self.aspect
+    }
 }
 
 pub enum HandlerInvoker {
     LoadBalance(&'static dyn LoadBalance_),
+    Aspect(&'static dyn Aspect_),
 }
 
 pub struct HandlerInfo {

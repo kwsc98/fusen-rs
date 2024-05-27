@@ -1,5 +1,5 @@
 use super::FusenFilter;
-use fusen_common::{error::FusenError, server::RpcServer, FusenContext, MethodResource, Path};
+use fusen_common::{error::FusenError, server::RpcServer, FusenContext, FusenFuture, MethodResource, Path};
 use std::collections::HashMap;
 
 #[derive(Clone, Default)]
@@ -48,16 +48,7 @@ impl RpcServerFilter {
 }
 
 impl FusenFilter for RpcServerFilter {
-    type Request = FusenContext;
-
-    type Response = FusenContext;
-
-    type Error = FusenError;
-
-    type Future = crate::FusenFuture<Result<Self::Response, Self::Error>>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
-        let mut context: FusenContext = req;
+    fn call(&self, mut context: FusenContext) -> FusenFuture<Result<FusenContext, crate::Error>> {
         let server = self.get_server(&mut context);
         match server {
             Some(server) => Box::pin(async move { Ok(server.invoke(context).await) }),

@@ -23,7 +23,7 @@ impl DemoService for DemoServiceImpl {
     }
     #[asset(path="/sayHelloV2-http",method = POST)]
     async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
-        info!("res : {:?}", req);
+        // info!("res : {:?}", req);
         Ok(ResDto {
             str: "Hello ".to_owned() + &req.str + " V2",
         })

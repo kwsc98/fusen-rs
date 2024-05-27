@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use fusen_common::{
     error::{BoxFusenError, FusenError},
-    FusenContext, FusenFuture,
+    FusenFuture,
 };
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::Service, Request, Response};
@@ -21,7 +21,7 @@ pub struct FusenRouter<KF: 'static> {
 
 impl<KF> FusenRouter<KF>
 where
-    KF: FusenFilter<Request = FusenContext, Response = FusenContext, Error = FusenError> + Clone,
+    KF: FusenFilter,
 {
     pub fn new(fusen_filter: &'static KF) -> Self {
         FusenRouter {
@@ -45,11 +45,7 @@ where
 
 impl<KF> Service<Request<hyper::body::Incoming>> for FusenRouter<KF>
 where
-    KF: FusenFilter<Request = FusenContext, Response = FusenContext, Error = FusenError>
-        + Clone
-        + Send
-        + 'static
-        + Sync,
+    KF: FusenFilter + Clone + Send + 'static + Sync,
 {
     type Response = Response<BoxBody<Bytes, Infallible>>;
     type Error = BoxFusenError;

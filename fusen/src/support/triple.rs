@@ -36,7 +36,7 @@ pub struct TripleExceptionWrapper {
 }
 
 impl TripleRequestWrapper {
-    pub fn from(strs: Vec<String>) -> Self {
+    pub fn from(strs: &Vec<String>) -> Self {
         let mut trip = TripleRequestWrapper {
             serialize_type: "fastjson".to_string(),
             args: Default::default(),
@@ -58,13 +58,13 @@ impl TripleRequestWrapper {
 }
 
 impl TripleResponseWrapper {
-    pub fn form(strs: String) -> Self {
+    pub fn form(strs: &[u8]) -> Self {
         let mut trip = TripleResponseWrapper {
             serialize_type: "fastjson".to_string(),
             data: Default::default(),
             r#type: Default::default(),
         };
-        trip.data = strs.as_bytes().to_vec();
+        trip.data = strs.to_vec();
         trip
     }
     pub fn is_empty_body(&self) -> bool {

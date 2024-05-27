@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
 use examples::{DemoServiceClient, ReqDto};
+use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::fusen_macro::handler;
+use fusen_rs::handler::aspect::Aspect;
 use fusen_rs::handler::loadbalance::LoadBalance;
 use fusen_rs::handler::{HandlerInfo, HandlerLoad};
 use fusen_rs::protocol::socket::InvokerAssets;
 use fusen_rs::register::nacos::NacosConfig;
 use fusen_rs::{fusen_common, FusenApplicationContext};
-use tracing::info;
 use rand::prelude::SliceRandom;
-
+use tracing::info;
 
 struct CustomLoadBalance;
 
@@ -25,6 +26,27 @@ impl LoadBalance for CustomLoadBalance {
             .choose(&mut rand::thread_rng())
             .ok_or(fusen_rs::Error::from("not find server : CustomLoadBalance"))
             .cloned()
+    }
+}
+
+struct ClientLogAspect;
+
+#[handler(id = "ClientLogAspect" )]
+impl Aspect for ClientLogAspect {
+    async fn aroud(
+        &self,
+        filter: &'static dyn fusen_rs::filter::FusenFilter,
+        context: fusen_common::FusenContext,
+    ) -> Result<fusen_common::FusenContext, fusen_rs::Error> {
+        let start_time = get_now_date_time_as_millis();
+        info!("client send request : {:?}", context);
+        let context = filter.call(context).await?;
+        info!(
+            "client receive response PTT : {:?}ms : {:?}",
+            get_now_date_time_as_millis() - start_time,
+            context
+        );
+        Ok(context)
     }
 }
 

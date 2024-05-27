@@ -42,7 +42,7 @@ where
         Ok(U::deserialize(&mut de)?)
     }
 
-    fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
+    fn encode(&self, res: &Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
         let mut byte = bytes::BytesMut::new();
         let mut_bytes = &mut byte;
         serde_json::to_writer(mut_bytes.writer(), &res).map_err(Box::new)?;

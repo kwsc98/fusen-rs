@@ -11,7 +11,10 @@ use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
 
 pub(crate) trait RequestCodec<T, E> {
-    fn encode(&self, msg: FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
+    fn encode(
+        &self,
+        msg: &FusenContext,
+    ) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
 
     async fn decode(&self, request: Request<BoxBody<T, E>>) -> Result<FusenContext, crate::Error>;
 }
@@ -53,7 +56,7 @@ impl Default for RequestHandler {
 impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     fn encode(
         &self,
-        context: FusenContext,
+        context: &FusenContext,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
         let content_type = match context.server_tyep.as_ref().unwrap().as_ref() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
@@ -69,7 +72,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .insert(content_type.1, HeaderValue::from_str(version).unwrap());
         }
         let path = match context.server_tyep.as_ref().unwrap().as_ref() {
-            &Type::SpringCloud => context.context_info.path,
+            &Type::SpringCloud => context.context_info.path.clone(),
             _ => {
                 let path = "/".to_owned()
                     + context.context_info.class_name.as_ref()
@@ -86,7 +89,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method("GET")
                 .uri(get_path(
                     path,
-                    &context.request.fields_ty.unwrap(),
+                    context.request.fields_ty.as_ref().unwrap(),
                     &context.request.fields,
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
@@ -94,10 +97,10 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 let body: Bytes = match context.server_tyep.as_ref().unwrap().as_ref() {
                     &Type::Dubbo => {
                         let triple_request_wrapper =
-                            TripleRequestWrapper::from(context.request.fields);
-                        self.grpc_codec.encode(triple_request_wrapper)?
+                            TripleRequestWrapper::from(&context.request.fields);
+                        self.grpc_codec.encode(&triple_request_wrapper)?
                     }
-                    _ => self.json_codec.encode(context.request.fields)?,
+                    _ => self.json_codec.encode(&context.request.fields)?,
                 };
                 let builder = builder.header("content-length", body.len());
                 builder
