@@ -102,6 +102,7 @@ impl FusenApplicationBuilder {
         for info in handler_infos {
             let _ = handler_context.load_controller(info);
         }
+        let handler_context = Arc::new(handler_context);
         for register_config in register_config {
             let register = Arc::new(RegisterBuilder::new(register_config).unwrap().init());
             let register_type = register.get_type();
@@ -113,16 +114,16 @@ impl FusenApplicationBuilder {
         }
         FusenApplicationContext {
             registers,
-            _handler_context: handler_context,
+            _handler_context: handler_context.clone(),
             client,
-            server: FusenServer::new(protocol, servers),
+            server: FusenServer::new(protocol, servers, handler_context),
         }
     }
 }
 
 pub struct FusenApplicationContext {
     registers: HashMap<String, Arc<Box<dyn Register>>>,
-    _handler_context: HandlerContext,
+    _handler_context: Arc<HandlerContext>,
     client: HashMap<String, Arc<FusenClient>>,
     server: FusenServer,
 }

@@ -40,13 +40,13 @@ impl Aspect for ClientLogAspect {
     ) -> Result<fusen_common::FusenContext, fusen_rs::Error> {
         let start_time = get_now_date_time_as_millis();
         info!("client send request : {:?}", context);
-        let context = filter.call(context).await?;
+        let context = filter.call(context).await;
         info!(
-            "client receive response PTT : {:?}ms : {:?}",
+            "client receive response RT : {:?}ms : {:?}",
             get_now_date_time_as_millis() - start_time,
             context
         );
-        Ok(context)
+        context
     }
 }
 
@@ -79,10 +79,11 @@ async fn main() {
                 .boxed(),
         )
         .add_handler(CustomLoadBalance.load())
+        .add_handler(ClientLogAspect.load())
         //todo! Need to be optimized for configuration
         .add_handler_info(HandlerInfo::new(
             "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
-            vec!["CustomLoadBalance".to_owned()],
+            vec!["CustomLoadBalance".to_owned(),"ClientLogAspect".to_owned()],
         ))
         .build();
     //进行Fusen协议调用HTTP2 + JSON

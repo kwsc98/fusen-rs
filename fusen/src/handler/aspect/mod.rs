@@ -26,7 +26,7 @@ pub trait Aspect {
 
 pub trait Aspect_: Send + Sync {
     fn aroud_(
-        &self,
+        &'static self,
         filter: &'static dyn FusenFilter,
         context: FusenContext,
     ) -> FusenFuture<Result<FusenContext, crate::Error>>;
@@ -36,7 +36,7 @@ pub struct DefaultAspect;
 
 impl Aspect_ for DefaultAspect {
     fn aroud_(
-        &self,
+        &'static self,
         filter: &'static dyn FusenFilter,
         context: FusenContext,
     ) -> FusenFuture<Result<FusenContext, crate::Error>> {

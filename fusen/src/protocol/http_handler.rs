@@ -8,7 +8,7 @@ use tracing::debug;
 impl StreamHandler {
     pub async fn run_http1(mut self) {
         let hyper_io = TokioIo::new(self.tcp_stream);
-        let route = FusenRouter::new(self.route);
+        let route = FusenRouter::new(self.route, self.http_codec,self.handler_context);
         let future = http1::Builder::new().serve_connection(hyper_io, route);
         let err_info = tokio::select! {
                 res = future =>
@@ -27,7 +27,7 @@ impl StreamHandler {
 
     pub async fn run_http2(mut self) {
         let hyper_io = TokioIo::new(self.tcp_stream);
-        let route = FusenRouter::new(self.route);
+        let route = FusenRouter::new(self.route, self.http_codec,self.handler_context);
         let future = http2::Builder::new(TokioExecutor)
             .adaptive_window(true)
             .serve_connection(hyper_io, route);

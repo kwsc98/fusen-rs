@@ -1,8 +1,11 @@
+use crate::codec::http_codec::FusenHttpCodec;
 use crate::filter::server::RpcServerFilter;
+use crate::handler::HandlerContext;
 use crate::protocol::StreamHandler;
 use fusen_common::server::Protocol;
 use fusen_common::server::RpcServer;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::mpsc::Receiver;
@@ -25,11 +28,20 @@ impl TcpServer {
             fusen_servers,
         }
     }
-    pub async fn run(self) -> Receiver<()> {
+    pub async fn run(self, handler_context: Arc<HandlerContext>) -> Receiver<()> {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         let route = Box::leak(Box::new(RpcServerFilter::new(self.fusen_servers)));
+        let http_codec = Arc::new(FusenHttpCodec::new());
         for protocol in self.protocol {
-            tokio::spawn(Self::monitor(protocol, route, shutdown_complete_tx.clone()));
+            let http_codec_clone = http_codec.clone();
+            let handler_context_clone = handler_context.clone();
+            tokio::spawn(Self::monitor(
+                protocol,
+                route,
+                http_codec_clone,
+                handler_context_clone,
+                shutdown_complete_tx.clone(),
+            ));
         }
         drop(shutdown_complete_tx);
         shutdown_complete_rx
@@ -38,6 +50,8 @@ impl TcpServer {
     async fn monitor(
         protocol: Protocol,
         route: &'static RpcServerFilter,
+        http_codec: Arc<FusenHttpCodec>,
+        handler_context: Arc<HandlerContext>,
         shutdown_complete_tx: mpsc::Sender<()>,
     ) -> crate::Result<()> {
         let notify_shutdown = broadcast::channel(1).0;
@@ -61,6 +75,8 @@ impl TcpServer {
                     let stream_handler = StreamHandler {
                         tcp_stream: stream.0,
                         route,
+                        http_codec: http_codec.clone(),
+                        handler_context: handler_context.clone(),
                         shutdown: notify_shutdown.subscribe(),
                         _shutdown_complete: shutdown_complete_tx.clone(),
                     };

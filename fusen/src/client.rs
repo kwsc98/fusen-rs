@@ -16,8 +16,7 @@ pub struct FusenClient {
 }
 
 impl FusenClient {
-    pub fn build(register: Arc<Box<dyn Register>>, handle_context: HandlerContext) -> FusenClient {
-        let handle_context = Arc::new(handle_context);
+    pub fn build(register: Arc<Box<dyn Register>>, handle_context: Arc<HandlerContext>) -> FusenClient {
         FusenClient {
             client_filter: Box::leak(Box::new(AspectClientFilter::new(
                 RequestHandler::new(),
