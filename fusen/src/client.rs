@@ -8,6 +8,7 @@ use fusen_common::codec::json_field_compatible;
 use fusen_common::error::FusenError;
 use fusen_common::FusenContext;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct FusenClient {
@@ -16,10 +17,13 @@ pub struct FusenClient {
 }
 
 impl FusenClient {
-    pub fn build(register: Arc<Box<dyn Register>>, handle_context: Arc<HandlerContext>) -> FusenClient {
+    pub fn build(
+        register: Arc<Box<dyn Register>>,
+        handle_context: Arc<HandlerContext>,
+    ) -> FusenClient {
         FusenClient {
             client_filter: Box::leak(Box::new(AspectClientFilter::new(
-                RequestHandler::new(),
+                RequestHandler::new(HashMap::new()),
                 ResponseHandler::new(),
                 handle_context.clone(),
                 Route::new(register),
@@ -35,7 +39,6 @@ impl FusenClient {
         let aspect_handler = self
             .handle_context
             .get_controller(&context.context_info.get_handler_key())
-            .ok_or_else(|| FusenError::from("not find handler_controller"))?
             .get_aspect();
         let context = aspect_handler.aroud_(self.client_filter, context).await?;
         let return_ty = context.response.response_ty.unwrap();

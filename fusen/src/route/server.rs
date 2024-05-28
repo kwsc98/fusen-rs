@@ -47,7 +47,6 @@ where
         let context = http_codec.decode(request).await?;
         let handler = handler_context
             .get_controller(&context.context_info.get_handler_key())
-            .ok_or_else(|| FusenError::from("not find handler_controller"))?
             .get_aspect();
         let context = handler.aroud_(fusen_filter, context).await?;
         let response = http_codec.encode(context).await?;

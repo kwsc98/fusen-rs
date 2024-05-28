@@ -31,7 +31,7 @@ impl TcpServer {
     pub async fn run(self, handler_context: Arc<HandlerContext>) -> Receiver<()> {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         let route = Box::leak(Box::new(RpcServerFilter::new(self.fusen_servers)));
-        let http_codec = Arc::new(FusenHttpCodec::new());
+        let http_codec = Arc::new(FusenHttpCodec::new(route.get_path_cache()));
         for protocol in self.protocol {
             let http_codec_clone = http_codec.clone();
             let handler_context_clone = handler_context.clone();

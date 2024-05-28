@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{collections::HashMap, convert::Infallible};
 
 use super::{
     request_codec::RequestHandler,
@@ -16,17 +16,11 @@ pub struct FusenHttpCodec {
 }
 
 impl FusenHttpCodec {
-    pub fn new() -> Self {
+    pub fn new(path_cahce: HashMap<String, (String, String)>) -> Self {
         FusenHttpCodec {
-            request_handle: RequestHandler::new(),
+            request_handle: RequestHandler::new(path_cahce),
             response_handle: ResponseHandler::new(),
         }
-    }
-}
-
-impl Default for FusenHttpCodec {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

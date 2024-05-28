@@ -102,16 +102,16 @@ impl FusenApplicationBuilder {
         for info in handler_infos {
             let _ = handler_context.load_controller(info);
         }
-        let handler_context = Arc::new(handler_context);
         for register_config in register_config {
             let register = Arc::new(RegisterBuilder::new(register_config).unwrap().init());
             let register_type = register.get_type();
             registers.insert(format!("{:?}", register_type), register.clone());
             client.insert(
                 format!("{:?}", register_type),
-                Arc::new(FusenClient::build(register, handler_context.clone())),
+                Arc::new(FusenClient::build(register, Arc::new(handler_context.clone()))),
             );
         }
+        let handler_context = Arc::new(handler_context);
         FusenApplicationContext {
             registers,
             _handler_context: handler_context.clone(),
@@ -136,7 +136,7 @@ impl FusenApplicationContext {
         self.client.get(&format!("{:?}", ty)).cloned()
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         let mut shutdown_complete_rx = self.server.run().await;
         for (_id, register) in self.registers {
             if let Ok(port) = register.check(self.server.protocol.clone()).await {

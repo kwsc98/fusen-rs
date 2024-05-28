@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{collections::HashMap, convert::Infallible};
 
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::{support::triple::TripleRequestWrapper, BoxBody};
@@ -7,14 +7,11 @@ use fusen_common::{
     error::FusenError, logs::get_uuid, register::Type, ContextInfo, FusenContext, FusenRequest,
     MetaData, Path,
 };
-use http::{HeaderValue, Request};
+use http::{method, HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
 
 pub(crate) trait RequestCodec<T, E> {
-    fn encode(
-        &self,
-        msg: &FusenContext,
-    ) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
+    fn encode(&self, msg: &FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
 
     async fn decode(&self, request: Request<BoxBody<T, E>>) -> Result<FusenContext, crate::Error>;
 }
@@ -33,23 +30,19 @@ pub struct RequestHandler {
         > + Sync
              + Send),
     >,
+    path_cache: HashMap<String, (String, String)>,
 }
 
 impl RequestHandler {
-    pub fn new() -> Self {
+    pub fn new(path_cache: HashMap<String, (String, String)>) -> Self {
         let json_codec = JsonBodyCodec::<bytes::Bytes, Vec<String>, Vec<String>>::new();
         let grpc_codec =
             GrpcBodyCodec::<bytes::Bytes, TripleRequestWrapper, TripleRequestWrapper>::new();
         RequestHandler {
             json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
+            path_cache,
         }
-    }
-}
-
-impl Default for RequestHandler {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -167,10 +160,17 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .get_value("tri-service-version")
             .map_or(meta_data.get_value("version"), Some)
             .cloned();
+        let path = Path::new(&method, path);
+        let (class_name, method_name) = self
+            .path_cache
+            .get(&path.get_key())
+            .ok_or(FusenError::NotFind(format!("not find : {:?}", path)))?;
         let context = FusenContext::new(
             unique_identifier,
             ContextInfo::default()
-                .path(Path::new(&method, path))
+                .class_name(class_name.clone())
+                .method_name(method_name.clone())
+                .path(path)
                 .version(version),
             FusenRequest::new(msg),
             meta_data,

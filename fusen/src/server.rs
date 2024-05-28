@@ -27,7 +27,7 @@ impl FusenServer {
         }
     }
 
-    pub async fn run(&self) -> tokio::sync::mpsc::Receiver<()> {
+    pub async fn run(&mut self) -> tokio::sync::mpsc::Receiver<()> {
         let tcp_server = TcpServer::init(self.protocol.clone(), self.fusen_servers.clone());
         tcp_server.run(self.handler_context.clone()).await
     }

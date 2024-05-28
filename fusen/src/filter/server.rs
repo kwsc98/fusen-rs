@@ -1,5 +1,9 @@
+use crate::handler::HandlerContext;
+
 use super::FusenFilter;
-use fusen_common::{error::FusenError, server::RpcServer, FusenContext, FusenFuture, MethodResource, Path};
+use fusen_common::{
+    error::FusenError, server::RpcServer, FusenContext, FusenFuture, MethodResource, Path,
+};
 use std::collections::HashMap;
 
 #[derive(Clone, Default)]
@@ -33,11 +37,12 @@ impl RpcServerFilter {
         }
         RpcServerFilter { cache, path_cache }
     }
+    pub fn get_path_cache(&self) -> HashMap<String, (String, String)> {
+        self.path_cache.clone()
+    }
+
     pub fn get_server(&self, context: &mut FusenContext) -> Option<&'static dyn RpcServer> {
-        let context_info = &mut context.context_info;
-        let info = self.path_cache.get(&context_info.path.get_key())?;
-        context_info.class_name.clone_from(&info.0);
-        context_info.method_name.clone_from(&info.1);
+        let context_info = &context.context_info;
         let mut class_name = context_info.class_name.clone();
         if let Some(version) = &context_info.version {
             class_name.push(':');

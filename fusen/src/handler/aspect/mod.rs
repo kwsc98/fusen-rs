@@ -75,8 +75,7 @@ impl FusenFilter for AspectClientFilter {
         Box::pin(async move {
             let handler_controller = self
                 .handle_context
-                .get_controller(&context.context_info.get_handler_key())
-                .ok_or_else(|| FusenError::from("not find handler_controller"))?;
+                .get_controller(&context.context_info.get_handler_key());
             let resource_info: ResourceInfo = self
                 .route
                 .get_server_resource(&context)

@@ -46,11 +46,15 @@ impl HandlerContext {
         self.context.get(key).cloned()
     }
 
-    pub fn get_controller(&self, class_name: &str) -> Option<Arc<HandlerController>> {
-        self.cache
-            .get(class_name)
-            .map_or(self.cache.get("DefaultFusenClientHandlerInfo"), Some)
-            .cloned()
+    pub fn get_controller(&self, class_name: &str) -> &Arc<HandlerController> {
+        self.cache.get(class_name).map_or(
+            self.cache.get("DefaultFusenClientHandlerInfo").unwrap(),
+            |e| e,
+        )
+    }
+
+    pub fn insert_controller(&mut self, key: String, controller: Arc<HandlerController>) {
+        self.cache.insert(key, controller);
     }
 
     pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), crate::Error> {
