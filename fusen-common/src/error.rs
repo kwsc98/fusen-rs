@@ -5,7 +5,7 @@ pub type BoxFusenError = Box<FusenError>;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum FusenError {
     Null,
-    NotFind(String),
+    NotFind,
     Info(String),
 }
 
@@ -29,7 +29,11 @@ impl From<String> for FusenError {
 
 impl From<crate::Error> for FusenError {
     fn from(value: crate::Error) -> Self {
-        FusenError::Info(value.to_string())
+        let msg = value.to_string();
+        match msg.as_str() {
+            "404" => FusenError::NotFind,
+            _ => FusenError::Info(msg),
+        }
     }
 }
 impl From<http::Error> for FusenError {
@@ -47,7 +51,7 @@ impl Display for FusenError {
         match self {
             FusenError::Null => write!(f, "null value"),
             FusenError::Info(msg) => write!(f, "{}", msg),
-            FusenError::NotFind(msg) => write!(f, "{}", msg),
+            FusenError::NotFind => write!(f, "404",),
         }
     }
 }

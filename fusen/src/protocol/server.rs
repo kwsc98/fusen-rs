@@ -65,7 +65,6 @@ impl TcpServer {
                 _ = signal::ctrl_c() => {
                     drop(notify_shutdown);
                     drop(shutdown_complete_tx);
-                    tracing::info!("fusen server shut");
                     return Ok(());
                 },
                 res = listener.accept() => res

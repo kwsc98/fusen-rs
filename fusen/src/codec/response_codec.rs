@@ -91,9 +91,9 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                                 vec.push(Frame::data(buf));
                                 "null value".to_owned()
                             }
-                            FusenError::NotFind(msg) => {
+                            FusenError::NotFind => {
                                 status = "91";
-                                msg.clone()
+                                "not find".to_owned()
                             }
                             FusenError::Info(msg) => {
                                 status = "92";
@@ -156,7 +156,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                                 };
                                 match else_status {
                                     b"90" => return Err(FusenError::Null),
-                                    b"91" => return Err(FusenError::NotFind(msg)),
+                                    b"91" => return Err(FusenError::NotFind),
                                     _ => return Err(FusenError::from(msg)),
                                 };
                             }

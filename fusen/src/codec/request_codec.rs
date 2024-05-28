@@ -164,7 +164,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let (class_name, method_name) = self
             .path_cache
             .get(&path.get_key())
-            .ok_or(FusenError::NotFind(format!("not find : {:?}", path)))?;
+            .ok_or(FusenError::NotFind)?;
         let context = FusenContext::new(
             unique_identifier,
             ContextInfo::default()

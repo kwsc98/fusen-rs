@@ -73,7 +73,7 @@ where
                     Ok(response) => response,
                     Err(fusen_error) => {
                         let mut status = 500;
-                        if let FusenError::NotFind(_) = fusen_error {
+                        if let FusenError::NotFind = fusen_error {
                             status = 404;
                         }
                         Response::builder()
