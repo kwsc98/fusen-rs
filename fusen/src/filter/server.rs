@@ -1,5 +1,3 @@
-use crate::handler::HandlerContext;
-
 use super::FusenFilter;
 use fusen_common::{
     error::FusenError, server::RpcServer, FusenContext, FusenFuture, MethodResource, Path,

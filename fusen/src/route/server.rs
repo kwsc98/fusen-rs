@@ -11,7 +11,7 @@ use crate::{
     codec::{http_codec::FusenHttpCodec, HttpCodec},
     filter::FusenFilter,
     get_empty_body,
-    handler::{self, HandlerContext},
+    handler::HandlerContext,
 };
 
 #[derive(Clone)]

@@ -7,7 +7,7 @@ use fusen_common::{
     error::FusenError, logs::get_uuid, register::Type, ContextInfo, FusenContext, FusenRequest,
     MetaData, Path,
 };
-use http::{method, HeaderValue, Request};
+use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
 
 pub(crate) trait RequestCodec<T, E> {
