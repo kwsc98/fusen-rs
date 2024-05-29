@@ -15,10 +15,10 @@ pub struct ResDto {
 #[asset(spring_cloud = "service-provider")]
 pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
-    
-    #[asset(path="/sayHelloV2-http",method = POST)]
+
+    #[asset(path = "/sayHelloV2-http", method = POST)]
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
 
-    #[asset(path="/divide",method = GET)]
+    #[asset(path = "/divide", method = GET)]
     async fn divideV2(&self, a: i32, b: i32) -> String;
 }

@@ -120,13 +120,13 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
 
         #[derive(Clone)]
         #vis struct #rpc_client {
-            client : &'static fusen_rs::client::FusenClient
+            client : std::sync::Arc<fusen_rs::client::FusenClient>
         }
         impl #rpc_client {
         #(
             #fn_quote
         )*
-        pub fn new(client : &'static fusen_rs::client::FusenClient) -> #rpc_client {
+        pub fn new(client : std::sync::Arc<fusen_rs::client::FusenClient>) -> #rpc_client {
             #rpc_client {client}
         }
 

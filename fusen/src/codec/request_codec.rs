@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{collections::HashMap, convert::Infallible};
 
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::{support::triple::TripleRequestWrapper, BoxBody};
@@ -11,7 +11,7 @@ use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
 
 pub(crate) trait RequestCodec<T, E> {
-    fn encode(&self, msg: FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
+    fn encode(&self, msg: &FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
 
     async fn decode(&self, request: Request<BoxBody<T, E>>) -> Result<FusenContext, crate::Error>;
 }
@@ -30,30 +30,26 @@ pub struct RequestHandler {
         > + Sync
              + Send),
     >,
+    path_cache: HashMap<String, (String, String)>,
 }
 
 impl RequestHandler {
-    pub fn new() -> Self {
+    pub fn new(path_cache: HashMap<String, (String, String)>) -> Self {
         let json_codec = JsonBodyCodec::<bytes::Bytes, Vec<String>, Vec<String>>::new();
         let grpc_codec =
             GrpcBodyCodec::<bytes::Bytes, TripleRequestWrapper, TripleRequestWrapper>::new();
         RequestHandler {
             json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
+            path_cache,
         }
-    }
-}
-
-impl Default for RequestHandler {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     fn encode(
         &self,
-        context: FusenContext,
+        context: &FusenContext,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
         let content_type = match context.server_tyep.as_ref().unwrap().as_ref() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
@@ -69,7 +65,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .insert(content_type.1, HeaderValue::from_str(version).unwrap());
         }
         let path = match context.server_tyep.as_ref().unwrap().as_ref() {
-            &Type::SpringCloud => context.context_info.path,
+            &Type::SpringCloud => context.context_info.path.clone(),
             _ => {
                 let path = "/".to_owned()
                     + context.context_info.class_name.as_ref()
@@ -86,7 +82,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method("GET")
                 .uri(get_path(
                     path,
-                    &context.request.fields_ty.unwrap(),
+                    context.request.fields_ty.as_ref().unwrap(),
                     &context.request.fields,
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
@@ -94,10 +90,10 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 let body: Bytes = match context.server_tyep.as_ref().unwrap().as_ref() {
                     &Type::Dubbo => {
                         let triple_request_wrapper =
-                            TripleRequestWrapper::from(context.request.fields);
-                        self.grpc_codec.encode(triple_request_wrapper)?
+                            TripleRequestWrapper::from(&context.request.fields);
+                        self.grpc_codec.encode(&triple_request_wrapper)?
                     }
-                    _ => self.json_codec.encode(context.request.fields)?,
+                    _ => self.json_codec.encode(&context.request.fields)?,
                 };
                 let builder = builder.header("content-length", body.len());
                 builder
@@ -164,10 +160,17 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .get_value("tri-service-version")
             .map_or(meta_data.get_value("version"), Some)
             .cloned();
+        let path = Path::new(&method, path);
+        let (class_name, method_name) = self
+            .path_cache
+            .get(&path.get_key())
+            .ok_or(FusenError::NotFind)?;
         let context = FusenContext::new(
             unique_identifier,
             ContextInfo::default()
-                .path(Path::new(&method, path))
+                .class_name(class_name.clone())
+                .method_name(method_name.clone())
+                .path(path)
                 .version(version),
             FusenRequest::new(msg),
             meta_data,

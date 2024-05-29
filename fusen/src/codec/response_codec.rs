@@ -8,7 +8,7 @@ use http_body_util::{combinators::BoxBody, BodyExt};
 use std::convert::Infallible;
 
 pub(crate) trait ResponseCodec<T, E> {
-    fn encode(&self, msg: FusenContext) -> Result<Response<BoxBody<T, Infallible>>, crate::Error>;
+    fn encode(&self, msg: &FusenContext) -> Result<Response<BoxBody<T, Infallible>>, crate::Error>;
 
     async fn decode(&self, request: Response<BoxBody<T, E>>) -> Result<String, FusenError>;
 }
@@ -48,7 +48,7 @@ impl Default for ResponseHandler {
 impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
     fn encode(
         &self,
-        context: FusenContext,
+        context: &FusenContext,
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, crate::Error> {
         let meta_data = &context.meta_data;
         let content_type = match meta_data.get_codec() {
@@ -56,13 +56,13 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
             fusen_common::codec::CodecType::GRPC => "application/grpc",
         };
         let body = match meta_data.get_codec() {
-            fusen_common::codec::CodecType::JSON => vec![match context.response.response {
+            fusen_common::codec::CodecType::JSON => vec![match &context.response.response {
                 Ok(res) => Frame::data(self.json_codec.encode(res).map_err(FusenError::from)?),
                 Err(err) => {
                     if let FusenError::Null = err {
                         Frame::data(bytes::Bytes::from("null"))
                     } else {
-                        return Err(Box::new(err));
+                        return Err(crate::Error::from(err.to_string()));
                     }
                 }
             }],
@@ -71,33 +71,33 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                 let mut message = String::from("success");
                 let mut trailers = HeaderMap::new();
                 let mut vec = vec![];
-                match context.response.response {
+                match context.response.response.as_ref() {
                     Ok(data) => {
-                        let res_wrapper = TripleResponseWrapper::form(data);
+                        let res_wrapper = TripleResponseWrapper::form(data.as_bytes());
                         let buf = self
                             .grpc_codec
-                            .encode(res_wrapper)
+                            .encode(&res_wrapper)
                             .map_err(FusenError::from)?;
                         vec.push(Frame::data(buf));
                     }
                     Err(err) => {
                         message = match err {
                             FusenError::Null => {
-                                let res_wrapper = TripleResponseWrapper::form("null".to_owned());
+                                let res_wrapper = TripleResponseWrapper::form("null".as_bytes());
                                 let buf = self
                                     .grpc_codec
-                                    .encode(res_wrapper)
+                                    .encode(&res_wrapper)
                                     .map_err(FusenError::from)?;
                                 vec.push(Frame::data(buf));
                                 "null value".to_owned()
                             }
-                            FusenError::NotFind(msg) => {
+                            FusenError::NotFind => {
                                 status = "91";
-                                msg
+                                "not find".to_owned()
                             }
                             FusenError::Info(msg) => {
                                 status = "92";
-                                msg
+                                msg.clone()
                             }
                         }
                     }
@@ -156,7 +156,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                                 };
                                 match else_status {
                                     b"90" => return Err(FusenError::Null),
-                                    b"91" => return Err(FusenError::NotFind(msg)),
+                                    b"91" => return Err(FusenError::NotFind),
                                     _ => return Err(FusenError::from(msg)),
                                 };
                             }

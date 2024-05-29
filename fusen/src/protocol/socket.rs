@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct SocketAssets {
+pub struct InvokerAssets {
     pub resource: Resource,
     pub socket: Socket,
 }
@@ -24,7 +24,7 @@ pub enum Socket {
     HTTP2(Http2Socket),
 }
 
-impl SocketAssets {
+impl InvokerAssets {
     pub async fn send_request(
         &self,
         request: Request<BoxBody<bytes::Bytes,Infallible>>,

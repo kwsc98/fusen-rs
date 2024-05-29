@@ -107,6 +107,14 @@ impl ContextInfo {
             group,
         }
     }
+    pub fn get_handler_key(&self) -> String {
+        let mut key = self.class_name.clone();
+        if let Some(version) = &self.version {
+            key.push(':');
+            key.push_str(version);
+        }
+        key
+    }
     pub fn path(mut self, path: Path) -> Self {
         self.path = path;
         self
@@ -213,7 +221,7 @@ pub struct MethodResource {
     pub method: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum Path {
     GET(String),
     POST(String),

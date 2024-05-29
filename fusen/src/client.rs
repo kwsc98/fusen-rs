@@ -1,61 +1,55 @@
-use crate::codec::request_codec::RequestCodec;
-use crate::codec::request_codec::RequestHandler;
-use crate::codec::response_codec::ResponseCodec;
 use crate::codec::response_codec::ResponseHandler;
-use crate::register::{RegisterBuilder, ResourceInfo};
+use crate::handler::aspect::AspectClientFilter;
+use crate::handler::HandlerContext;
+use crate::register::Register;
 use crate::route::client::Route;
+use crate::{codec::request_codec::RequestHandler, filter::FusenFilter};
 use fusen_common::codec::json_field_compatible;
 use fusen_common::error::FusenError;
-use fusen_common::url::UrlConfig;
 use fusen_common::FusenContext;
-use http_body_util::BodyExt;
-use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct FusenClient {
-    request_handle: RequestHandler,
-    response_handle: ResponseHandler,
-    route: Route,
+    client_filter: &'static dyn FusenFilter,
+    handle_context: Arc<HandlerContext>,
 }
 
 impl FusenClient {
-    pub fn build(register_config: Box<dyn UrlConfig>) -> FusenClient {
-        let registry_builder = RegisterBuilder::new(register_config).unwrap();
-        let register = registry_builder.init();
+    pub fn build(
+        register: Arc<Box<dyn Register>>,
+        handle_context: Arc<HandlerContext>,
+    ) -> FusenClient {
         FusenClient {
-            request_handle: RequestHandler::new(),
-            response_handle: ResponseHandler::new(),
-            route: Route::new(register),
+            client_filter: Box::leak(Box::new(AspectClientFilter::new(
+                RequestHandler::new(HashMap::new()),
+                ResponseHandler::new(),
+                handle_context.clone(),
+                Route::new(register),
+            ))),
+            handle_context,
         }
     }
 
-    pub async fn invoke<Res>(&self, mut context: FusenContext) -> Result<Res, FusenError>
+    pub async fn invoke<Res>(&self, context: FusenContext) -> Result<Res, FusenError>
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
-        let resource_info: ResourceInfo = self
-            .route
-            .get_server_resource(&context)
-            .await
-            .map_err(|e| FusenError::Info(e.to_string()))?;
-        let ResourceInfo {
-            server_type,
-            socket,
-        } = resource_info;
-        context.insert_server_type(server_type);
-        let return_ty = context.get_return_ty().unwrap();
-        let socket = socket
-            .choose(&mut rand::thread_rng())
-            .ok_or(FusenError::from("not find server"))?;
-        let request = self.request_handle.encode(context)?;
-        let response: http::Response<hyper::body::Incoming> = socket.send_request(request).await?;
-        let res = self
-            .response_handle
-            .decode(response.map(|e| e.boxed()))
-            .await?;
-        let response = json_field_compatible(return_ty, res)?;
-        let response: Res =
-            serde_json::from_str(&response).map_err(|e| FusenError::from(e.to_string()))?;
-        Ok(response)
+        let aspect_handler = self
+            .handle_context
+            .get_controller(&context.context_info.get_handler_key())
+            .get_aspect();
+        let context = aspect_handler.aroud_(self.client_filter, context).await?;
+        let return_ty = context.response.response_ty.unwrap();
+        match context.response.response {
+            Ok(res) => {
+                let response = json_field_compatible(return_ty, res)?;
+                let response: Res =
+                    serde_json::from_str(&response).map_err(|e| FusenError::from(e.to_string()))?;
+                Ok(response)
+            }
+            Err(err) => Err(err),
+        }
     }
 }

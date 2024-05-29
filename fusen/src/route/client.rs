@@ -25,7 +25,7 @@ pub enum RouteReceiver {
 }
 
 impl Route {
-    pub fn new(register: Box<dyn Register>) -> Self {
+    pub fn new(register: Arc<Box<dyn Register>>) -> Self {
         let (s, mut r) = mpsc::unbounded_channel::<(RouteSender, oneshot::Sender<RouteReceiver>)>();
         tokio::spawn(async move {
             let mut cache = HashMap::<String, Directory>::new();
@@ -43,7 +43,7 @@ impl Route {
         });
         Self {
             sender: s,
-            register: Arc::new(register),
+            register,
         }
     }
 

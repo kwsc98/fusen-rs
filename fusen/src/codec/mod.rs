@@ -33,5 +33,5 @@ where
 
     fn decode(&self, body: &D) -> Result<Self::DecodeType, crate::Error>;
 
-    fn encode(&self, res: Self::EncodeType) -> Result<bytes::Bytes, crate::Error>;
+    fn encode(&self, res: &Self::EncodeType) -> Result<bytes::Bytes, crate::Error>;
 }
