@@ -21,6 +21,7 @@ pub mod net;
 pub mod register;
 pub mod server;
 pub mod url;
+pub mod pre_tree;
 
 #[derive(Debug)]
 pub struct MetaData {
@@ -140,18 +141,20 @@ impl ContextInfo {
 #[derive(Debug)]
 pub struct FusenRequest {
     pub fields: Vec<String>,
-    pub fields_ty: Option<Vec<&'static str>>,
+    pub fields_ty: Option<Vec<String>>,
 }
 
 impl FusenRequest {
-    pub fn new(fields: Vec<String>) -> Self {
-        FusenRequest {
-            fields,
-            fields_ty: None,
-        }
+    pub fn new(fields: Vec<String>, fields_ty: Option<Vec<String>>) -> Self {
+        FusenRequest { fields, fields_ty }
     }
     pub fn insert_fields_ty(&mut self, fields_ty: Vec<&'static str>) {
-        let _ = self.fields_ty.insert(fields_ty);
+        let _ = self
+            .fields_ty
+            .insert(fields_ty.iter().fold(vec![], |mut vec, e| {
+                vec.push(e.to_string());
+                vec
+            }));
     }
 }
 
@@ -221,9 +224,11 @@ pub struct MethodResource {
     pub method: String,
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum Path {
     GET(String),
+    PUT(String),
+    DELETE(String),
     POST(String),
 }
 
@@ -245,15 +250,24 @@ impl Path {
                 key.push_str("post:");
                 key.push_str(path);
             }
+            Path::PUT(path) => {
+                key.push_str("put:");
+                key.push_str(path);
+            }
+            Path::DELETE(path) => {
+                key.push_str("delete:");
+                key.push_str(path);
+            }
         };
         key
     }
 
     pub fn new(method: &str, path: String) -> Self {
-        if method.to_lowercase().contains("get") {
-            Self::GET(path)
-        } else {
-            Self::POST(path)
+        match method.to_lowercase().as_str() {
+            "get" => Self::GET(path),
+            "put" => Self::PUT(path),
+            "delete" => Self::DELETE(path),
+            _ => Self::POST(path),
         }
     }
 }

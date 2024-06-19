@@ -8,6 +8,7 @@ use std::collections::HashMap;
 pub struct RpcServerFilter {
     cache: HashMap<String, &'static dyn RpcServer>,
     path_cache: HashMap<String, (String, String)>,
+    tree_cache: HashMap<String, String>,
 }
 
 impl RpcServerFilter {
@@ -33,7 +34,11 @@ impl RpcServerFilter {
                 );
             }
         }
-        RpcServerFilter { cache, path_cache }
+        RpcServerFilter {
+            cache,
+            path_cache,
+            tree_cache: HashMap::new(),
+        }
     }
     pub fn get_path_cache(&self) -> HashMap<String, (String, String)> {
         self.path_cache.clone()

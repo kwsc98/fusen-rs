@@ -78,9 +78,9 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     #[allow(non_snake_case)]
                     pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::fusen_common::error::FusenError> {
                     let mut req_vec : Vec<String> = vec![];
-                    let fields_ty = [
+                    let fields_ty = vec![
                     #(
-                        #fields_ty,
+                        #fields_ty.to_string(),
                     )*];
                     #(
                         let mut res_poi_str = serde_json::to_string(&#req);
@@ -93,8 +93,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let group : Option<&str> = #group;
                     let mut mate_data = fusen_rs::fusen_common::MetaData::new();
                     mate_data.insert("spring_cloud_name".to_string(),#spring_cloud_name.to_string());
-                    let mut request = fusen_rs::fusen_common::FusenRequest::new(req_vec);
-                    request.insert_fields_ty(fields_ty.to_vec());
+                    let mut request = fusen_rs::fusen_common::FusenRequest::new(req_vec,Some(fields_ty));
                     let mut context = fusen_rs::fusen_common::FusenContext::new(
                         fusen_rs::fusen_common::logs::get_uuid(),
                         fusen_rs::fusen_common::ContextInfo::default()

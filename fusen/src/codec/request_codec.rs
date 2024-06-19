@@ -64,25 +64,28 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .unwrap()
                 .insert(content_type.1, HeaderValue::from_str(version).unwrap());
         }
-        let path = match context.server_tyep.as_ref().unwrap().as_ref() {
-            &Type::SpringCloud => context.context_info.path.clone(),
-            _ => {
-                let path = "/".to_owned()
-                    + context.context_info.class_name.as_ref()
-                    + "/"
-                    + context.context_info.method_name.as_ref();
-                match context.context_info.path {
-                    fusen_common::Path::GET(_) => fusen_common::Path::GET(path),
-                    fusen_common::Path::POST(_) => fusen_common::Path::POST(path),
-                }
-            }
-        };
-        let request = match path {
+        let request = match context.context_info.path.clone() {
             fusen_common::Path::GET(path) => builder
                 .method("GET")
                 .uri(get_path(
                     path,
-                    context.request.fields_ty.as_ref().unwrap(),
+                    context.request.fields_ty.as_ref(),
+                    &context.request.fields,
+                ))
+                .body(Full::new(Bytes::new()).boxed()),
+            fusen_common::Path::PUT(path) => builder
+                .method("PUT")
+                .uri(get_path(
+                    path,
+                    context.request.fields_ty.as_ref(),
+                    &context.request.fields,
+                ))
+                .body(Full::new(Bytes::new()).boxed()),
+            fusen_common::Path::DELETE(path) => builder
+                .method("DELETE")
+                .uri(get_path(
+                    path,
+                    context.request.fields_ty.as_ref(),
                     &context.request.fields,
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
@@ -112,20 +115,24 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let meta_data = MetaData::from(request.headers());
         let path = request.uri().path().to_string();
         let method = request.method().to_string().to_lowercase();
-        let mut frame_vec = vec![];
-        let msg = if method.contains("get") {
+        let mut fields_ty = None;
+        let fields = if method.contains("get") {
             let url = request.uri().to_string();
             let url: Vec<&str> = url.split('?').collect();
             let mut vec = vec![];
             if url.len() > 1 {
+                let mut tys = vec![];
                 let params: Vec<&str> = url[1].split('&').collect();
                 for item in params {
                     let item: Vec<&str> = item.split('=').collect();
+                    tys.push(item[1].to_owned());
                     vec.push(item[1].to_owned());
                 }
+                fields_ty.insert(tys);
             }
             vec
         } else {
+            let mut frame_vec = vec![];
             while let Some(frame) = request.body_mut().frame().await {
                 if let Ok(frame) = frame {
                     frame_vec.push(frame);
@@ -172,23 +179,37 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method_name(method_name.clone())
                 .path(path)
                 .version(version),
-            FusenRequest::new(msg),
+            FusenRequest::new(fields, fields_ty),
             meta_data,
         );
         Ok(context)
     }
 }
 
-fn get_path(mut path: String, fields_ty: &[&str], fields: &[String]) -> String {
+fn get_path(mut path: String, fields_ty: Option<&Vec<String>>, fields: &[String]) -> String {
+    if path.contains('{') {
+        return get_rest_path(path, fields_ty, fields);
+    }
     if !fields.is_empty() {
+        let fields_ty = fields_ty.unwrap();
         path.push('?');
         for idx in 0..fields.len() {
-            path.push_str(fields_ty[idx]);
+            path.push_str(&fields_ty[idx]);
             path.push('=');
             path.push_str(&fields[idx]);
             path.push('&');
         }
         path.remove(path.len() - 1);
+    }
+    path
+}
+
+fn get_rest_path(mut path: String, fields_ty: Option<&Vec<String>>, fields: &[String]) -> String {
+    if !fields.is_empty() {
+        let fields_ty = fields_ty.unwrap();
+        for idx in 0..fields.len() {
+            path = path.replace(&fields_ty[idx], &fields[idx]);
+        }
     }
     path
 }
