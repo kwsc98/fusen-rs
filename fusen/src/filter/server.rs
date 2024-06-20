@@ -1,19 +1,20 @@
 use super::FusenFilter;
 use fusen_common::{
-    error::FusenError, server::RpcServer, FusenContext, FusenFuture, MethodResource, Path,
+    error::FusenError, server::RpcServer, trie::Trie, FusenContext, FusenFuture, MethodResource,
+    Path,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Default)]
 pub struct RpcServerFilter {
     cache: HashMap<String, &'static dyn RpcServer>,
-    path_cache: HashMap<String, (String, String)>,
-    tree_cache: HashMap<String, String>,
+    path_cache: Arc<PathCache>,
 }
 
 impl RpcServerFilter {
     pub fn new(cache: HashMap<String, &'static dyn RpcServer>) -> Self {
-        let mut path_cache = HashMap::new();
+        let mut hash_cache = HashMap::new();
+        let mut rest_trie = Trie::default();
         for item in &cache {
             let info = item.1.get_info();
             for method in info.methods {
@@ -24,11 +25,14 @@ impl RpcServerFilter {
                     method,
                 } = method;
                 let path_rpc = "/".to_owned() + &info.id + "/" + &id;
-                path_cache.insert(
+                if path.contains('{') {
+                    rest_trie.insert(path.clone());
+                }
+                hash_cache.insert(
                     Path::POST(path_rpc).get_key(),
                     (info.id.to_string(), name.clone()),
                 );
-                path_cache.insert(
+                hash_cache.insert(
                     Path::new(&method, path).get_key(),
                     (info.id.to_string(), name),
                 );
@@ -36,11 +40,13 @@ impl RpcServerFilter {
         }
         RpcServerFilter {
             cache,
-            path_cache,
-            tree_cache: HashMap::new(),
+            path_cache: Arc::new(PathCache {
+                path_cache: hash_cache,
+                rest_trie,
+            }),
         }
     }
-    pub fn get_path_cache(&self) -> HashMap<String, (String, String)> {
+    pub fn get_path_cache(&self) -> Arc<PathCache> {
         self.path_cache.clone()
     }
 
@@ -64,6 +70,43 @@ impl FusenFilter for RpcServerFilter {
                 context.response.response = Err(FusenError::NotFind);
                 Ok(context)
             }),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PathCache {
+    path_cache: HashMap<String, (String, String)>,
+    rest_trie: Trie,
+}
+
+pub struct PathCacheResult {
+    pub class: String,
+    pub method: String,
+    pub fields: Option<(Vec<String>, Vec<String>)>,
+}
+
+impl PathCache {
+    pub fn seach(&self, path: &mut Path) -> Option<PathCacheResult> {
+        if let Some(data) = self.path_cache.get(&path.get_key()) {
+            Some(PathCacheResult {
+                class: data.0.clone(),
+                method: data.1.clone(),
+                fields: None,
+            })
+        } else if let Some(rest_data) = self.rest_trie.search(&path.get_path()) {
+            path.update_path(rest_data.path);
+            if let Some(data) = self.path_cache.get(&path.get_key()) {
+                Some(PathCacheResult {
+                    class: data.0.clone(),
+                    method: data.1.clone(),
+                    fields: rest_data.fields,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }

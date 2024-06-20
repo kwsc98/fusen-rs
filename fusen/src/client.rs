@@ -8,7 +8,6 @@ use fusen_common::codec::json_field_compatible;
 use fusen_common::error::FusenError;
 use fusen_common::FusenContext;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct FusenClient {
@@ -23,7 +22,7 @@ impl FusenClient {
     ) -> FusenClient {
         FusenClient {
             client_filter: Box::leak(Box::new(AspectClientFilter::new(
-                RequestHandler::new(HashMap::new()),
+                RequestHandler::new(Arc::new(Default::default())),
                 ResponseHandler::new(),
                 handle_context.clone(),
                 Route::new(register),

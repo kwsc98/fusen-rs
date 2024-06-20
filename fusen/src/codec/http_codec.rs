@@ -1,11 +1,11 @@
-use std::{collections::HashMap, convert::Infallible};
+use std::{convert::Infallible, sync::Arc};
 
 use super::{
     request_codec::RequestHandler,
     response_codec::{ResponseCodec, ResponseHandler},
     HttpCodec,
 };
-use crate::{codec::request_codec::RequestCodec, BoxBody};
+use crate::{codec::request_codec::RequestCodec, filter::server::PathCache, BoxBody};
 use bytes::Bytes;
 use fusen_common::FusenContext;
 use http_body_util::BodyExt;
@@ -16,7 +16,7 @@ pub struct FusenHttpCodec {
 }
 
 impl FusenHttpCodec {
-    pub fn new(path_cahce: HashMap<String, (String, String)>) -> Self {
+    pub fn new(path_cahce: Arc<PathCache>) -> Self {
         FusenHttpCodec {
             request_handle: RequestHandler::new(path_cahce),
             response_handle: ResponseHandler::new(),

@@ -40,20 +40,22 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         if let ImplItem::Fn(fn_item) = e {
             let method = &fn_item.sig.ident;
             let mut req_pat = vec![];
+            let mut req_type = vec![];
             let request = fn_item.sig.inputs.iter().fold(vec![], |mut vec, e| {
                 if let FnArg::Typed(input) = e {
                     let request = &input.pat;
                     let request_type = &input.ty;
                     let token = quote! {
-                     let result : Result<#request_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
-                    if let Err(err) = result {
-                        param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
-                        return param;
-                    }
-                    let #request : #request_type = result.unwrap();
-                    idx += 1;
+                            let result : Result<#request_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
+                            if let Err(err) = result {
+                                param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
+                                return param;
+                            }
+                            let #request : #request_type = result.unwrap();
+                            idx += 1;
                     };
                     req_pat.push(request);
+                    req_type.push(request_type);
                     vec.push(token);
                 }
                 vec
@@ -61,7 +63,19 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
             );
             vec.push(quote! {
                 if &param.context_info.method_name[..] == stringify!(#method) {
-                let req_poi_param = &param.request.fields;
+                    let fields_name = vec![#(
+                        stringify!(#req_pat),
+                    )*];
+                    let fields_ty = vec![#(
+                        stringify!(#req_type),
+                    )*];
+                let req_poi_param = match param.request.get_fields(fields_name,fields_ty) {
+                     Ok(res) => res,
+                     Err(err) => {
+                        param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
+                        return param;
+                     }
+                };
                 let mut idx = 0;
                 #(
                     #request

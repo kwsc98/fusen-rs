@@ -20,8 +20,8 @@ pub mod r#macro;
 pub mod net;
 pub mod register;
 pub mod server;
+pub mod trie;
 pub mod url;
-pub mod pre_tree;
 
 #[derive(Debug)]
 pub struct MetaData {
@@ -156,6 +156,38 @@ impl FusenRequest {
                 vec
             }));
     }
+    pub fn get_fields(
+        &mut self,
+        temp_fields_name: Vec<&str>,
+        temp_fields_ty: Vec<&str>,
+    ) -> Result<&Vec<String>> {
+        if let Some(fields_name) = &self.fields_ty {
+            let mut hash_map = HashMap::with_capacity(8);
+            for item in fields_name.iter().enumerate() {
+                let _ = hash_map.insert(
+                    item.1.clone(),
+                    self.fields
+                        .get(item.0)
+                        .map_or(Err("fields handler error"), |e| Ok(e.clone()))?,
+                );
+            }
+            let mut new_fields = vec![];
+            for item in temp_fields_name.iter().enumerate() {
+                let fields = hash_map.get(*item.1).ok_or("fields handler error")?;
+                let mut temp = String::new();
+                if "String" == temp_fields_ty[item.0] {
+                    temp.push('\"');
+                    temp.push_str(fields);
+                    temp.push('\"');
+                } else {
+                    temp.push_str(fields);
+                }
+                new_fields.push(temp);
+            }
+            self.fields = new_fields;
+        }
+        Ok(&self.fields)
+    }
 }
 
 #[derive(Debug)]
@@ -260,6 +292,25 @@ impl Path {
             }
         };
         key
+    }
+
+    pub fn update_path(&mut self, new_path: String) {
+        match self {
+            Path::GET(path) => *path = new_path,
+            Path::POST(path) => *path = new_path,
+            Path::PUT(path) => *path = new_path,
+            Path::DELETE(path) => *path = new_path,
+        }
+    }
+
+    pub fn get_path(&self) -> String {
+        match self {
+            Path::GET(path) => path,
+            Path::POST(path) => path,
+            Path::PUT(path) => path,
+            Path::DELETE(path) => path,
+        }
+        .clone()
     }
 
     pub fn new(method: &str, path: String) -> Self {

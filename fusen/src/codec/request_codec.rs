@@ -1,7 +1,11 @@
-use std::{collections::HashMap, convert::Infallible};
+use std::{convert::Infallible, str::FromStr, sync::Arc};
 
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
-use crate::{support::triple::TripleRequestWrapper, BoxBody};
+use crate::{
+    filter::server::{PathCache, PathCacheResult},
+    support::triple::TripleRequestWrapper,
+    BoxBody,
+};
 use bytes::Bytes;
 use fusen_common::{
     error::FusenError, logs::get_uuid, register::Type, ContextInfo, FusenContext, FusenRequest,
@@ -30,11 +34,11 @@ pub struct RequestHandler {
         > + Sync
              + Send),
     >,
-    path_cache: HashMap<String, (String, String)>,
+    path_cache: Arc<PathCache>,
 }
 
 impl RequestHandler {
-    pub fn new(path_cache: HashMap<String, (String, String)>) -> Self {
+    pub fn new(path_cache: Arc<PathCache>) -> Self {
         let json_codec = JsonBodyCodec::<bytes::Bytes, Vec<String>, Vec<String>>::new();
         let grpc_codec =
             GrpcBodyCodec::<bytes::Bytes, TripleRequestWrapper, TripleRequestWrapper>::new();
@@ -115,8 +119,8 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let meta_data = MetaData::from(request.headers());
         let path = request.uri().path().to_string();
         let method = request.method().to_string().to_lowercase();
-        let mut fields_ty = None;
-        let fields = if method.contains("get") {
+        let mut temp_fields_ty = None;
+        let mut temp_fields = if method.contains("get") {
             let url = request.uri().to_string();
             let url: Vec<&str> = url.split('?').collect();
             let mut vec = vec![];
@@ -125,10 +129,10 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 let params: Vec<&str> = url[1].split('&').collect();
                 for item in params {
                     let item: Vec<&str> = item.split('=').collect();
-                    tys.push(item[1].to_owned());
+                    tys.push(item[0].to_owned());
                     vec.push(item[1].to_owned());
                 }
-                fields_ty.insert(tys);
+                let _ = temp_fields_ty.insert(tys);
             }
             vec
         } else {
@@ -167,19 +171,33 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .get_value("tri-service-version")
             .map_or(meta_data.get_value("version"), Some)
             .cloned();
-        let path = Path::new(&method, path);
-        let (class_name, method_name) = self
+        let mut path = Path::new(&method, path);
+        let PathCacheResult {
+            class,
+            method,
+            fields,
+        } = self
             .path_cache
-            .get(&path.get_key())
+            .seach(&mut path)
             .ok_or(FusenError::NotFind)?;
+        if let Some(mut fields) = fields {
+            temp_fields.append(&mut fields.0);
+            temp_fields_ty = match temp_fields_ty {
+                Some(mut temp_fields_ty) => {
+                    temp_fields_ty.append(&mut fields.1);
+                    Some(temp_fields_ty)
+                }
+                None => Some(fields.1),
+            }
+        }
         let context = FusenContext::new(
             unique_identifier,
             ContextInfo::default()
-                .class_name(class_name.clone())
-                .method_name(method_name.clone())
+                .class_name(class)
+                .method_name(method)
                 .path(path)
                 .version(version),
-            FusenRequest::new(fields, fields_ty),
+            FusenRequest::new(temp_fields, temp_fields_ty),
             meta_data,
         );
         Ok(context)
@@ -208,7 +226,10 @@ fn get_rest_path(mut path: String, fields_ty: Option<&Vec<String>>, fields: &[St
     if !fields.is_empty() {
         let fields_ty = fields_ty.unwrap();
         for idx in 0..fields.len() {
-            path = path.replace(&fields_ty[idx], &fields[idx]);
+            let mut temp = String::from_str("{").unwrap();
+            temp.push_str(&fields_ty[idx]);
+            temp.push('}');
+            path = path.replace(&temp, &fields[idx].replace('\"', ""));
         }
     }
     path
