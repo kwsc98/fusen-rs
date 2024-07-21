@@ -1,5 +1,6 @@
 pub mod client;
 pub mod codec;
+pub mod config;
 pub mod filter;
 pub mod handler;
 pub mod protocol;
@@ -16,8 +17,7 @@ use client::FusenClient;
 pub use fusen_common;
 use fusen_common::{
     register::Type,
-    server::{Protocol, RpcServer, ServerInfo},
-    url::UrlConfig,
+    server::{RpcServer, ServerInfo},
     MetaData,
 };
 pub use fusen_macro;
@@ -46,21 +46,27 @@ where
 
 #[derive(Default)]
 pub struct FusenApplicationBuilder {
-    protocol: Vec<Protocol>,
-    register_config: Vec<Box<dyn UrlConfig>>,
+    port: String,
+    application_name: String,
+    register_config: String,
     handlers: Vec<Handler>,
     handler_infos: Vec<HandlerInfo>,
     servers: HashMap<String, Box<dyn RpcServer>>,
 }
 
 impl FusenApplicationBuilder {
-    pub fn add_register_builder(mut self, register_config: Box<dyn UrlConfig>) -> Self {
-        self.register_config.push(register_config);
+    pub fn application_name(mut self, application_name: &str) -> Self {
+        self.application_name = application_name.to_owned();
         self
     }
 
-    pub fn add_protocol(mut self, protocol: Protocol) -> Self {
-        self.protocol.push(protocol);
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = port.to_string();
+        self
+    }
+
+    pub fn register_builder(mut self, register_config: &str) -> Self {
+        self.register_config = register_config.to_owned();
         self
     }
 
@@ -87,7 +93,8 @@ impl FusenApplicationBuilder {
 
     pub fn build(self) -> FusenApplicationContext {
         let FusenApplicationBuilder {
-            protocol,
+            application_name,
+            port,
             register_config,
             handlers,
             handler_infos,
@@ -103,12 +110,19 @@ impl FusenApplicationBuilder {
             let _ = handler_context.load_controller(info);
         }
         for register_config in register_config {
-            let register = Arc::new(RegisterBuilder::new(register_config).unwrap().init());
+            let register = Arc::new(
+                RegisterBuilder::new(register_config)
+                    .unwrap()
+                    .init(application_name.clone()),
+            );
             let register_type = register.get_type();
             registers.insert(format!("{:?}", register_type), register.clone());
             client.insert(
                 format!("{:?}", register_type),
-                Arc::new(FusenClient::build(register, Arc::new(handler_context.clone()))),
+                Arc::new(FusenClient::build(
+                    register,
+                    Arc::new(handler_context.clone()),
+                )),
             );
         }
         let handler_context = Arc::new(handler_context);
@@ -116,7 +130,7 @@ impl FusenApplicationBuilder {
             registers,
             _handler_context: handler_context.clone(),
             client,
-            server: FusenServer::new(protocol, servers, handler_context),
+            server: FusenServer::new(port, servers, handler_context),
         }
     }
 }
@@ -137,24 +151,36 @@ impl FusenApplicationContext {
     }
 
     pub async fn run(mut self) {
+        let port = self.server.port.clone();
         let mut shutdown_complete_rx = self.server.run().await;
         for (_id, register) in self.registers {
-            if let Ok(port) = register.check(self.server.protocol.clone()).await {
-                for server in self.server.fusen_servers.values() {
-                    let info: ServerInfo = server.get_info();
-                    let server_name = info.id.to_string();
-                    let resource = Resource {
-                        server_name,
-                        category: Category::Server,
-                        group: info.group,
-                        version: info.version,
-                        methods: info.methods,
-                        ip: fusen_common::net::get_ip(),
-                        port: Some(port.clone()),
-                        params: MetaData::default().inner,
-                    };
-                    let _ = register.register(resource).await;
-                }
+            //首先注册server
+            let resource = Resource {
+                server_name: Default::default(),
+                category: Category::Server,
+                group: Default::default(),
+                version: Default::default(),
+                methods: Default::default(),
+                ip: fusen_common::net::get_ip(),
+                port: Some(port.clone()),
+                params: MetaData::default().inner,
+            };
+            let _ = register.register(resource).await;
+            //再注册service
+            for server in self.server.fusen_servers.values() {
+                let info: ServerInfo = server.get_info();
+                let server_name = info.id.to_string();
+                let resource = Resource {
+                    server_name,
+                    category: Category::Service,
+                    group: info.group,
+                    version: info.version,
+                    methods: info.methods,
+                    ip: fusen_common::net::get_ip(),
+                    port: Some(port.clone()),
+                    params: MetaData::default().inner,
+                };
+                let _ = register.register(resource).await;
             }
         }
         let _ = shutdown_complete_rx.recv().await;

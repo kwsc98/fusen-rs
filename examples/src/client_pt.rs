@@ -13,13 +13,15 @@ use tracing::info;
 async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
-        .add_register_builder(
+        .application_name("fusen-client-pt")
+        .register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("fusen-service".to_owned()))
                 .server_type(Type::Fusen)
                 .build()
-                .boxed(),
+                .boxed()
+                .to_url()
+                .unwrap(),
         )
         .build();
     let client = Box::leak(Box::new(DemoServiceClient::new(

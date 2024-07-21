@@ -15,6 +15,7 @@ fusen-macro.workspace = true
 #网络协议处理
 tokio.workspace = true
 hyper.workspace = true
+hyper-util.workspace = true
 http.workspace = true
 http-body.workspace = true
 http-body-util.workspace = true
@@ -36,10 +37,10 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 
-prost = "0.12.3"
-prost-types = "0"
-protobuf-json-mapping = '3.3.0'
-flate2 = "1.0"
+prost = "0.13.1"
+prost-types = "0.13.1"
+protobuf-json-mapping = '3.5.0'
+flate2 = "1.0.30"
 bzip2 = "0.4.4"
 tower = "0.4.13"
 

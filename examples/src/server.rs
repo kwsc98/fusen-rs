@@ -6,11 +6,8 @@ use fusen_rs::fusen_macro::{asset, handler};
 use fusen_rs::handler::aspect::Aspect;
 use fusen_rs::handler::{HandlerInfo, HandlerLoad};
 use fusen_rs::register::nacos::NacosConfig;
-use fusen_rs::FusenApplicationContext;
-use fusen_rs::{
-    fusen_common::{self, server::Protocol, FusenResult},
-    fusen_macro::fusen_server,
-};
+use fusen_rs::{fusen_common, FusenApplicationContext};
+use fusen_rs::{fusen_common::FusenResult, fusen_macro::fusen_server};
 use tracing::info;
 
 struct ServerLogAspect;
@@ -68,27 +65,29 @@ async fn main() {
     };
     //支持多协议，多注册中心的接口暴露
     FusenApplicationContext::builder()
+        .application_name("fusen-server")
         //初始化Fusen注册中心,同时支持Dubbo3协议与Fusen协议
-        .add_register_builder(
+        .register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("fusen-service".to_owned()))
                 .server_type(Type::Fusen)
                 .build()
-                .boxed(),
+                .boxed()
+                .to_url()
+                .unwrap(),
         )
         //初始化SpringCloud注册中心
-        .add_register_builder(
+        .register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("service-provider".to_owned()))
                 .server_type(Type::SpringCloud)
                 .build()
-                .boxed(),
+                .boxed()
+                .to_url()
+                .unwrap(),
         )
         //同时兼容RPC协议与HTTP协议
-        .add_protocol(Protocol::HTTP("8081".to_owned()))
-        .add_protocol(Protocol::HTTP2("8082".to_owned()))
+        .port(8081)
         .add_fusen_server(Box::new(server))
         .add_handler(ServerLogAspect.load())
         .add_handler_info(HandlerInfo::new(

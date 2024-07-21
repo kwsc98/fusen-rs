@@ -1,8 +1,6 @@
 use fusen_common::{
     net::get_path,
     register::{RegisterType, Type},
-    server::Protocol,
-    url::UrlConfig,
     FusenFuture, MethodResource,
 };
 
@@ -23,8 +21,7 @@ pub struct RegisterBuilder {
 }
 
 impl RegisterBuilder {
-    pub fn new(config: Box<dyn UrlConfig>) -> crate::Result<Self> {
-        let config_url = config.to_url()?;
+    pub fn new(config_url: String) -> crate::Result<Self> {
         let info: Vec<&str> = config_url.split("://").collect();
         if info[0] != "register" {
             return Err(format!("config url err is not register : {:?}", config_url).into());
@@ -32,21 +29,19 @@ impl RegisterBuilder {
         let info: Vec<&str> = info[1].split('?').collect();
         let info = info[0].to_lowercase();
         let register_type = if info.contains("nacos") {
-            RegisterType::Nacos(config)
+            RegisterType::Nacos(config_url)
         } else if info.contains("zookeeper") {
-            RegisterType::ZooKeeper(config)
+            RegisterType::ZooKeeper(config_url)
         } else {
             return Err(format!("config url err : {:?}", config_url).into());
         };
         Ok(RegisterBuilder { register_type })
     }
 
-    pub fn init(self) -> Box<dyn Register> {
+    pub fn init(self, application_name: String) -> Box<dyn Register> {
         match self.register_type {
-            RegisterType::ZooKeeper(url) => {
-                Box::new(FusenZookeeper::init(&url.to_url().unwrap()).unwrap())
-            }
-            RegisterType::Nacos(url) => Box::new(FusenNacos::init(&url.to_url().unwrap()).unwrap()),
+            RegisterType::ZooKeeper(url) => Box::new(FusenZookeeper::init(&url).unwrap()),
+            RegisterType::Nacos(url) => Box::new(FusenNacos::init(&url, application_name).unwrap()),
         }
     }
 }
@@ -78,14 +73,13 @@ impl Resource {
 pub enum Category {
     Client,
     Server,
+    Service,
 }
 
 pub trait Register: Send + Sync {
     fn register(&self, resource: Resource) -> FusenFuture<Result<(), crate::Error>>;
 
     fn subscribe(&self, resource: Resource) -> FusenFuture<Result<Directory, crate::Error>>;
-
-    fn check(&self, protocol: Vec<Protocol>) -> FusenFuture<crate::Result<String>>;
 
     fn get_type(&self) -> Type;
 }

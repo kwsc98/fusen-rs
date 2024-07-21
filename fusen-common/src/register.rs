@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::url::UrlConfig;
-
 pub enum RegisterType {
-    ZooKeeper(Box<dyn UrlConfig>),
-    Nacos(Box<dyn UrlConfig>),
+    ZooKeeper(String),
+    Nacos(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -13,4 +11,15 @@ pub enum Type {
     SpringCloud,
     #[default]
     Fusen,
+}
+
+impl Type {
+    pub fn get_name(&self) -> String {
+        match &self {
+            Type::Dubbo => "DUBBO",
+            Type::SpringCloud => "SPRING_CLOUD",
+            Type::Fusen => "FUSEN",
+        }
+        .to_string()
+    }
 }

@@ -12,7 +12,8 @@ pub fn encode_url(resource: &Resource) -> String {
     let mut url = String::new();
     match resource.category {
         Category::Client => url.push_str("consumer://"),
-        Category::Server => url.push_str("tri://"),
+        Category::Service => url.push_str("tri://"),
+        Category::Server => (),
     }
     url.push_str(&(get_path(resource) + "/"));
     url.push_str(&(resource.server_name.clone() + "?"));
@@ -30,9 +31,10 @@ pub fn encode_url(resource: &Resource) -> String {
     }
     match resource.category {
         Category::Client => url.push_str("&dubbo=2.0.2&release=3.3.0-beta.1&side=consumer"),
-        Category::Server => url.push_str(
+        Category::Service => url.push_str(
             "&dubbo=2.0.2&prefer.serialization=fastjson&release=3.3.0-beta.1&side=provider",
         ),
+        _ => (),
     }
     "/".to_string() + &fusen_common::url::encode_url(&url)
 }

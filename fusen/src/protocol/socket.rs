@@ -2,15 +2,13 @@ use fusen_common::{error::FusenError, net::get_path};
 use http::{Request, Response, Version};
 use http_body_util::combinators::BoxBody;
 use hyper::{body::Incoming, client::conn::http2::SendRequest};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use std::{convert::Infallible, sync::Arc};
 use tokio::{net::TcpStream, sync::RwLock};
 use tracing::error;
-pub type Http2Socket = Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes,Infallible>>>>>;
+pub type Http2Socket = Arc<RwLock<Option<SendRequest<BoxBody<bytes::Bytes, Infallible>>>>>;
 
-use crate::{
-    register::Resource,
-    support::{TokioExecutor, TokioIo},
-};
+use crate::register::Resource;
 
 #[derive(Debug)]
 pub struct InvokerAssets {
@@ -27,7 +25,7 @@ pub enum Socket {
 impl InvokerAssets {
     pub async fn send_request(
         &self,
-        request: Request<BoxBody<bytes::Bytes,Infallible>>,
+        request: Request<BoxBody<bytes::Bytes, Infallible>>,
     ) -> Result<Response<Incoming>, FusenError> {
         match &self.socket {
             Socket::HTTP1 => send_http1_request(&self.resource, request).await,
@@ -53,12 +51,10 @@ async fn get_tcp_stream(resource: &Resource) -> Result<TokioIo<TcpStream>, crate
 
 async fn send_http1_request(
     resource: &Resource,
-    mut request: Request<BoxBody<bytes::Bytes,Infallible>>,
+    mut request: Request<BoxBody<bytes::Bytes, Infallible>>,
 ) -> Result<Response<Incoming>, FusenError> {
     *request.version_mut() = Version::HTTP_10;
-    let io = get_tcp_stream(resource)
-        .await
-        .map_err(FusenError::from)?;
+    let io = get_tcp_stream(resource).await.map_err(FusenError::from)?;
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
         .handshake(io)
         .await
@@ -77,7 +73,7 @@ async fn send_http1_request(
 
 async fn send_http2_request(
     resource: &Resource,
-    request: Request<BoxBody<bytes::Bytes,Infallible>>,
+    request: Request<BoxBody<bytes::Bytes, Infallible>>,
     sender_lock: &Http2Socket,
 ) -> Result<Response<Incoming>, FusenError> {
     let sender_read = sender_lock.read().await;
@@ -92,11 +88,12 @@ async fn send_http2_request(
                     let io = get_tcp_stream(resource)
                         .await
                         .map_err(|e| FusenError::from(e.to_string()))?;
-                    let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
-                        .adaptive_window(true)
-                        .handshake(io)
-                        .await
-                        .map_err(|e| FusenError::from(e.to_string()))?;
+                    let (sender, conn) =
+                        hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+                            .adaptive_window(true)
+                            .handshake(io)
+                            .await
+                            .map_err(|e| FusenError::from(e.to_string()))?;
                     let sender_lock = sender_lock.clone();
                     tokio::spawn(async move {
                         let sender = sender_lock;

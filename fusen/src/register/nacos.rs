@@ -1,6 +1,6 @@
 use super::{Category, Directory, Register, Type};
 use crate::register::Resource;
-use fusen_common::{net::get_ip, server::Protocol, url::UrlConfig, FusenFuture};
+use fusen_common::{url::UrlConfig, FusenFuture};
 use fusen_macro::url_config;
 use nacos_sdk::api::{
     naming::{
@@ -14,6 +14,7 @@ use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct FusenNacos {
+    application_name: String,
     naming_service: Arc<dyn NamingService + Sync + Send + 'static>,
     config: Arc<NacosConfig>,
 }
@@ -23,24 +24,19 @@ pub struct NacosConfig {
     server_addr: String,
     namespace: String,
     group: Option<String>,
-    app_name: Option<String>,
     username: String,
     password: String,
     server_type: Type,
 }
 
 impl FusenNacos {
-    pub fn init(url: &str) -> crate::Result<Self> {
+    pub fn init(url: &str, application_name: String) -> crate::Result<Self> {
         let mut client_props = ClientProps::new();
         let config = NacosConfig::from_url(url)?;
-        let app_name = config
-            .app_name
-            .as_ref()
-            .map_or("fusen".to_owned(), |e| e.to_owned());
         client_props = client_props
             .server_addr(config.server_addr.clone())
             .namespace(config.namespace.clone())
-            .app_name(app_name.clone())
+            .app_name(application_name.clone())
             .auth_username(config.username.clone())
             .auth_password(config.password.clone());
         let builder = NamingServiceBuilder::new(client_props);
@@ -49,10 +45,14 @@ impl FusenNacos {
         } else {
             builder
         };
-        Ok(Self {
-            naming_service: Arc::new(builder.build()?),
-            config: Arc::new(config),
-        })
+        let naming_service = Arc::new(builder.build()?);
+        let config = Arc::new(config);
+        let nacos = Self {
+            application_name,
+            naming_service: naming_service.clone(),
+            config: config.clone(),
+        };
+        Ok(nacos)
     }
 }
 
@@ -60,11 +60,11 @@ impl Register for FusenNacos {
     fn register(&self, resource: super::Resource) -> FusenFuture<Result<(), crate::Error>> {
         let nacos = self.clone();
         Box::pin(async move {
-            if let Type::SpringCloud = nacos.config.server_type {
-                return Ok(());
-            }
-            let group = resource.group.clone();
-            let nacos_service_name = get_service_name(&resource);
+            let (nacos_service_name, group) = if let Category::Server = resource.category {
+                (nacos.application_name.clone(), nacos.config.group.clone())
+            } else {
+                (get_service_name(&resource), resource.group.clone())
+            };
             let nacos_service_instance =
                 get_instance(resource.ip, resource.port.unwrap(), resource.params);
             info!("register service: {}", nacos_service_name);
@@ -116,65 +116,6 @@ impl Register for FusenNacos {
         })
     }
 
-    fn check(&self, protocol: Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
-        let nacos = self.clone();
-        Box::pin(async move {
-            let protocol = match &nacos.config.server_type {
-                Type::Dubbo => {
-                    let Some(protocol) =
-                        protocol.iter().find(|e| matches!(**e, Protocol::HTTP2(_)))
-                    else {
-                        return Err("Dubbo not find protocol for HTTP2".into());
-                    };
-                    (protocol, "DUBBO")
-                }
-                Type::Fusen => {
-                    let Some(protocol) =
-                        protocol.iter().find(|e| matches!(**e, Protocol::HTTP2(_)))
-                    else {
-                        return Err("Fusen not find protocol for HTTP2".into());
-                    };
-                    (protocol, "FUSEN")
-                }
-                Type::SpringCloud => {
-                    let Some(protocol) = protocol.iter().find(|e| matches!(**e, Protocol::HTTP(_)))
-                    else {
-                        return Err("SpringCloud not find protocol for HTTP1".into());
-                    };
-                    (protocol, "SPRING_CLOUD")
-                }
-            };
-            let port = match protocol.0 {
-                Protocol::HTTP(port) => port,
-                Protocol::HTTP2(port) => port,
-            }
-            .to_owned();
-            let group = &nacos.config.group;
-            let mut params = HashMap::new();
-            params.insert(
-                "preserved.register.source".to_owned(),
-                protocol.1.to_owned(),
-            );
-            let app_name = nacos
-                .config
-                .as_ref()
-                .app_name
-                .as_ref()
-                .map_or("fusen".to_owned(), |e| e.clone());
-            let nacos_instance = get_instance(get_ip(), port.clone(), params);
-            info!("register application: {}", app_name);
-            let ret = nacos
-                .naming_service
-                .register_instance(app_name.to_string(), group.to_owned(), nacos_instance)
-                .await;
-            if let Err(e) = ret {
-                error!("register to nacos occur an error: {:?}", e);
-                return Err(format!("register to nacos occur an error: {:?}", e).into());
-            }
-            Ok(port)
-        })
-    }
-    
     fn get_type(&self) -> Type {
         self.config.server_type.clone()
     }

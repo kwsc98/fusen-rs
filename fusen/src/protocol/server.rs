@@ -2,8 +2,8 @@ use crate::codec::http_codec::FusenHttpCodec;
 use crate::filter::server::RpcServerFilter;
 use crate::handler::HandlerContext;
 use crate::protocol::StreamHandler;
-use fusen_common::server::Protocol;
 use fusen_common::server::RpcServer;
+use hyper_util::rt::TokioExecutor;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -14,17 +14,14 @@ use tracing::{debug, error};
 
 #[derive(Clone)]
 pub struct TcpServer {
-    protocol: Vec<Protocol>,
+    port: String,
     fusen_servers: HashMap<String, &'static dyn RpcServer>,
 }
 
 impl TcpServer {
-    pub fn init(
-        protocol: Vec<Protocol>,
-        fusen_servers: HashMap<String, &'static dyn RpcServer>,
-    ) -> Self {
+    pub fn init(port: String, fusen_servers: HashMap<String, &'static dyn RpcServer>) -> Self {
         TcpServer {
-            protocol,
+            port,
             fusen_servers,
         }
     }
@@ -32,34 +29,30 @@ impl TcpServer {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         let route = Box::leak(Box::new(RpcServerFilter::new(self.fusen_servers)));
         let http_codec = Arc::new(FusenHttpCodec::new(route.get_path_cache()));
-        for protocol in self.protocol {
-            let http_codec_clone = http_codec.clone();
-            let handler_context_clone = handler_context.clone();
-            tokio::spawn(Self::monitor(
-                protocol,
-                route,
-                http_codec_clone,
-                handler_context_clone,
-                shutdown_complete_tx.clone(),
-            ));
-        }
+        let port = self.port;
+        tokio::spawn(Self::monitor(
+            port,
+            route,
+            http_codec,
+            handler_context,
+            shutdown_complete_tx.clone(),
+        ));
         drop(shutdown_complete_tx);
         shutdown_complete_rx
     }
 
     async fn monitor(
-        protocol: Protocol,
+        port: String,
         route: &'static RpcServerFilter,
         http_codec: Arc<FusenHttpCodec>,
         handler_context: Arc<HandlerContext>,
         shutdown_complete_tx: mpsc::Sender<()>,
     ) -> crate::Result<()> {
         let notify_shutdown = broadcast::channel(1).0;
-        let port = match &protocol {
-            Protocol::HTTP(port) => port,
-            Protocol::HTTP2(port) => port,
-        };
         let listener = TcpListener::bind(&format!("0.0.0.0:{}", port)).await?;
+        let mut builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+        builder.http2().adaptive_window(true);
+        let builder = Arc::new(builder);
         loop {
             let tcp_stream = tokio::select! {
                 _ = signal::ctrl_c() => {
@@ -72,6 +65,7 @@ impl TcpServer {
             match tcp_stream {
                 Ok(stream) => {
                     let stream_handler = StreamHandler {
+                        builder: builder.clone(),
                         tcp_stream: stream.0,
                         route,
                         http_codec: http_codec.clone(),
@@ -80,10 +74,7 @@ impl TcpServer {
                         _shutdown_complete: shutdown_complete_tx.clone(),
                     };
                     debug!("socket stream connect, addr: {:?}", stream.1);
-                    match &protocol {
-                        Protocol::HTTP(_) => tokio::spawn(stream_handler.run_http1()),
-                        Protocol::HTTP2(_) => tokio::spawn(stream_handler.run_http2()),
-                    };
+                    tokio::spawn(stream_handler.run_http());
                 }
                 Err(err) => error!("tcp connect, err: {:?}", err),
             }

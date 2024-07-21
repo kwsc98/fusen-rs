@@ -1,7 +1,7 @@
 use super::{Category, Register, Resource, Type};
 use crate::support::dubbo::{decode_url, encode_url};
 use async_recursion::async_recursion;
-use fusen_common::{server::Protocol, url::UrlConfig, FusenFuture};
+use fusen_common::url::UrlConfig;
 use fusen_macro::url_config;
 use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info};
@@ -41,18 +41,6 @@ impl FusenZookeeper {
 }
 
 impl Register for FusenZookeeper {
-    fn check(&self, protocol: Vec<Protocol>) -> FusenFuture<crate::Result<String>> {
-        let protocol = protocol.clone();
-        Box::pin(async move {
-            for protocol in protocol {
-                if let Protocol::HTTP2(port) = protocol {
-                    return Ok(port.clone());
-                }
-            }
-            Err("need monitor Http2".into())
-        })
-    }
-
     fn register(&self, resource: Resource) -> fusen_common::FusenFuture<Result<(), crate::Error>> {
         let cluster = self.config.cluster.clone();
         let path = self.root_path.clone();
@@ -129,9 +117,10 @@ async fn creat_resource_node(
         Category::Client => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/consumers"));
         }
-        Category::Server => {
+        Category::Service => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/providers"));
         }
+        Category::Server => (),
     };
     let node_name = encode_url(resource);
     let node_data = serde_json::to_string(&resource).unwrap();
@@ -187,7 +176,8 @@ async fn listener_resource_node_change(
         Category::Client => {
             path.push_str(&("/".to_owned() + &resource.server_name + "/providers"));
         }
-        Category::Server => return Err("server cloud be listener".into()),
+        Category::Service => return Err("service cant be listener".into()),
+        Category::Server => return Err("server cant be listener".into()),
     };
     let directory = super::Directory::new(Arc::new(server_type)).await;
     let directory_clone = directory.clone();
