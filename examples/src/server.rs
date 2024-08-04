@@ -36,7 +36,7 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[fusen_server(package = "org.apache.dubbo.springboot.demo")]
+#[fusen_server(id = "org.apache.dubbo.springboot.demo.DemoService")]
 impl DemoService for DemoServiceImpl {
     async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
@@ -74,7 +74,8 @@ async fn main() {
                 .build()
                 .boxed()
                 .to_url()
-                .unwrap(),
+                .unwrap()
+                .as_str(),
         )
         //初始化SpringCloud注册中心
         .register_builder(
@@ -84,7 +85,8 @@ async fn main() {
                 .build()
                 .boxed()
                 .to_url()
-                .unwrap(),
+                .unwrap()
+                .as_str(),
         )
         //同时兼容RPC协议与HTTP协议
         .port(8081)

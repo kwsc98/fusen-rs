@@ -11,8 +11,7 @@ pub struct ResDto {
     pub str: String,
 }
 
-#[fusen_trait(package = "org.apache.dubbo.springboot.demo")]
-#[asset(spring_cloud = "service-provider")]
+#[fusen_trait(id = "org.apache.dubbo.springboot.demo.DemoService")]
 pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
 

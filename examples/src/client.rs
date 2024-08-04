@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use examples::{DemoServiceClient, ReqDto};
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::register::Type;
@@ -12,6 +10,7 @@ use fusen_rs::protocol::socket::InvokerAssets;
 use fusen_rs::register::nacos::NacosConfig;
 use fusen_rs::{fusen_common, FusenApplicationContext};
 use rand::prelude::SliceRandom;
+use std::sync::Arc;
 use tracing::info;
 
 struct CustomLoadBalance;
@@ -62,25 +61,8 @@ async fn main() {
                 .build()
                 .boxed()
                 .to_url()
-                .unwrap(),
-        )
-        .register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .server_type(Type::SpringCloud)
-                .build()
-                .boxed()
-                .to_url()
-                .unwrap(),
-        )
-        .register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .server_type(Type::Dubbo)
-                .build()
-                .boxed()
-                .to_url()
-                .unwrap(),
+                .unwrap()
+                .as_str(),
         )
         .add_handler(CustomLoadBalance.load())
         .add_handler(ClientLogAspect.load())
@@ -98,14 +80,4 @@ async fn main() {
         })
         .await;
     info!("rev fusen msg : {:?}", res);
-
-    //进行Dubbo3协议调用HTTP2 + GRPC
-    let client = DemoServiceClient::new(context.client(Type::Dubbo).unwrap());
-    let res = client.sayHello("world".to_string()).await;
-    info!("rev dubbo3 msg : {:?}", res);
-
-    //进行SpringCloud协议调用HTTP1 + JSON
-    let client = DemoServiceClient::new(context.client(Type::SpringCloud).unwrap());
-    let res = client.divideV2(1, 2).await;
-    info!("rev springcloud msg : {:?}", res);
 }

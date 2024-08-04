@@ -21,7 +21,8 @@ async fn main() {
                 .build()
                 .boxed()
                 .to_url()
-                .unwrap(),
+                .unwrap()
+                .as_str(),
         )
         .build();
     let client = Box::leak(Box::new(DemoServiceClient::new(

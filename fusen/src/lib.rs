@@ -109,22 +109,20 @@ impl FusenApplicationBuilder {
         for info in handler_infos {
             let _ = handler_context.load_controller(info);
         }
-        for register_config in register_config {
-            let register = Arc::new(
-                RegisterBuilder::new(register_config)
-                    .unwrap()
-                    .init(application_name.clone()),
-            );
-            let register_type = register.get_type();
-            registers.insert(format!("{:?}", register_type), register.clone());
-            client.insert(
-                format!("{:?}", register_type),
-                Arc::new(FusenClient::build(
-                    register,
-                    Arc::new(handler_context.clone()),
-                )),
-            );
-        }
+        let register = Arc::new(
+            RegisterBuilder::new(register_config)
+                .unwrap()
+                .init(application_name.clone()),
+        );
+        let register_type = register.get_type();
+        registers.insert(format!("{:?}", register_type), register.clone());
+        client.insert(
+            format!("{:?}", register_type),
+            Arc::new(FusenClient::build(
+                register,
+                Arc::new(handler_context.clone()),
+            )),
+        );
         let handler_context = Arc::new(handler_context);
         FusenApplicationContext {
             registers,

@@ -21,7 +21,7 @@ pub fn encode_url(resource: &Resource) -> String {
     url.push_str(&get_field_url(
         "&methods",
         &resource.methods.iter().fold(vec![], |mut vec, e| {
-            vec.push(e.get_id());
+            vec.push(e.get_path()[1..].to_owned());
             vec
         }),
     ));
@@ -90,7 +90,6 @@ fn get_info(mut url: &str) -> crate::Result<Resource> {
             .iter()
             .fold(vec![], |mut vec, e| {
                 vec.push(MethodResource::new(
-                    e.to_string(),
                     e.to_string(),
                     "/".to_owned() + e,
                     "POST".to_owned(),

@@ -250,7 +250,6 @@ impl FusenContext {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MethodResource {
-    pub id: String,
     pub name: String,
     pub path: String,
     pub method: String,
@@ -324,9 +323,6 @@ impl Path {
 }
 
 impl MethodResource {
-    pub fn get_id(&self) -> String {
-        self.id.to_string()
-    }
     pub fn get_name(&self) -> String {
         self.name.to_string()
     }
@@ -336,13 +332,8 @@ impl MethodResource {
     pub fn get_method(&self) -> String {
         self.method.to_string()
     }
-    pub fn new(id: String, name: String, path: String, method: String) -> Self {
-        Self {
-            id,
-            name,
-            path,
-            method,
-        }
+    pub fn new(name: String, path: String, method: String) -> Self {
+        Self { name, path, method }
     }
     pub fn form_json_str(str: &str) -> Self {
         serde_json::from_str(str).unwrap()

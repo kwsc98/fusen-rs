@@ -15,23 +15,23 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         None => quote!(None),
     };
     let org_item = parse_macro_input!(item as ItemImpl);
-    let (id, methods_info) = match get_resource_by_server(org_item.clone()) {
-        Ok(methods_info) => (
-            methods_info.0,
-            methods_info.1.iter().fold(vec![], |mut vec, e| {
-                vec.push(e.to_json_str());
-                vec
-            }),
-        ),
+    let methods_info = match get_resource_by_server(org_item.clone()) {
+        Ok(methods_info) => methods_info.iter().fold(vec![], |mut vec, e| {
+            vec.push(e.to_json_str());
+            vec
+        }),
         Err(err) => return err.into_compile_error().into(),
     };
-    let package = match attr.package {
-        Some(mut package) => {
-            package.push('.');
-            package.push_str(&id);
-            quote!(#package)
+    let id = match attr.id {
+        Some(id) => {
+            quote!(#id)
         }
-        None => quote!(#id),
+        None => {
+            let id = org_item.trait_.as_ref().unwrap().1.segments[0]
+                .ident
+                .to_string();
+            quote!(#id)
+        }
     };
     let item = org_item.clone();
     let org_item = get_server_item(org_item);
@@ -117,7 +117,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                #(
                 methods.push(fusen_rs::fusen_common::MethodResource::form_json_str(#methods_info));
                )*
-               fusen_rs::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
+               fusen_rs::fusen_common::server::ServerInfo::new(#id,#version,#group,methods)
             }
         }
 
@@ -152,33 +152,24 @@ fn get_server_item(item: ItemImpl) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_server(item: ItemImpl) -> Result<(String, Vec<MethodResource>), syn::Error> {
+fn get_resource_by_server(item: ItemImpl) -> Result<Vec<MethodResource>, syn::Error> {
     let mut res = vec![];
     let attrs = &item.attrs;
     let resource = get_asset_by_attrs(attrs)?;
-    let parent_id = match resource.id {
-        Some(id) => id,
-        None => item.trait_.unwrap().1.segments[0].ident.to_string(),
-    };
     let parent_path = match resource.path {
-        Some(path) => path,
-        None => "".to_owned(),
+        Some(id) => id,
+        None => "/".to_owned() + &item.trait_.unwrap().1.segments[0].ident.to_string(),
     };
     let parent_method = match resource.method {
         Some(method) => method,
         None => "POST".to_string(),
     };
-
     for fn_item in item.items.iter() {
         if let ImplItem::Fn(item_fn) = fn_item {
             let resource = get_asset_by_attrs(&item_fn.attrs)?;
-            let id = match resource.id {
-                Some(id) => id,
-                None => item_fn.sig.ident.to_string(),
-            };
             let path = match resource.path {
                 Some(path) => path,
-                None => "/".to_owned() + &id.clone(),
+                None => "/".to_owned() + &item_fn.sig.ident.to_string(),
             };
             let method = match resource.method {
                 Some(method) => method,
@@ -187,12 +178,11 @@ fn get_resource_by_server(item: ItemImpl) -> Result<(String, Vec<MethodResource>
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
             res.push(MethodResource::new(
-                id,
                 item_fn.sig.ident.to_string(),
                 parent_path,
                 method,
             ));
         }
     }
-    Ok((parent_id, res))
+    Ok(res)
 }

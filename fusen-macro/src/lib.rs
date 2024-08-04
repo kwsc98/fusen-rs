@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse::Parser, parse_macro_input, Attribute, Data, DeriveInput, Meta};
 
+mod handler_macro;
 mod server_macro;
 mod trait_macro;
-mod handler_macro;
 
 #[proc_macro_attribute]
 pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -159,10 +159,8 @@ fn get_asset_by_attrs(attrs: &Vec<Attribute>) -> Result<ResourceAttr, syn::Error
 
 fusen_attr! {
     ResourceAttr,
-    id,
     path,
-    method,
-    spring_cloud
+    method
 }
 
 fusen_attr! {
@@ -172,7 +170,7 @@ fusen_attr! {
 
 fusen_attr! {
     FusenAttr,
-    package,
+    id,
     version,
     group
 }

@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use crate::{get_asset_by_attrs, FusenAttr};
 use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
+use std::collections::HashMap;
 use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
 
 pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
@@ -17,30 +16,26 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     };
     let input = parse_macro_input!(item as ItemTrait);
     let mut methods_cache = HashMap::new();
-    let (id, spring_cloud_name, methods_info) = match get_resource_by_trait(input.clone()) {
+    let methods_info = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => {
-            let methods = methods_info.2.into_iter().fold(vec![], |mut vec, e| {
+            let methods = methods_info.into_iter().fold(vec![], |mut vec, e| {
                 vec.push(e.to_json_str());
-                let MethodResource {
-                    id,
-                    path,
-                    name,
-                    method,
-                } = e;
-                methods_cache.insert(name, (id, path, method));
+                let MethodResource { path, name, method } = e;
+                methods_cache.insert(name, (path, method));
                 vec
             });
-            (methods_info.0, methods_info.1, methods)
+            methods
         }
         Err(err) => return err.into_compile_error().into(),
     };
-    let package = match attr.package {
-        Some(mut package) => {
-            package.push('.');
-            package.push_str(&id);
-            quote!(#package)
+    let id = match attr.id {
+        Some(trait_id) => {
+            quote!(#trait_id)
         }
-        None => quote!(#id),
+        None => {
+            let id = input.ident.to_string();
+            quote!(#id)
+        }
     };
     let item_trait = get_item_trait(input.clone());
     let trait_ident = &input.ident;
@@ -72,7 +67,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             }
             ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
-        let (methos_id, methos_path, methos_type) = methods_cache.get(&ident.to_string()).unwrap();
+        let (methos_path, methos_type) = methods_cache.get(&ident.to_string()).unwrap();
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
@@ -92,15 +87,14 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let version : Option<&str> = #version;
                     let group : Option<&str> = #group;
                     let mut mate_data = fusen_rs::fusen_common::MetaData::new();
-                    mate_data.insert("spring_cloud_name".to_string(),#spring_cloud_name.to_string());
                     let mut request = fusen_rs::fusen_common::FusenRequest::new(req_vec,Some(fields_ty));
                     let mut context = fusen_rs::fusen_common::FusenContext::new(
                         fusen_rs::fusen_common::logs::get_uuid(),
                         fusen_rs::fusen_common::ContextInfo::default()
                             .path(fusen_rs::fusen_common::Path::new(#methos_type,#methos_path.to_string()))
                             .version(version.map(|e|e.to_string()))
-                            .class_name(#package.to_owned())
-                            .method_name(#methos_id.to_string())
+                            .class_name(#id.to_owned())
+                            .method_name(#methos_path.to_string())
                             .group(group.map(|e|e.to_string())),
                         request,
                         mate_data,
@@ -134,7 +128,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             #(
                 methods.push(fusen_rs::fusen_common::MethodResource::form_json_str(#methods_info));
             )*
-            fusen_rs::fusen_common::server::ServerInfo::new(#package,#version,#group,methods)
+            fusen_rs::fusen_common::server::ServerInfo::new(#id,#version,#group,methods)
         }
 
        }
@@ -175,39 +169,24 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_trait(
-    item: ItemTrait,
-) -> Result<(String, String, Vec<MethodResource>), syn::Error> {
+fn get_resource_by_trait(item: ItemTrait) -> Result<Vec<MethodResource>, syn::Error> {
     let mut res = vec![];
     let attrs = &item.attrs;
     let resource = get_asset_by_attrs(attrs)?;
-    let parent_id = match resource.id {
-        Some(id) => id,
-        None => item.ident.to_string(),
-    };
-    let spring_cloud_name = match resource.spring_cloud {
-        Some(name) => name,
-        None => parent_id.clone(),
-    };
     let parent_path = match resource.path {
         Some(path) => path,
-        None => "".to_owned(),
+        None => "/".to_owned() + &item.ident.to_string(),
     };
     let parent_method = match resource.method {
         Some(method) => method,
         None => "POST".to_string(),
     };
-
     for fn_item in item.items.iter() {
         if let TraitItem::Fn(item_fn) = fn_item {
             let resource = get_asset_by_attrs(&item_fn.attrs)?;
-            let id = match resource.id {
-                Some(id) => id,
-                None => item_fn.sig.ident.to_string(),
-            };
             let path = match resource.path {
                 Some(path) => path,
-                None => "/".to_owned() + &id.clone(),
+                None => "/".to_owned() + &item_fn.sig.ident.to_string(),
             };
             let method = match resource.method {
                 Some(method) => method,
@@ -216,12 +195,11 @@ fn get_resource_by_trait(
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
             res.push(MethodResource::new(
-                id,
                 item_fn.sig.ident.to_string(),
                 parent_path,
                 method,
             ));
         }
     }
-    Ok((parent_id, spring_cloud_name, res))
+    Ok(res)
 }

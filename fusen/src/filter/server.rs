@@ -18,20 +18,10 @@ impl RpcServerFilter {
         for item in &cache {
             let info = item.1.get_info();
             for method in info.methods {
-                let MethodResource {
-                    id,
-                    path,
-                    name,
-                    method,
-                } = method;
-                let path_rpc = "/".to_owned() + &info.id + "/" + &id;
+                let MethodResource { path, name, method } = method;
                 if path.contains('{') {
                     rest_trie.insert(path.clone());
                 }
-                hash_cache.insert(
-                    Path::POST(path_rpc).get_key(),
-                    (info.id.to_string(), name.clone()),
-                );
                 hash_cache.insert(
                     Path::new(&method, path).get_key(),
                     (info.id.to_string(), name),
