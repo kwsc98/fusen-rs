@@ -30,6 +30,5 @@ pretty_env_logger.workspace = true
 http.workspace = true
 
 #注册中心
-zookeeper-client.workspace = true
 nacos-sdk.workspace = true
 rand.workspace = true

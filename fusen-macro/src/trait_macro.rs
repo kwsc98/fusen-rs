@@ -18,13 +18,12 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let mut methods_cache = HashMap::new();
     let methods_info = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => {
-            let methods = methods_info.into_iter().fold(vec![], |mut vec, e| {
+            methods_info.into_iter().fold(vec![], |mut vec, e| {
                 vec.push(e.to_json_str());
                 let MethodResource { path, name, method } = e;
                 methods_cache.insert(name, (path, method));
                 vec
-            });
-            methods
+            })
         }
         Err(err) => return err.into_compile_error().into(),
     };

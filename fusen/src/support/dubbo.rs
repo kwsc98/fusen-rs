@@ -49,12 +49,12 @@ fn get_ip(path: &str) -> (String, Option<String>) {
 }
 
 fn get_path(info: &Resource) -> String {
-    let mut ip = info.ip.clone();
+    let mut host = info.host.clone();
     if let Some(port) = info.port.clone() {
-        ip.push(':');
-        ip.push_str(&port);
+        host.push(':');
+        host.push_str(&port);
     }
-    ip.to_string()
+    host.to_string()
 }
 
 fn get_info(mut url: &str) -> crate::Result<Resource> {
@@ -96,7 +96,7 @@ fn get_info(mut url: &str) -> crate::Result<Resource> {
                 ));
                 vec
             }),
-        ip: path.0,
+        host: path.0,
         port: path.1,
         params: HashMap::new(),
     };

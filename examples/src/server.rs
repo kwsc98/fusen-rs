@@ -1,6 +1,5 @@
 use examples::{DemoService, ReqDto, ResDto};
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
-use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::fusen_macro::{asset, handler};
 use fusen_rs::handler::aspect::Aspect;
@@ -49,7 +48,6 @@ impl DemoService for DemoServiceImpl {
             str: "Hello ".to_owned() + &req.str + " V2",
         })
     }
-
     #[asset(path="/divide",method = GET)]
     async fn divideV2(&self, a: i32, b: i32) -> FusenResult<String> {
         info!("res : a={:?},b={:?}", a, b);
@@ -57,7 +55,7 @@ impl DemoService for DemoServiceImpl {
     }
 }
 
-#[tokio::main(worker_threads = 512)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
     fusen_common::logs::init_log();
     let server = DemoServiceImpl {
@@ -70,18 +68,6 @@ async fn main() {
         .register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .server_type(Type::Fusen)
-                .build()
-                .boxed()
-                .to_url()
-                .unwrap()
-                .as_str(),
-        )
-        //初始化SpringCloud注册中心
-        .register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .server_type(Type::SpringCloud)
                 .build()
                 .boxed()
                 .to_url()

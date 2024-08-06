@@ -18,6 +18,7 @@ fusen-macro = { path = "fusen-macro", version = "0.5.1" }
 #网络协议处理
 tokio = { version = "1.38.1", features = ["full"] }
 hyper = { version = "1.4.1", features = ["full"] }
+hyper-tls = { version = "0.6.0" }
 hyper-util = { version = "0.1.6", features = ["full"] }
 http = "1.1.0"
 http-body = "1.0.1"
@@ -47,5 +48,4 @@ proc-macro2 = "1.0.86"
 rand = "0.8.5"
 
 #注册中心
-zookeeper-client = "0.8.0"
 nacos-sdk = "0.4.0"

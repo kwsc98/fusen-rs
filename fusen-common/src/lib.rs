@@ -3,10 +3,7 @@ use error::FusenError;
 use http::{HeaderMap, HeaderValue};
 use register::Type;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{hash_map::Iter, HashMap},
-    sync::Arc,
-};
+use std::collections::{hash_map::Iter, HashMap};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Response<T> = std::result::Result<T, String>;
@@ -214,7 +211,7 @@ impl FusenResponse {
 #[derive(Debug)]
 pub struct FusenContext {
     pub unique_identifier: String,
-    pub server_tyep: Option<Arc<Type>>,
+    pub server_type: Type,
     pub meta_data: MetaData,
     pub context_info: ContextInfo,
     pub request: FusenRequest,
@@ -231,17 +228,17 @@ impl FusenContext {
         FusenContext {
             unique_identifier,
             context_info,
-            server_tyep: None,
+            server_type: Type::Fusen,
             meta_data,
             request,
             response: Default::default(),
         }
     }
-    pub fn insert_server_type(&mut self, server_tyep: Arc<Type>) {
-        let _ = self.server_tyep.insert(server_tyep);
+    pub fn insert_server_type(&mut self, server_tyep: Type) {
+        self.server_type = server_tyep
     }
-    pub fn get_server_type(&self) -> Option<Arc<Type>> {
-        self.server_tyep.clone()
+    pub fn get_server_type(&self) -> &Type {
+        &self.server_type
     }
     pub fn get_return_ty(&self) -> Option<&'static str> {
         self.response.response_ty

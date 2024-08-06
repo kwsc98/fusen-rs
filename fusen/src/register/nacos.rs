@@ -1,4 +1,4 @@
-use super::{Category, Directory, Register, Type};
+use super::{Category, Directory, Register};
 use crate::register::Resource;
 use fusen_common::{url::UrlConfig, FusenFuture};
 use fusen_macro::url_config;
@@ -26,7 +26,6 @@ pub struct NacosConfig {
     group: Option<String>,
     username: String,
     password: String,
-    server_type: Type,
 }
 
 impl FusenNacos {
@@ -66,7 +65,7 @@ impl Register for FusenNacos {
                 (get_service_name(&resource), resource.group.clone())
             };
             let nacos_service_instance =
-                get_instance(resource.ip, resource.port.unwrap(), resource.params);
+                get_instance(resource.host, resource.port.unwrap(), resource.params);
             info!("register service: {}", nacos_service_name);
             let ret = nacos
                 .naming_service
@@ -83,13 +82,13 @@ impl Register for FusenNacos {
     fn subscribe(&self, resource: super::Resource) -> FusenFuture<Result<Directory, crate::Error>> {
         let nacos = self.clone();
         Box::pin(async move {
-            let nacos_service_name = if let Type::SpringCloud = &nacos.config.server_type {
+            let nacos_service_name = if let Category::Server = &resource.category {
                 get_application_name(&resource)
             } else {
                 get_service_name(&resource)
             };
             info!("subscribe service: {}", nacos_service_name);
-            let directory = Directory::new(Arc::new(nacos.config.server_type.clone())).await;
+            let directory = Directory::new(resource.category).await;
             let directory_clone = directory.clone();
             let naming_service = nacos.naming_service.clone();
             let service_instances = naming_service
@@ -114,10 +113,6 @@ impl Register for FusenNacos {
                 .await?;
             Ok(directory_clone)
         })
-    }
-
-    fn get_type(&self) -> Type {
-        self.config.server_type.clone()
     }
 }
 
@@ -158,7 +153,7 @@ fn to_resources(service_instances: Vec<ServiceInstance>) -> Vec<Resource> {
             group: e.metadata().get("group").cloned(),
             version: e.metadata().get("version").cloned(),
             methods: vec![],
-            ip: e.ip().to_string(),
+            host: e.ip().to_string(),
             port: Some(e.port().to_string()),
             params: e.metadata().clone(),
         };
@@ -179,10 +174,7 @@ fn get_service_name(resource: &super::Resource) -> String {
 }
 
 fn get_application_name(resource: &super::Resource) -> String {
-    match resource.params.get("spring_cloud_name") {
-        Some(name) => name.clone(),
-        None => resource.server_name.clone(),
-    }
+    resource.server_name.clone()
 }
 
 fn get_instance(ip: String, port: String, params: HashMap<String, String>) -> ServiceInstance {

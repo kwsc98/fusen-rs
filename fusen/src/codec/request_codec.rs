@@ -1,5 +1,4 @@
 use std::{convert::Infallible, str::FromStr, sync::Arc};
-
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::{
     filter::server::{PathCache, PathCacheResult},
@@ -55,7 +54,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         &self,
         context: &FusenContext,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
-        let content_type = match context.server_tyep.as_ref().unwrap().as_ref() {
+        let content_type = match &context.server_type {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
         };
@@ -94,7 +93,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::POST(path) => {
-                let body: Bytes = match context.server_tyep.as_ref().unwrap().as_ref() {
+                let body: Bytes = match &context.server_type {
                     &Type::Dubbo => {
                         let triple_request_wrapper =
                             TripleRequestWrapper::from(&context.request.fields);

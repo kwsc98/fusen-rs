@@ -14,6 +14,8 @@ use crate::{
 };
 use bytes::Buf;
 use client::FusenClient;
+use codec::{request_codec::RequestHandler, response_codec::ResponseHandler};
+use filter::FusenFilter;
 pub use fusen_common;
 use fusen_common::{
     register::Type,
@@ -21,8 +23,9 @@ use fusen_common::{
     MetaData,
 };
 pub use fusen_macro;
-use handler::{Handler, HandlerContext};
+use handler::{aspect::AspectClientFilter, Handler, HandlerContext};
 use register::Register;
+use route::client::Route;
 use server::FusenServer;
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 pub type Error = fusen_common::Error;
@@ -100,8 +103,6 @@ impl FusenApplicationBuilder {
             handler_infos,
             servers,
         } = self;
-        let mut registers: HashMap<String, Arc<Box<dyn Register>>> = HashMap::new();
-        let mut client: HashMap<String, Arc<FusenClient>> = HashMap::new();
         let mut handler_context = HandlerContext::default();
         for handler in handlers {
             handler_context.insert(handler);
@@ -114,29 +115,25 @@ impl FusenApplicationBuilder {
                 .unwrap()
                 .init(application_name.clone()),
         );
-        let register_type = register.get_type();
-        registers.insert(format!("{:?}", register_type), register.clone());
-        client.insert(
-            format!("{:?}", register_type),
-            Arc::new(FusenClient::build(
-                register,
-                Arc::new(handler_context.clone()),
-            )),
-        );
         let handler_context = Arc::new(handler_context);
         FusenApplicationContext {
-            registers,
-            _handler_context: handler_context.clone(),
-            client,
+            register: register.clone(),
+            handler_context: handler_context.clone(),
+            client_filter: Box::leak(Box::new(AspectClientFilter::new(
+                RequestHandler::new(Arc::new(Default::default())),
+                ResponseHandler::new(),
+                handler_context.clone(),
+                Route::new(register),
+            ))),
             server: FusenServer::new(port, servers, handler_context),
         }
     }
 }
 
 pub struct FusenApplicationContext {
-    registers: HashMap<String, Arc<Box<dyn Register>>>,
-    _handler_context: Arc<HandlerContext>,
-    client: HashMap<String, Arc<FusenClient>>,
+    register: Arc<Box<dyn Register>>,
+    handler_context: Arc<HandlerContext>,
+    client_filter: &'static dyn FusenFilter,
     server: FusenServer,
 }
 impl FusenApplicationContext {
@@ -144,42 +141,44 @@ impl FusenApplicationContext {
         FusenApplicationBuilder::default()
     }
 
-    pub fn client(&self, ty: Type) -> Option<Arc<FusenClient>> {
-        self.client.get(&format!("{:?}", ty)).cloned()
+    pub fn client(&self, server_type: Type) -> FusenClient {
+        FusenClient::build(
+            server_type,
+            self.client_filter,
+            self.handler_context.clone(),
+        )
     }
 
     pub async fn run(mut self) {
         let port = self.server.port.clone();
         let mut shutdown_complete_rx = self.server.run().await;
-        for (_id, register) in self.registers {
-            //首先注册server
+        //首先注册server
+        let resource = Resource {
+            server_name: Default::default(),
+            category: Category::Server,
+            group: Default::default(),
+            version: Default::default(),
+            methods: Default::default(),
+            host: fusen_common::net::get_ip(),
+            port: Some(port.clone()),
+            params: MetaData::default().inner,
+        };
+        let _ = self.register.register(resource).await;
+        //再注册service
+        for server in self.server.fusen_servers.values() {
+            let info: ServerInfo = server.get_info();
+            let server_name = info.id.to_string();
             let resource = Resource {
-                server_name: Default::default(),
-                category: Category::Server,
-                group: Default::default(),
-                version: Default::default(),
-                methods: Default::default(),
-                ip: fusen_common::net::get_ip(),
+                server_name,
+                category: Category::Service,
+                group: info.group,
+                version: info.version,
+                methods: info.methods,
+                host: fusen_common::net::get_ip(),
                 port: Some(port.clone()),
                 params: MetaData::default().inner,
             };
-            let _ = register.register(resource).await;
-            //再注册service
-            for server in self.server.fusen_servers.values() {
-                let info: ServerInfo = server.get_info();
-                let server_name = info.id.to_string();
-                let resource = Resource {
-                    server_name,
-                    category: Category::Service,
-                    group: info.group,
-                    version: info.version,
-                    methods: info.methods,
-                    ip: fusen_common::net::get_ip(),
-                    port: Some(port.clone()),
-                    params: MetaData::default().inner,
-                };
-                let _ = register.register(resource).await;
-            }
+            let _ = self.register.register(resource).await;
         }
         let _ = shutdown_complete_rx.recv().await;
         tracing::info!("fusen server shut");

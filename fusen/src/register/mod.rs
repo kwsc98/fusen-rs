@@ -1,20 +1,13 @@
-use fusen_common::{
-    net::get_path,
-    register::{RegisterType, Type},
-    FusenFuture, MethodResource,
-};
-
+use self::nacos::FusenNacos;
 use crate::protocol::socket::{InvokerAssets, Socket};
-
-use self::{nacos::FusenNacos, zookeeper::FusenZookeeper};
+use fusen_common::{net::get_path, register::RegisterType, FusenFuture, MethodResource};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{
     mpsc::{self, UnboundedSender},
-    oneshot, RwLock,
+    oneshot,
 };
 pub mod nacos;
-pub mod zookeeper;
 
 pub struct RegisterBuilder {
     register_type: RegisterType,
@@ -30,8 +23,6 @@ impl RegisterBuilder {
         let info = info[0].to_lowercase();
         let register_type = if info.contains("nacos") {
             RegisterType::Nacos(config_url)
-        } else if info.contains("zookeeper") {
-            RegisterType::ZooKeeper(config_url)
         } else {
             return Err(format!("config url err : {:?}", config_url).into());
         };
@@ -40,7 +31,6 @@ impl RegisterBuilder {
 
     pub fn init(self, application_name: String) -> Box<dyn Register> {
         match self.register_type {
-            RegisterType::ZooKeeper(url) => Box::new(FusenZookeeper::init(&url).unwrap()),
             RegisterType::Nacos(url) => Box::new(FusenNacos::init(&url, application_name).unwrap()),
         }
     }
@@ -53,19 +43,19 @@ pub struct Resource {
     pub group: Option<String>,
     pub version: Option<String>,
     pub methods: Vec<MethodResource>,
-    pub ip: String,
+    pub host: String,
     pub port: Option<String>,
     pub params: HashMap<String, String>,
 }
 
 impl Resource {
     pub fn get_addr(&self) -> String {
-        let mut ip = self.ip.clone();
+        let mut host = self.host.clone();
         if let Some(port) = &self.port {
-            ip.push(':');
-            ip.push_str(port);
+            host.push(':');
+            host.push_str(port);
         }
-        ip
+        host
     }
 }
 
@@ -80,8 +70,6 @@ pub trait Register: Send + Sync {
     fn register(&self, resource: Resource) -> FusenFuture<Result<(), crate::Error>>;
 
     fn subscribe(&self, resource: Resource) -> FusenFuture<Result<Directory, crate::Error>>;
-
-    fn get_type(&self) -> Type;
 }
 
 #[derive(Debug)]
@@ -97,21 +85,18 @@ pub enum DirectoryReceiver {
 
 #[derive(Clone, Debug)]
 pub struct Directory {
-    server_type: Arc<Type>,
     sender: UnboundedSender<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>,
 }
 
 #[derive(Debug)]
 pub struct ResourceInfo {
-    pub server_type: Arc<Type>,
     pub socket: Vec<Arc<InvokerAssets>>,
 }
 
 impl Directory {
-    pub async fn new(server_type: Arc<Type>) -> Self {
+    pub async fn new(category: Category) -> Self {
         let (s, mut r) =
             mpsc::unbounded_channel::<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>();
-        let server_type_clone = server_type.clone();
         tokio::spawn(async move {
             let mut cache: Vec<Arc<InvokerAssets>> = vec![];
             while let Some(msg) = r.recv().await {
@@ -121,22 +106,22 @@ impl Directory {
                     }
                     DirectorySender::CHANGE(resources) => {
                         let map = cache.iter().fold(HashMap::new(), |mut map, e| {
-                            let key = get_path(e.resource.ip.clone(), e.resource.port.as_deref());
+                            let key = get_path(e.resource.host.clone(), e.resource.port.as_deref());
                             map.insert(key, e.clone());
                             map
                         });
                         let mut res = vec![];
                         for item in resources {
-                            let key = get_path(item.ip.clone(), item.port.as_deref());
+                            let key = get_path(item.host.clone(), item.port.as_deref());
                             res.push(match map.get(&key) {
                                 Some(info) => info.clone(),
                                 None => Arc::new(InvokerAssets {
                                     resource: item,
-                                    socket: match server_type_clone.as_ref() {
-                                        Type::Dubbo => Socket::HTTP2(Arc::new(RwLock::new(None))),
-                                        Type::SpringCloud => Socket::HTTP1,
-                                        Type::Fusen => Socket::HTTP2(Arc::new(RwLock::new(None))),
-                                    },
+                                    socket: Socket::new(if let Category::Service = category {
+                                        Some("http2")
+                                    } else {
+                                        None
+                                    }),
                                 }),
                             });
                         }
@@ -146,10 +131,7 @@ impl Directory {
                 }
             }
         });
-        Self {
-            sender: s,
-            server_type,
-        }
+        Self { sender: s }
     }
 
     pub async fn get(&self) -> Result<ResourceInfo, crate::Error> {
@@ -157,10 +139,7 @@ impl Directory {
         let _ = self.sender.send((DirectorySender::GET, oneshot.0));
         let rev = oneshot.1.await.map_err(|e| e.to_string())?;
         match rev {
-            DirectoryReceiver::GET(rev) => Ok(ResourceInfo {
-                server_type: self.server_type.clone(),
-                socket: rev,
-            }),
+            DirectoryReceiver::GET(rev) => Ok(ResourceInfo { socket: rev }),
             DirectoryReceiver::CHANGE => Err("err receiver".into()),
         }
     }

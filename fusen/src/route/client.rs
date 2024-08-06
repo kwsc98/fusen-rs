@@ -63,17 +63,40 @@ impl Route {
         match rev {
             RouteReceiver::GET(rev) => {
                 if rev.is_none() {
-                    let resource_client = Resource {
+                    let category = match context.server_type {
+                        fusen_common::register::Type::Dubbo => Category::Service,
+                        fusen_common::register::Type::SpringCloud => Category::Server,
+                        fusen_common::register::Type::Fusen => Category::Service,
+                        fusen_common::register::Type::Host(_) => Category::Server,
+                    };
+                    let resource_server = Resource {
                         server_name: name.to_string(),
-                        category: Category::Client,
+                        category,
                         group: None,
                         version: version.map(|e| e.to_string()),
                         methods: vec![],
-                        ip: fusen_common::net::get_ip(),
+                        host: fusen_common::net::get_ip(),
                         port: None,
                         params: context.meta_data.clone_map(),
                     };
-                    let directory = self.register.subscribe(resource_client).await?;
+                    let directory =
+                        if let fusen_common::register::Type::Host(host) = &context.server_type {
+                            let directory = Directory::new(Category::Server).await;
+                            let resource_server = Resource {
+                                server_name: name.to_string(),
+                                category: Category::Server,
+                                group: None,
+                                version: None,
+                                methods: vec![],
+                                host: host.clone(),
+                                port: None,
+                                params: HashMap::new(),
+                            };
+                            let _ = directory.change(vec![resource_server]).await;
+                            directory
+                        } else {
+                            self.register.subscribe(resource_server).await?
+                        };
                     let oneshot = oneshot::channel();
                     self.sender
                         .send((RouteSender::CHANGE((key, directory.clone())), oneshot.0))?;

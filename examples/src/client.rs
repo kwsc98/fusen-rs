@@ -49,7 +49,7 @@ impl Aspect for ClientLogAspect {
     }
 }
 
-#[tokio::main(worker_threads = 512)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
@@ -57,7 +57,6 @@ async fn main() {
         .register_builder(
             NacosConfig::builder()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .server_type(Type::Fusen)
                 .build()
                 .boxed()
                 .to_url()
@@ -73,7 +72,10 @@ async fn main() {
         ))
         .build();
     //进行Fusen协议调用HTTP2 + JSON
-    let client = DemoServiceClient::new(context.client(Type::Fusen).unwrap());
+    // let client = DemoServiceClient::new(Arc::new(
+    //     context.client(Type::Host("http://127.0.0.1:8081".to_string())),
+    // ));
+    let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
     let res = client
         .sayHelloV2(ReqDto {
             str: "world".to_string(),

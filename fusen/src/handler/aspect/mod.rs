@@ -81,11 +81,7 @@ impl FusenFilter for AspectClientFilter {
                 .get_server_resource(&context)
                 .await
                 .map_err(|e| FusenError::Info(e.to_string()))?;
-            let ResourceInfo {
-                server_type,
-                socket,
-            } = resource_info;
-            context.insert_server_type(server_type);
+            let ResourceInfo { socket } = resource_info;
             let socket = handler_controller
                 .as_ref()
                 .get_load_balance()
@@ -99,7 +95,6 @@ impl FusenFilter for AspectClientFilter {
                 .decode(response.map(|e| e.boxed()))
                 .await;
             context.response.response = res;
-
             Ok(context)
         })
     }
