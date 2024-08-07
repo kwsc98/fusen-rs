@@ -57,7 +57,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
         };
         let body = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => vec![match &context.response.response {
-                Ok(res) => Frame::data(self.json_codec.encode(res).map_err(FusenError::from)?),
+                Ok(res) => Frame::data(Bytes::from(res.as_bytes().to_vec())),
                 Err(err) => {
                     if let FusenError::Null = err {
                         Frame::data(bytes::Bytes::from("null"))

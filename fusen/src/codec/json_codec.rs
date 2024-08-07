@@ -1,5 +1,5 @@
-use bytes::{Buf, BufMut};
-use serde::{Deserialize, Serialize};
+use bytes::BufMut;
+use serde::{de::DeserializeOwned, Serialize};
 use std::marker::PhantomData;
 
 use super::BodyCodec;
@@ -26,10 +26,10 @@ impl<D, U, T> Default for JsonBodyCodec<D, U, T> {
     }
 }
 
-impl<'b, D, U, T> BodyCodec<D> for JsonBodyCodec<D, U, T>
+impl<D, U, T> BodyCodec<D> for JsonBodyCodec<D, U, T>
 where
-    D: bytes::Buf + 'b,
-    U: Deserialize<'b>,
+    D: bytes::Buf,
+    U: DeserializeOwned,
     T: Serialize,
 {
     type DecodeType = U;
@@ -37,9 +37,7 @@ where
     type EncodeType = T;
 
     fn decode(&self, body: &D) -> Result<Self::DecodeType, crate::Error> {
-        let data = body.chunk();
-        let mut de = serde_json::Deserializer::from_reader(data.reader());
-        Ok(U::deserialize(&mut de)?)
+        Ok(serde_json::from_slice(body.chunk())?)
     }
 
     fn encode(&self, res: &Self::EncodeType) -> Result<bytes::Bytes, crate::Error> {
