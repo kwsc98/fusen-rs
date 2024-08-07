@@ -49,7 +49,7 @@ impl Aspect for ClientLogAspect {
     }
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
@@ -70,7 +70,7 @@ async fn main() {
             vec!["CustomLoadBalance".to_owned(), "ClientLogAspect".to_owned()],
         ))
         .build();
-    //进行Fusen协议调用HTTP2 + JSON
+    //直接当HttpClient调用HTTP1 + JSON
     let client = DemoServiceClient::new(Arc::new(
         context.client(Type::Host("127.0.0.1:8081".to_string())),
     ));
@@ -80,6 +80,7 @@ async fn main() {
         })
         .await;
     info!("rev host msg : {:?}", res);
+    //通过Fusen进行服务注册与发现，并且进行HTTP2+JSON进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
     let res = client
         .sayHelloV2(ReqDto {

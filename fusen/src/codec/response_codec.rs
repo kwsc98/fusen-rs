@@ -1,6 +1,6 @@
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::support::triple::TripleResponseWrapper;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use fusen_common::{codec::CodecType, error::FusenError, FusenContext};
 use http::{HeaderMap, HeaderValue, Response};
 use http_body::Frame;
@@ -132,45 +132,38 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                 response.status().as_str()
             )));
         }
-        let mut frame_vec = vec![];
-        while let Some(body) = response.frame().await {
-            if let Ok(body) = body {
-                if body.is_trailers() {
-                    let trailers = body
-                        .trailers_ref()
-                        .ok_or(FusenError::from("error trailers N1"))?;
-                    match trailers.get("grpc-status") {
-                        Some(status) => match status.as_bytes() {
-                            b"0" => {
-                                break;
-                            }
-                            else_status => {
-                                let msg = match trailers.get("grpc-message") {
-                                    Some(value) => {
-                                        String::from_utf8(value.as_bytes().to_vec()).unwrap()
-                                    }
-                                    None => {
-                                        "grpc-status=".to_owned()
-                                            + &String::from_utf8(else_status.to_vec()).unwrap()
-                                    }
-                                };
-                                match else_status {
-                                    b"90" => return Err(FusenError::Null),
-                                    b"91" => return Err(FusenError::NotFind),
-                                    _ => return Err(FusenError::from(msg)),
-                                };
-                            }
-                        },
-                        None => return Err(FusenError::from("error trailers N2")),
-                    }
+        let mut bytes = BytesMut::new();
+        while let Some(Ok(frame)) = response.frame().await {
+            if frame.is_trailers() {
+                let trailers = frame
+                    .trailers_ref()
+                    .ok_or(FusenError::from("error trailers N1"))?;
+                match trailers.get("grpc-status") {
+                    Some(status) => match status.as_bytes() {
+                        b"0" => {
+                            break;
+                        }
+                        else_status => {
+                            let msg = match trailers.get("grpc-message") {
+                                Some(value) => {
+                                    String::from_utf8(value.as_bytes().to_vec()).unwrap()
+                                }
+                                None => {
+                                    "grpc-status=".to_owned()
+                                        + &String::from_utf8(else_status.to_vec()).unwrap()
+                                }
+                            };
+                            match else_status {
+                                b"90" => return Err(FusenError::Null),
+                                b"91" => return Err(FusenError::NotFind),
+                                _ => return Err(FusenError::from(msg)),
+                            };
+                        }
+                    },
+                    None => return Err(FusenError::from("error trailers N2")),
                 }
-                frame_vec.push(body);
-            } else {
-                break;
             }
-        }
-        if frame_vec.is_empty() {
-            return Err(FusenError::Null);
+            bytes.extend(frame.into_data().unwrap());
         }
         let codec_type = response
             .headers()
@@ -181,21 +174,20 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                 Ok(coder) => CodecType::from(coder),
                 Err(_) => CodecType::JSON,
             });
-        let byte = frame_vec[0]
-            .data_ref()
-            .ok_or(FusenError::from("empty body"))?;
+        let bytes: Bytes = bytes.into();
         let res = match codec_type {
             CodecType::JSON => {
-                if !byte.to_ascii_lowercase().starts_with(b"\"") {
-                    String::from_utf8(byte.to_vec()).map_err(|e| FusenError::from(e.to_string()))?
+                if !bytes.to_ascii_lowercase().starts_with(b"\"") {
+                    String::from_utf8(bytes.to_vec())
+                        .map_err(|e| FusenError::from(e.to_string()))?
                 } else {
                     self.json_codec
-                        .decode(byte)
+                        .decode(&bytes)
                         .map_err(|e| FusenError::from(e.to_string()))?
                 }
             }
             CodecType::GRPC => {
-                let response = self.grpc_codec.decode(byte)?;
+                let response = self.grpc_codec.decode(&bytes)?;
                 String::from_utf8(response.data).map_err(|e| FusenError::from(e.to_string()))?
             }
         };

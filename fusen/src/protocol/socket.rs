@@ -4,7 +4,7 @@ use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
-use std::convert::Infallible;
+use std::{convert::Infallible, time::Duration};
 use tracing::error;
 pub type HttpSocket = Client<HttpsConnector<HttpConnector>, BoxBody<bytes::Bytes, Infallible>>;
 use crate::register::Resource;
@@ -23,15 +23,18 @@ pub enum Socket {
 
 impl Socket {
     pub fn new(protocol: Option<&str>) -> Self {
+        let mut connector = HttpConnector::new();
+        connector.set_keepalive(Some(Duration::from_secs(90)));
         if protocol.is_some_and(|e| e.to_lowercase().contains("http2")) {
             Socket::HTTP2(
                 Client::builder(hyper_util::rt::TokioExecutor::new())
                     .http2_only(true)
-                    .build(HttpsConnector::new()),
+                    .build(HttpsConnector::new_with_connector(connector)),
             )
         } else {
             Socket::HTTP1(
-                Client::builder(hyper_util::rt::TokioExecutor::new()).build(HttpsConnector::new()),
+                Client::builder(hyper_util::rt::TokioExecutor::new())
+                    .build(HttpsConnector::new_with_connector(connector)),
             )
         }
     }

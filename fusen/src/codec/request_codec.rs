@@ -1,17 +1,17 @@
-use std::{convert::Infallible, str::FromStr, sync::Arc};
 use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
 use crate::{
     filter::server::{PathCache, PathCacheResult},
     support::triple::TripleRequestWrapper,
     BoxBody,
 };
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use fusen_common::{
     error::FusenError, logs::get_uuid, register::Type, ContextInfo, FusenContext, FusenRequest,
     MetaData, Path,
 };
 use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
+use std::{convert::Infallible, str::FromStr, sync::Arc};
 
 pub(crate) trait RequestCodec<T, E> {
     fn encode(&self, msg: &FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
@@ -135,19 +135,13 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             }
             vec
         } else {
-            let mut frame_vec = vec![];
-            while let Some(frame) = request.body_mut().frame().await {
-                if let Ok(frame) = frame {
-                    frame_vec.push(frame);
+            let mut bytes = BytesMut::new();
+            while let Some(Ok(frame)) = request.body_mut().frame().await {
+                if frame.is_data() {
+                    bytes.extend(frame.into_data().unwrap());
                 }
             }
-            if frame_vec.is_empty() {
-                return Err(Box::new(FusenError::from("empty frame")));
-            }
-            let bytes = frame_vec
-                .remove(0)
-                .into_data()
-                .map_or(Err(FusenError::from("empty body")), Ok)?;
+            let bytes: Bytes = bytes.into();
             match meta_data.get_codec() {
                 fusen_common::codec::CodecType::JSON => {
                     if !bytes.starts_with(b"[") {

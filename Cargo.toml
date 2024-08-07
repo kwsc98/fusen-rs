@@ -19,7 +19,7 @@ fusen-macro = { path = "fusen-macro", version = "0.6.0" }
 tokio = { version = "1.38.1", features = ["full"] }
 hyper = { version = "1.4.1", features = ["full"] }
 hyper-tls = { version = "0.6.0" }
-hyper-util = { version = "0.1.6", features = ["full"] }
+hyper-util = { version = "0.1.7", features = ["full"] }
 http = "1.1.0"
 http-body = "1.0.1"
 http-body-util = "0.1.2"
