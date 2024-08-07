@@ -65,10 +65,9 @@ async fn main() {
     FusenApplicationContext::builder()
         .application_name("fusen-server")
         //初始化Fusen注册中心,同时支持Dubbo3协议与Fusen协议
-        .register_builder(
-            NacosConfig::builder()
+        .register(
+            NacosConfig::default()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .build()
                 .boxed()
                 .to_url()
                 .unwrap()

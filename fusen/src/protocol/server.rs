@@ -51,7 +51,8 @@ impl TcpServer {
         let notify_shutdown = broadcast::channel(1).0;
         let listener = TcpListener::bind(&format!("0.0.0.0:{}", port)).await?;
         let mut builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
-        builder.http2().adaptive_window(true);
+        builder.http2().max_concurrent_streams(None);
+        builder.http1().keep_alive(true);
         let builder = Arc::new(builder);
         loop {
             let tcp_stream = tokio::select! {

@@ -15,10 +15,9 @@ async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
         .application_name("fusen-client-pt")
-        .register_builder(
-            NacosConfig::builder()
+        .register(
+            NacosConfig::default()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .build()
                 .boxed()
                 .to_url()
                 .unwrap()
@@ -36,8 +35,7 @@ async fn main() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let start_time = get_now_date_time_as_millis();
     let mut m: (mpsc::Sender<i32>, mpsc::Receiver<i32>) = mpsc::channel(1);
-    //40 * 100000
-    for _ in 0..400 {
+    for _ in 0..4000 {
         tokio::spawn(do_run(m.0.clone(), client));
     }
     drop(m.0);

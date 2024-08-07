@@ -1,11 +1,10 @@
-use std::convert::Infallible;
-
 use fusen_common::error::FusenError;
 use http::{Request, Response, Uri, Version};
 use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use std::convert::Infallible;
 use tracing::error;
 pub type HttpSocket = Client<HttpsConnector<HttpConnector>, BoxBody<bytes::Bytes, Infallible>>;
 use crate::register::Resource;
@@ -27,7 +26,6 @@ impl Socket {
         if protocol.is_some_and(|e| e.to_lowercase().contains("http2")) {
             Socket::HTTP2(
                 Client::builder(hyper_util::rt::TokioExecutor::new())
-                    .http2_adaptive_window(true)
                     .http2_only(true)
                     .build(HttpsConnector::new()),
             )

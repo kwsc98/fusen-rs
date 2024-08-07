@@ -15,6 +15,7 @@ use crate::{
 use bytes::Buf;
 use client::FusenClient;
 use codec::{request_codec::RequestHandler, response_codec::ResponseHandler};
+use config::FusenApplicationConfig;
 use filter::FusenFilter;
 pub use fusen_common;
 use fusen_common::{
@@ -68,7 +69,7 @@ impl FusenApplicationBuilder {
         self
     }
 
-    pub fn register_builder(mut self, register_config: &str) -> Self {
+    pub fn register(mut self, register_config: &str) -> Self {
         self.register_config = register_config.to_owned();
         self
     }
@@ -137,6 +138,19 @@ pub struct FusenApplicationContext {
     server: FusenServer,
 }
 impl FusenApplicationContext {
+    pub fn init(config: FusenApplicationConfig) -> FusenApplicationBuilder {
+        let mut builder = FusenApplicationBuilder::default()
+            .application_name(config.get_application_name())
+            .port(*config.get_port())
+            .register(config.get_register());
+        if let Some(handler_infos) = config.get_handler_infos() {
+            for handler_info in handler_infos {
+                builder = builder.add_handler_info(handler_info.clone());
+            }
+        }
+        builder
+    }
+
     pub fn builder() -> FusenApplicationBuilder {
         FusenApplicationBuilder::default()
     }

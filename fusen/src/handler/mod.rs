@@ -1,7 +1,6 @@
+use self::loadbalance::{DefaultLoadBalance, LoadBalance_};
 use aspect::{Aspect_, DefaultAspect};
 use serde::{Deserialize, Serialize};
-
-use self::loadbalance::{DefaultLoadBalance, LoadBalance_};
 use std::{collections::HashMap, sync::Arc};
 pub mod aspect;
 pub mod loadbalance;
@@ -120,7 +119,7 @@ pub enum HandlerInvoker {
     Aspect(&'static dyn Aspect_),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct HandlerInfo {
     id: String,
     handlers_id: Vec<String>,

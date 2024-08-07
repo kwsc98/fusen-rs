@@ -54,10 +54,9 @@ async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
         .application_name("fusen-client")
-        .register_builder(
-            NacosConfig::builder()
+        .register(
+            NacosConfig::default()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .build()
                 .boxed()
                 .to_url()
                 .unwrap()
@@ -72,9 +71,15 @@ async fn main() {
         ))
         .build();
     //进行Fusen协议调用HTTP2 + JSON
-    // let client = DemoServiceClient::new(Arc::new(
-    //     context.client(Type::Host("http://127.0.0.1:8081".to_string())),
-    // ));
+    let client = DemoServiceClient::new(Arc::new(
+        context.client(Type::Host("127.0.0.1:8081".to_string())),
+    ));
+    let res = client
+        .sayHelloV2(ReqDto {
+            str: "world".to_string(),
+        })
+        .await;
+    info!("rev host msg : {:?}", res);
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
     let res = client
         .sayHelloV2(ReqDto {
