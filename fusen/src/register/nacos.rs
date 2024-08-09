@@ -1,6 +1,6 @@
 use super::{Category, Directory, Register};
 use crate::register::Resource;
-use fusen_common::{url::UrlConfig, FusenFuture};
+use fusen_common::FusenFuture;
 use fusen_macro::url_config;
 use nacos_sdk::api::{
     naming::{

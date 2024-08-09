@@ -52,9 +52,9 @@ impl Route {
         let name = &context.context_info.class_name;
         let version = context.context_info.version.as_ref();
         let mut key = name.to_owned();
+        key.push_str(&format!(":{:?}", context.server_type));
         if let Some(version) = version {
-            key.push(':');
-            key.push_str(version);
+            key.push_str(&format!(":{}", version));
         }
         let oneshot = oneshot::channel();
         self.sender

@@ -69,7 +69,7 @@ pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
         #org_item
 
         impl #id {
-            fn from_url(url : &str) -> Result<Self,fusen_common::Error> {
+            pub fn from_url(url : &str) -> Result<Self,fusen_common::Error> {
                 let info : Vec<&str> = url.split("://").collect();
                 if info[0] != #attr {
                    return Err(format!("err1 url {}",url).into());
@@ -80,17 +80,11 @@ pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 fusen_common::url::from_url(info[1])
             }
-        }
-
-        impl fusen_common::url::UrlConfig for #id {
-            fn to_url(&self) -> Result<String, fusen_common::Error> {
+            pub fn to_url(&self) -> Result<String, fusen_common::Error> {
                 let mut res = String::new();
                 res.push_str(&(#attr.to_owned() + "://" + stringify!(#id) + "?" ));
                 res.push_str(&(fusen_common::url::to_url(self)?));
                 Ok(res)
-            }
-            fn boxed(self) -> Box<dyn UrlConfig> {
-                Box::new(self)
             }
         }
     };

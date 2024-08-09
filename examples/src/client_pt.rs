@@ -1,12 +1,10 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use examples::{DemoServiceClient, ReqDto};
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::register::Type;
-use fusen_rs::fusen_common::url::UrlConfig;
 use fusen_rs::register::nacos::NacosConfig;
 use fusen_rs::{fusen_common, FusenApplicationContext};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -18,7 +16,6 @@ async fn main() {
         .register(
             NacosConfig::default()
                 .server_addr("127.0.0.1:8848".to_owned())
-                .boxed()
                 .to_url()
                 .unwrap()
                 .as_str(),
