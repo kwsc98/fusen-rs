@@ -285,7 +285,13 @@ dubbo:
 这里我们使用spring-cloud-alibaba项目进行演示
 <https://github.com/alibaba/spring-cloud-alibaba>
 
-Rust的Server和Client端的代码无需改造就如上示例即可。
+
+RustClient端调用SpringCloud需要将fusen_trait_id修改为目标服务id（application_name）
+```rust
+#[fusen_trait(id = "service-provider")]
+```
+
+
 Java的Server和Client端的代码也无需改造。直接启动即可。
 
 ### SpringCloud-Server
@@ -298,15 +304,14 @@ package com.alibaba.cloud.examples.ProviderApplication
 @RestController
 public class EchoController {
 ...
- @GetMapping("/divide")
- public String divide(@RequestParam Integer a, @RequestParam Integer b) {
-  if (b == 0) {
-   return String.valueOf(0);
-  }
-  else {
-   return String.valueOf(a / b);
-  }
- }
+    @GetMapping("/divide")
+    public String divide(@RequestParam Integer a, @RequestParam Integer b) {
+        if (b == 0) {
+          return String.valueOf(0);
+        } else {
+          return String.valueOf(a / b);
+        }
+    }
 ...
 }
 ```
@@ -321,10 +326,10 @@ package com.alibaba.cloud.examples.ConsumerApplication
 @RestController
 public class TestController {
 ...
- @GetMapping("/divide-feign")
- public String divide(@RequestParam Integer a, @RequestParam Integer b) {
-  return echoClient.divide(a, b);
- }
+    @GetMapping("/divide-feign")
+    public String divide(@RequestParam Integer a, @RequestParam Integer b) {
+        return echoClient.divide(a, b);
+    }
 ...
 }
 
