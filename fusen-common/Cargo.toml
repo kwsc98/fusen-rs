@@ -12,23 +12,25 @@ description.workspace = true
 tokio.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
+http.workspace = true
 
 
 #json序列化
-serde.workspace = true 
-serde_json.workspace = true 
+serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 bytes.workspace = true
 percent-encoding.workspace = true
 
+toml.workspace = true
+serde_yaml.workspace = true
+
 #日志处理
-tracing.workspace = true 
-tracing-futures.workspace = true 
-tracing-subscriber.workspace = true 
-pretty_env_logger.workspace = true 
-
-http.workspace = true
-
+tracing.workspace = true
+tracing-futures.workspace = true
+tracing-subscriber.workspace = true
+pretty_env_logger.workspace = true
 #注册中心
 nacos-sdk.workspace = true
 rand.workspace = true
+local-ip-address.workspace = true

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub type BoxFusenError = Box<FusenError>;
 
 #[derive(Serialize, Deserialize, Debug)]

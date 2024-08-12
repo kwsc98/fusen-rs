@@ -69,6 +69,8 @@ pub enum Category {
 pub trait Register: Send + Sync {
     fn register(&self, resource: Resource) -> FusenFuture<Result<(), crate::Error>>;
 
+    fn deregister(&self, resource: Resource) -> FusenFuture<Result<(), crate::Error>>;
+
     fn subscribe(&self, resource: Resource) -> FusenFuture<Result<Directory, crate::Error>>;
 }
 

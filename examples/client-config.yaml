@@ -1,0 +1,7 @@
+application_name: fusen-client
+register: register://NacosConfig?namespace=&password=&server_addr=127.0.0.1:8848&username=
+handler_infos:
+  - id: org.apache.dubbo.springboot.demo.DemoService
+    handlers_id:
+      - CustomLoadBalance
+      - ServerLogAspect

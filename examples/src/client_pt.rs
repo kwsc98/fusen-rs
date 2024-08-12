@@ -22,7 +22,7 @@ async fn main() {
         )
         .build();
     let client = Box::leak(Box::new(DemoServiceClient::new(Arc::new(
-        context.client(Type::Host("127.0.0.1:8081".to_owned())),
+        context.client(Type::Fusen),
     ))));
     let _ = client
         .sayHelloV2(ReqDto {

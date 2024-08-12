@@ -92,9 +92,13 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                     &context.request.fields,
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
-            fusen_common::Path::POST(path) => {
+            fusen_common::Path::POST(mut path) => {
                 let body: Bytes = match &context.server_type {
                     &Type::Dubbo => {
+                        path = format!(
+                            "/{}/{}",
+                            context.context_info.class_name, context.context_info.method_name
+                        );
                         let triple_request_wrapper =
                             TripleRequestWrapper::from(&context.request.fields);
                         self.grpc_codec.encode(&triple_request_wrapper)?

@@ -19,6 +19,7 @@ pub mod register;
 pub mod server;
 pub mod trie;
 pub mod url;
+pub mod config;
 
 #[derive(Debug)]
 pub struct MetaData {
@@ -75,6 +76,7 @@ impl Default for MetaData {
     fn default() -> Self {
         let mut inner = HashMap::new();
         inner.insert("prefer.serialization".to_owned(), "fastjson".to_owned());
+        inner.insert("preserved.register.source".to_owned(), "SPRING_CLOUD".to_owned());
         inner.insert("protocol".to_owned(), "tri".to_owned());
         Self { inner }
     }

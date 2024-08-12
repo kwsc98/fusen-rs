@@ -79,6 +79,29 @@ impl Register for FusenNacos {
         })
     }
 
+    fn deregister(&self, resource: Resource) -> FusenFuture<Result<(), crate::Error>> {
+        let nacos = self.clone();
+        Box::pin(async move {
+            let (nacos_service_name, group) = if let Category::Server = resource.category {
+                (nacos.application_name.clone(), nacos.config.group.clone())
+            } else {
+                (get_service_name(&resource), resource.group.clone())
+            };
+            let nacos_service_instance =
+                get_instance(resource.host, resource.port.unwrap(), resource.params);
+            info!("deregister service: {}", nacos_service_name);
+            let ret = nacos
+                .naming_service
+                .deregister_instance(nacos_service_name, group, nacos_service_instance)
+                .await;
+            if let Err(e) = ret {
+                error!("deregister to nacos occur an error: {:?}", e);
+                return Err(format!("deregister to nacos occur an error: {:?}", e).into());
+            }
+            Ok(())
+        })
+    }
+
     fn subscribe(&self, resource: super::Resource) -> FusenFuture<Result<Directory, crate::Error>> {
         let nacos = self.clone();
         Box::pin(async move {

@@ -1,12 +1,12 @@
 use examples::{DemoServiceClient, ReqDto};
+use fusen_rs::fusen_common::config::get_config_by_file;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_macro::handler;
 use fusen_rs::handler::aspect::Aspect;
 use fusen_rs::handler::loadbalance::LoadBalance;
-use fusen_rs::handler::{HandlerInfo, HandlerLoad};
+use fusen_rs::handler::HandlerLoad;
 use fusen_rs::protocol::socket::InvokerAssets;
-use fusen_rs::register::nacos::NacosConfig;
 use fusen_rs::{fusen_common, FusenApplicationContext};
 use rand::prelude::SliceRandom;
 use std::sync::Arc;
@@ -52,21 +52,22 @@ impl Aspect for ClientLogAspect {
 async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
-        .application_name("fusen-client")
-        .register(
-            NacosConfig::default()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .to_url()
-                .unwrap()
-                .as_str(),
-        )
+        //使用配置文件进行初始化
+        .init(get_config_by_file("examples/client-config.yaml").unwrap())
+        // .application_name("fusen-client")
+        // .register(
+        //     NacosConfig::default()
+        //         .server_addr("127.0.0.1:8848".to_owned())
+        //         .to_url()
+        //         .unwrap()
+        //         .as_str(),
+        // )
+        // .add_handler_info(HandlerInfo::new(
+        //     "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
+        //     vec!["CustomLoadBalance".to_owned(), "ClientLogAspect".to_owned()],
+        // ))
         .add_handler(CustomLoadBalance.load())
         .add_handler(ClientLogAspect.load())
-        //todo! Need to be optimized for configuration
-        .add_handler_info(HandlerInfo::new(
-            "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
-            vec!["CustomLoadBalance".to_owned(), "ClientLogAspect".to_owned()],
-        ))
         .build();
     //直接当HttpClient调用HTTP1 + JSON
     let client = DemoServiceClient::new(Arc::new(
@@ -86,7 +87,7 @@ async fn main() {
         })
         .await;
     info!("rev fusen msg : {:?}", res);
-    // //通过Fusen进行服务注册与发现，并且进行HTTP2+Grpc进行调用
+    // //通过Dubbo进行服务注册与发现，并且进行HTTP2+Grpc进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Dubbo)));
     let res = client
         .sayHelloV2(ReqDto {
@@ -94,7 +95,7 @@ async fn main() {
         })
         .await;
     info!("rev dubbo msg : {:?}", res);
-    //通过SpringCloud进行服务注册与发现，并且进行HTTP2+JSON进行调用
+    //通过SpringCloud进行服务注册与发现，并且进行HTTP+JSON进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::SpringCloud)));
     let res = client
         .sayHelloV2(ReqDto {

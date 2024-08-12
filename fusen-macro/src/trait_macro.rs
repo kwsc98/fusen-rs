@@ -93,7 +93,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                             .path(fusen_rs::fusen_common::Path::new(#methos_type,#methos_path.to_string()))
                             .version(version.map(|e|e.to_string()))
                             .class_name(#id.to_owned())
-                            .method_name(#methos_path.to_string())
+                            .method_name(stringify!(#ident).to_string())
                             .group(group.map(|e|e.to_string())),
                         request,
                         mate_data,

@@ -2,12 +2,12 @@ use crate::codec::http_codec::FusenHttpCodec;
 use crate::filter::server::RpcServerFilter;
 use crate::handler::HandlerContext;
 use crate::protocol::StreamHandler;
+use crate::support::shutdown::Shutdown;
 use fusen_common::server::RpcServer;
 use hyper_util::rt::TokioExecutor;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::signal;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error};
@@ -25,7 +25,11 @@ impl TcpServer {
             fusen_servers,
         }
     }
-    pub async fn run(self, handler_context: Arc<HandlerContext>) -> Receiver<()> {
+    pub async fn run(
+        self,
+        shutdown: Shutdown,
+        handler_context: Arc<HandlerContext>,
+    ) -> Receiver<()> {
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
         let route = Box::leak(Box::new(RpcServerFilter::new(self.fusen_servers)));
         let http_codec = Arc::new(FusenHttpCodec::new(route.get_path_cache()));
@@ -35,9 +39,9 @@ impl TcpServer {
             route,
             http_codec,
             handler_context,
-            shutdown_complete_tx.clone(),
+            shutdown,
+            shutdown_complete_tx,
         ));
-        drop(shutdown_complete_tx);
         shutdown_complete_rx
     }
 
@@ -46,6 +50,7 @@ impl TcpServer {
         route: &'static RpcServerFilter,
         http_codec: Arc<FusenHttpCodec>,
         handler_context: Arc<HandlerContext>,
+        mut shutdown: Shutdown,
         shutdown_complete_tx: mpsc::Sender<()>,
     ) -> crate::Result<()> {
         let notify_shutdown = broadcast::channel(1).0;
@@ -56,7 +61,7 @@ impl TcpServer {
         let builder = Arc::new(builder);
         loop {
             let tcp_stream = tokio::select! {
-                _ = signal::ctrl_c() => {
+                _ = shutdown.recv() => {
                     drop(notify_shutdown);
                     drop(shutdown_complete_tx);
                     return Ok(());

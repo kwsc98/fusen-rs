@@ -24,6 +24,10 @@ impl RpcServerFilter {
                 }
                 hash_cache.insert(
                     Path::new(&method, path).get_key(),
+                    (info.id.to_string(), name.clone()),
+                );
+                hash_cache.insert(
+                    Path::new(&method, format!("/{}/{}", info.id, name.clone())).get_key(),
                     (info.id.to_string(), name),
                 );
             }

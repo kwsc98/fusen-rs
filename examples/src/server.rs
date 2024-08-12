@@ -1,9 +1,9 @@
 use examples::{DemoService, ReqDto, ResDto};
+use fusen_rs::fusen_common::config::get_config_by_file;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_macro::{asset, handler};
 use fusen_rs::handler::aspect::Aspect;
-use fusen_rs::handler::{HandlerInfo, HandlerLoad};
-use fusen_rs::register::nacos::NacosConfig;
+use fusen_rs::handler::HandlerLoad;
 use fusen_rs::{fusen_common, FusenApplicationContext};
 use fusen_rs::{fusen_common::FusenResult, fusen_macro::fusen_server};
 use tracing::info;
@@ -60,25 +60,26 @@ async fn main() {
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    //支持多协议，多注册中心的接口暴露
     FusenApplicationContext::builder()
-        .application_name("fusen-server")
-        //初始化Fusen注册中心,同时支持Dubbo3协议与Fusen协议
-        .register(
-            NacosConfig::default()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .to_url()
-                .unwrap()
-                .as_str(),
-        )
-        //同时兼容RPC协议与HTTP协议
-        .port(8081)
+        //使用配置文件进行初始化
+        .init(get_config_by_file("examples/server-config.yaml").unwrap())
+        // .application_name("fusen-server")
+        // //初始化Fusen注册中心,同时支持Dubbo3协议与Fusen协议
+        // .register(
+        //     NacosConfig::default()
+        //         .server_addr("127.0.0.1:8848".to_owned())
+        //         .to_url()
+        //         .unwrap()
+        //         .as_str(),
+        // )
+        // //同时兼容RPC协议与HTTP协议
+        // .port(Some(8081))
+        // .add_handler_info(HandlerInfo::new(
+        //     "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
+        //     vec!["ServerLogAspect".to_owned()],
+        // ))
         .add_fusen_server(Box::new(server))
         .add_handler(ServerLogAspect.load())
-        .add_handler_info(HandlerInfo::new(
-            "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
-            vec!["ServerLogAspect".to_owned()],
-        ))
         .build()
         .run()
         .await;

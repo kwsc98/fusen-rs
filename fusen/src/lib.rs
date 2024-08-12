@@ -28,7 +28,12 @@ use handler::{aspect::AspectClientFilter, Handler, HandlerContext};
 use register::Register;
 use route::client::Route;
 use server::FusenServer;
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
+use support::shutdown::Shutdown;
+use tokio::{
+    signal::{self},
+    sync::broadcast,
+};
 pub type Error = fusen_common::Error;
 pub type Result<T> = fusen_common::Result<T>;
 pub type FusenFuture<T> = fusen_common::FusenFuture<T>;
@@ -50,7 +55,7 @@ where
 
 #[derive(Default)]
 pub struct FusenApplicationBuilder {
-    port: String,
+    port: Option<String>,
     application_name: String,
     register_config: String,
     handlers: Vec<Handler>,
@@ -64,8 +69,8 @@ impl FusenApplicationBuilder {
         self
     }
 
-    pub fn port(mut self, port: u16) -> Self {
-        self.port = port.to_string();
+    pub fn port(mut self, port: Option<u16>) -> Self {
+        self.port = port.map(|e| e.to_string());
         self
     }
 
@@ -93,6 +98,19 @@ impl FusenApplicationBuilder {
     pub fn add_handler_info(mut self, info: HandlerInfo) -> Self {
         self.handler_infos.push(info);
         self
+    }
+
+    pub fn init(self, config: FusenApplicationConfig) -> Self {
+        let mut builder = self
+            .application_name(config.get_application_name())
+            .port(*config.get_port())
+            .register(config.get_register());
+        if let Some(handler_infos) = config.get_handler_infos() {
+            for handler_info in handler_infos {
+                builder = builder.add_handler_info(handler_info.clone());
+            }
+        }
+        builder
     }
 
     pub fn build(self) -> FusenApplicationContext {
@@ -138,19 +156,6 @@ pub struct FusenApplicationContext {
     server: FusenServer,
 }
 impl FusenApplicationContext {
-    pub fn init(config: FusenApplicationConfig) -> FusenApplicationBuilder {
-        let mut builder = FusenApplicationBuilder::default()
-            .application_name(config.get_application_name())
-            .port(*config.get_port())
-            .register(config.get_register());
-        if let Some(handler_infos) = config.get_handler_infos() {
-            for handler_info in handler_infos {
-                builder = builder.add_handler_info(handler_info.clone());
-            }
-        }
-        builder
-    }
-
     pub fn builder() -> FusenApplicationBuilder {
         FusenApplicationBuilder::default()
     }
@@ -165,7 +170,9 @@ impl FusenApplicationContext {
 
     pub async fn run(mut self) {
         let port = self.server.port.clone();
-        let mut shutdown_complete_rx = self.server.run().await;
+        let (sender, receiver) = broadcast::channel::<()>(1);
+        let shutdown = Shutdown::new(receiver);
+        let mut shutdown_complete_rx = self.server.run(shutdown).await;
         //首先注册server
         let resource = Resource {
             server_name: Default::default(),
@@ -174,10 +181,11 @@ impl FusenApplicationContext {
             version: Default::default(),
             methods: Default::default(),
             host: fusen_common::net::get_ip(),
-            port: Some(port.clone()),
+            port: port.clone(),
             params: MetaData::default().inner,
         };
         let _ = self.register.register(resource).await;
+        let mut resources = vec![];
         //再注册service
         for server in self.server.fusen_servers.values() {
             let info: ServerInfo = server.get_info();
@@ -189,11 +197,25 @@ impl FusenApplicationContext {
                 version: info.version,
                 methods: info.methods,
                 host: fusen_common::net::get_ip(),
-                port: Some(port.clone()),
+                port: port.clone(),
                 params: MetaData::default().inner,
             };
+            resources.push(resource.clone());
             let _ = self.register.register(resource).await;
         }
+        let register = self.register.clone();
+        //如果检测到关机，先注销服务延迟5s后停机
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = signal::ctrl_c() => {
+                    for resource in resources {
+                        let _ = register.deregister(resource).await;
+                    }
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    drop(sender);
+                }
+            }
+        });
         let _ = shutdown_complete_rx.recv().await;
         tracing::info!("fusen server shut");
     }

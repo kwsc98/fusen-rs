@@ -7,15 +7,16 @@ fusen-rust是一个高性能，轻量级的微服务框架，通过使用Rust宏
 
 - :white_check_mark: RPC调用抽象层(Rust宏)
 - :white_check_mark: 多协议支持(HTTP1, HTTP2)
-- :white_check_mark: 服务注册与发现(Nacos, Zookeeper)
+- :white_check_mark: 服务注册与发现(Nacos)
 - :white_check_mark: 微服务生态兼容(Dubbo3, SpringCloud)
 - :white_check_mark: 自定义组件(自定义负载均衡器,Aspect环绕通知组件)
-- :construction: 配置中心(热配置, 本地文件配置, Nacos)
+- :white_check_mark: 配置中心(本地文件配置, Nacos)
+- :white_check_mark: 优雅停机
 - :construction: HTTP3协议支持
 
 ## 快速开始
 
-### Common InterFace
+### Common Interface
 
 ```rust
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -28,8 +29,7 @@ pub struct ResDto {
     pub str: String,
 }
 
-#[fusen_trait(package = "org.apache.dubbo.springboot.demo")]
-#[asset(spring_cloud = "service-provider")]
+#[fusen_trait(id = "org.apache.dubbo.springboot.demo.DemoService")]
 pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
 
@@ -49,7 +49,7 @@ struct DemoServiceImpl {
     _db: String,
 }
 
-#[fusen_server(package = "org.apache.dubbo.springboot.demo")]
+#[fusen_server(id = "org.apache.dubbo.springboot.demo.DemoService")]
 impl DemoService for DemoServiceImpl {
     async fn sayHello(&self, req: String) -> FusenResult<String> {
         info!("res : {:?}", req);
@@ -70,41 +70,17 @@ impl DemoService for DemoServiceImpl {
     }
 }
 
-#[tokio::main(worker_threads = 512)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
     fusen_common::logs::init_log();
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    //支持多协议，多注册中心的接口暴露
     FusenApplicationContext::builder()
-        //初始化Fusen注册中心,同时支持Dubbo3协议与Fusen协议
-        .add_register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("fusen-service".to_owned()))
-                .server_type(Type::Fusen)
-                .build()
-                .boxed(),
-        )
-        //初始化SpringCloud注册中心
-        .add_register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("service-provider".to_owned()))
-                .server_type(Type::SpringCloud)
-                .build()
-                .boxed(),
-        )
-        //同时兼容RPC协议与HTTP协议
-        .add_protocol(Protocol::HTTP("8081".to_owned()))
-        .add_protocol(Protocol::HTTP2("8082".to_owned()))
+        //使用配置文件进行初始化
+        .init(get_config_by_file("examples/server-config.yaml").unwrap())
         .add_fusen_server(Box::new(server))
         .add_handler(ServerLogAspect.load())
-        .add_handler_info(HandlerInfo::new(
-            "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
-            vec!["ServerLogAspect".to_owned()],
-        ))
         .build()
         .run()
         .await;
@@ -114,59 +90,48 @@ async fn main() {
 ### Client
 
 ```rust
-#[tokio::main(worker_threads = 512)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
-        .add_register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("fusen-service".to_owned()))
-                .server_type(Type::Fusen)
-                .build()
-                .boxed(),
-        )
-        .add_register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("service-provider".to_owned()))
-                .server_type(Type::SpringCloud)
-                .build()
-                .boxed(),
-        )
-        .add_register_builder(
-            NacosConfig::builder()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .app_name(Some("dubbo-client".to_owned()))
-                .server_type(Type::Dubbo)
-                .build()
-                .boxed(),
-        )
+        //使用配置文件进行初始化
+        .init(get_config_by_file("examples/client-config.yaml").unwrap())
         .add_handler(CustomLoadBalance.load())
         .add_handler(ClientLogAspect.load())
-        //todo! Need to be optimized for configuration
-        .add_handler_info(HandlerInfo::new(
-            "org.apache.dubbo.springboot.demo.DemoService".to_owned(),
-            vec!["CustomLoadBalance".to_owned(),"ClientLogAspect".to_owned()],
-        ))
         .build();
-    //进行Fusen协议调用HTTP2 + JSON
-    let client = DemoServiceClient::new(context.client(Type::Fusen).unwrap());
+    //直接当HttpClient调用HTTP1 + JSON
+    let client = DemoServiceClient::new(Arc::new(
+        context.client(Type::Host("127.0.0.1:8081".to_string())),
+    ));
+    let res = client
+        .sayHelloV2(ReqDto {
+            str: "world".to_string(),
+        })
+        .await;
+    info!("rev host msg : {:?}", res);
+    //通过Fusen进行服务注册与发现，并且进行HTTP2+JSON进行调用
+    let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
     let res = client
         .sayHelloV2(ReqDto {
             str: "world".to_string(),
         })
         .await;
     info!("rev fusen msg : {:?}", res);
-
-    //进行Dubbo3协议调用HTTP2 + GRPC
-    let client = DemoServiceClient::new(context.client(Type::Dubbo).unwrap());
-    let res = client.sayHello("world".to_string()).await;
-    info!("rev dubbo3 msg : {:?}", res);
-
-    //进行SpringCloud协议调用HTTP1 + JSON
-    let client = DemoServiceClient::new(context.client(Type::SpringCloud).unwrap());
-    let res = client.divideV2(1, 2).await;
+    // //通过Fusen进行服务注册与发现，并且进行HTTP2+Grpc进行调用
+    let client = DemoServiceClient::new(Arc::new(context.client(Type::Dubbo)));
+    let res = client
+        .sayHelloV2(ReqDto {
+            str: "world".to_string(),
+        })
+        .await;
+    info!("rev dubbo msg : {:?}", res);
+    //通过SpringCloud进行服务注册与发现，并且进行HTTP2+JSON进行调用
+    let client = DemoServiceClient::new(Arc::new(context.client(Type::SpringCloud)));
+    let res = client
+        .sayHelloV2(ReqDto {
+            str: "world".to_string(),
+        })
+        .await;
     info!("rev springcloud msg : {:?}", res);
 }
 ```
