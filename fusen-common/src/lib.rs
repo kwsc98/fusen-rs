@@ -4,6 +4,7 @@ use error::FusenError;
 use http::{HeaderMap, HeaderValue};
 use register::Type;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{hash_map::Iter, HashMap};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -143,38 +144,25 @@ impl ContextInfo {
 
 #[derive(Debug)]
 pub struct FusenRequest {
-    pub fields: Vec<String>,
-    pub fields_ty: Option<Vec<String>>,
+    pub query_fields: Option<Vec<(String, String)>>,
+    pub body: Bytes,
 }
 
 impl FusenRequest {
-    pub fn new(fields: Vec<String>, fields_ty: Option<Vec<String>>) -> Self {
-        FusenRequest { fields, fields_ty }
-    }
-    pub fn insert_fields_ty(&mut self, fields_ty: Vec<&'static str>) {
-        let _ = self
-            .fields_ty
-            .insert(fields_ty.iter().fold(vec![], |mut vec, e| {
-                vec.push(e.to_string());
-                vec
-            }));
+    pub fn new(query_fields: Option<Vec<(String, String)>>, body: Bytes) -> Self {
+        FusenRequest { query_fields, body }
     }
     pub fn get_fields(
         &mut self,
         temp_fields_name: Vec<&str>,
         temp_fields_ty: Vec<&str>,
-    ) -> Result<&Vec<String>> {
-        if let Some(fields_name) = &self.fields_ty {
+    ) -> Result<Vec<String>> {
+        let mut new_fields = vec![];
+        if let Some(fields_name) = &self.query_fields {
             let mut hash_map = HashMap::with_capacity(8);
-            for item in fields_name.iter().enumerate() {
-                let _ = hash_map.insert(
-                    item.1.clone(),
-                    self.fields
-                        .get(item.0)
-                        .map_or(Err("fields handler error"), |e| Ok(e.clone()))?,
-                );
+            for item in fields_name.iter() {
+                let _ = hash_map.insert(item.0.clone(), item.1.clone());
             }
-            let mut new_fields = vec![];
             for item in temp_fields_name.iter().enumerate() {
                 let fields = hash_map.get(*item.1).ok_or("fields handler error")?;
                 let mut temp = String::new();
@@ -187,9 +175,12 @@ impl FusenRequest {
                 }
                 new_fields.push(temp);
             }
-            self.fields = new_fields;
-        }
-        Ok(&self.fields)
+        } else if self.body.starts_with(b"[") {
+            new_fields = serde_json::from_slice(&self.body)?;
+        } else {
+            new_fields.push(String::from_utf8(self.body.to_vec())?);
+        } 
+        Ok(new_fields)
     }
 }
 

@@ -201,17 +201,16 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     }
 }
 
-fn get_path(mut path: String, fields_ty: Option<&Vec<String>>, fields: &[String]) -> String {
+fn get_path(mut path: String, query_fields: Option<&Vec<(String, String)>>) -> String {
     if path.contains('{') {
-        return get_rest_path(path, fields_ty, fields);
+        return get_rest_path(path, query_fields);
     }
-    if !fields.is_empty() {
-        let fields_ty = fields_ty.unwrap();
+    if let Some(query_fields) = query_fields {
         path.push('?');
-        for idx in 0..fields.len() {
-            path.push_str(&fields_ty[idx]);
+        for item in query_fields {
+            path.push_str(&item.0);
             path.push('=');
-            path.push_str(&fields[idx]);
+            path.push_str(&item.1);
             path.push('&');
         }
         path.remove(path.len() - 1);
@@ -219,14 +218,11 @@ fn get_path(mut path: String, fields_ty: Option<&Vec<String>>, fields: &[String]
     path
 }
 
-fn get_rest_path(mut path: String, fields_ty: Option<&Vec<String>>, fields: &[String]) -> String {
-    if !fields.is_empty() {
-        let fields_ty = fields_ty.unwrap();
-        for idx in 0..fields.len() {
-            let mut temp = String::from_str("{").unwrap();
-            temp.push_str(&fields_ty[idx]);
-            temp.push('}');
-            path = path.replace(&temp, &fields[idx].replace('\"', ""));
+fn get_rest_path(mut path: String, query_fields: Option<&Vec<(String, String)>>) -> String {
+    if let Some(query_fields) = query_fields {
+        for item in query_fields {
+            let temp = format!("{{{}}}", item.0);
+            path = path.replace(&temp, &item.1.replace('\"', ""));
         }
     }
     path

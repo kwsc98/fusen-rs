@@ -17,7 +17,7 @@ struct TreeNode {
 #[derive(Debug)]
 pub struct QueryResult {
     pub path: String,
-    pub fields: Option<(Vec<String>, Vec<String>)>,
+    pub query_fields: Option<Vec<(String, String)>>,
 }
 
 impl Trie {
@@ -48,8 +48,7 @@ impl Trie {
     }
 
     fn search_by_nodes(path: &str, mut temp: Rc<RefCell<TreeNode>>) -> Option<QueryResult> {
-        let mut fields: Vec<String> = vec![];
-        let mut fields_ty: Vec<String> = vec![];
+        let mut query_fields: Vec<(String, String)> = vec![];
         let paths: Vec<&str> = path.split('/').collect();
         for (idx, item) in paths.iter().enumerate() {
             let res_node = temp.as_ref().borrow().nodes.get(*item).cloned();
@@ -62,22 +61,26 @@ impl Trie {
                     for entry in temp.as_ref().borrow().nodes.iter() {
                         if entry.0.starts_with('{') {
                             if temp_path.is_empty() && entry.1.as_ref().borrow().value.is_some() {
-                                fields.push(item.to_string());
-                                fields_ty.push(entry.0[1..entry.0.len() - 1].to_string());
+                                query_fields.push((
+                                    entry.0[1..entry.0.len() - 1].to_string(),
+                                    item.to_string(),
+                                ));
                                 return Some(QueryResult {
                                     path: entry.1.as_ref().borrow().value.as_ref().unwrap().clone(),
-                                    fields: if fields.is_empty() {
+                                    query_fields: if query_fields.is_empty() {
                                         None
                                     } else {
-                                        Some((fields, fields_ty))
+                                        Some(query_fields)
                                     },
                                 });
                             }
                             if let Some(query_result) =
                                 Self::search_by_nodes(&temp_path, entry.1.clone())
                             {
-                                fields.push(item.to_string());
-                                fields_ty.push(entry.0[1..entry.0.len() - 1].to_string());
+                                query_fields.push((
+                                    entry.0[1..entry.0.len() - 1].to_string(),
+                                    item.to_string(),
+                                ));
                                 if let Some((mut temp_fields, mut temp_fields_ty)) =
                                     query_result.fields
                                 {
