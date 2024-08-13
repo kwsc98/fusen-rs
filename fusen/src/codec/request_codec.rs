@@ -1,4 +1,4 @@
-use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
+use super::{grpc_codec::GrpcBodyCodec, BodyCodec};
 use crate::{
     filter::server::{PathCache, PathCacheResult},
     support::triple::TripleRequestWrapper,
@@ -11,7 +11,7 @@ use fusen_common::{
 };
 use http::{HeaderValue, Request};
 use http_body_util::{BodyExt, Full};
-use std::{convert::Infallible, str::FromStr, sync::Arc};
+use std::{convert::Infallible, sync::Arc};
 
 pub(crate) trait RequestCodec<T, E> {
     fn encode(&self, msg: &FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
@@ -20,11 +20,6 @@ pub(crate) trait RequestCodec<T, E> {
 }
 
 pub struct RequestHandler {
-    json_codec: Box<
-        dyn BodyCodec<bytes::Bytes, EncodeType = Vec<String>, DecodeType = Vec<String>>
-            + Sync
-            + Send,
-    >,
     grpc_codec: Box<
         (dyn BodyCodec<
             bytes::Bytes,
@@ -38,11 +33,9 @@ pub struct RequestHandler {
 
 impl RequestHandler {
     pub fn new(path_cache: Arc<PathCache>) -> Self {
-        let json_codec = JsonBodyCodec::<bytes::Bytes, Vec<String>, Vec<String>>::new();
         let grpc_codec =
             GrpcBodyCodec::<bytes::Bytes, TripleRequestWrapper, TripleRequestWrapper>::new();
         RequestHandler {
-            json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
             path_cache,
         }
@@ -70,27 +63,15 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let request = match context.context_info.path.clone() {
             fusen_common::Path::GET(path) => builder
                 .method("GET")
-                .uri(get_path(
-                    path,
-                    context.request.fields_ty.as_ref(),
-                    &context.request.fields,
-                ))
+                .uri(get_path(path, context.request.query_fields.as_ref()))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::PUT(path) => builder
                 .method("PUT")
-                .uri(get_path(
-                    path,
-                    context.request.fields_ty.as_ref(),
-                    &context.request.fields,
-                ))
+                .uri(get_path(path, context.request.query_fields.as_ref()))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::DELETE(path) => builder
                 .method("DELETE")
-                .uri(get_path(
-                    path,
-                    context.request.fields_ty.as_ref(),
-                    &context.request.fields,
-                ))
+                .uri(get_path(path, context.request.query_fields.as_ref()))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::POST(mut path) => {
                 let body: Bytes = match &context.server_type {
@@ -99,11 +80,11 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                             "/{}/{}",
                             context.context_info.class_name, context.context_info.method_name
                         );
-                        let triple_request_wrapper =
-                            TripleRequestWrapper::from(&context.request.fields);
+                        let fields: Vec<String> = serde_json::from_slice(&context.request.body)?;
+                        let triple_request_wrapper = TripleRequestWrapper::from(fields);
                         self.grpc_codec.encode(&triple_request_wrapper)?
                     }
-                    _ => self.json_codec.encode(&context.request.fields)?,
+                    _ => Bytes::copy_from_slice(&context.request.body),
                 };
                 let builder = builder.header("content-length", body.len());
                 builder
@@ -122,22 +103,18 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let meta_data = MetaData::from(request.headers());
         let path = request.uri().path().to_string();
         let method = request.method().to_string().to_lowercase();
-        let mut temp_fields_ty = None;
-        let mut temp_fields = if method.contains("get") {
+        let mut temp_query_fields_ty: Vec<(String, String)> = vec![];
+        let mut body = BytesMut::new();
+        if method.contains("get") {
             let url = request.uri().to_string();
             let url: Vec<&str> = url.split('?').collect();
-            let mut vec = vec![];
             if url.len() > 1 {
-                let mut tys = vec![];
                 let params: Vec<&str> = url[1].split('&').collect();
                 for item in params {
                     let item: Vec<&str> = item.split('=').collect();
-                    tys.push(item[0].to_owned());
-                    vec.push(item[1].to_owned());
+                    temp_query_fields_ty.push((item[0].to_owned(), item[1].to_owned()));
                 }
-                let _ = temp_fields_ty.insert(tys);
             }
-            vec
         } else {
             let mut bytes = BytesMut::new();
             while let Some(Ok(frame)) = request.body_mut().frame().await {
@@ -148,17 +125,16 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             let bytes: Bytes = bytes.into();
             match meta_data.get_codec() {
                 fusen_common::codec::CodecType::JSON => {
-                    if !bytes.starts_with(b"[") {
-                        vec![String::from_utf8_lossy(bytes.as_ref()).to_string()]
-                    } else {
-                        self.json_codec.decode(&bytes).map_err(FusenError::from)?
-                    }
+                    body.extend_from_slice(&bytes);
                 }
-                fusen_common::codec::CodecType::GRPC => self
-                    .grpc_codec
-                    .decode(&bytes)
-                    .map_err(FusenError::from)?
-                    .get_req(),
+                fusen_common::codec::CodecType::GRPC => {
+                    let bytes = self
+                        .grpc_codec
+                        .decode(&bytes)
+                        .map_err(FusenError::from)?
+                        .get_body();
+                    body.extend_from_slice(&bytes);
+                }
             }
         };
         let unique_identifier = meta_data
@@ -178,14 +154,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .seach(&mut path)
             .ok_or(FusenError::NotFind)?;
         if let Some(mut fields) = fields {
-            temp_fields.append(&mut fields.0);
-            temp_fields_ty = match temp_fields_ty {
-                Some(mut temp_fields_ty) => {
-                    temp_fields_ty.append(&mut fields.1);
-                    Some(temp_fields_ty)
-                }
-                None => Some(fields.1),
-            }
+            temp_query_fields_ty.append(&mut fields);
         }
         let context = FusenContext::new(
             unique_identifier,
@@ -194,7 +163,14 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method_name(method)
                 .path(path)
                 .version(version),
-            FusenRequest::new(temp_fields, temp_fields_ty),
+            FusenRequest::new(
+                if temp_query_fields_ty.is_empty() {
+                    None
+                } else {
+                    Some(temp_query_fields_ty)
+                },
+                body.into(),
+            ),
             meta_data,
         );
         Ok(context)

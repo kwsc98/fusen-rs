@@ -77,7 +77,7 @@ pub struct PathCache {
 pub struct PathCacheResult {
     pub class: String,
     pub method: String,
-    pub fields: Option<(Vec<String>, Vec<String>)>,
+    pub fields: Option<Vec<(String, String)>>,
 }
 
 impl PathCache {
@@ -94,7 +94,7 @@ impl PathCache {
                 Some(PathCacheResult {
                     class: data.0.clone(),
                     method: data.1.clone(),
-                    fields: rest_data.fields,
+                    fields: rest_data.query_fields,
                 })
             } else {
                 None

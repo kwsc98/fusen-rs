@@ -1,10 +1,9 @@
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use codec::CodecType;
 use error::FusenError;
 use http::{HeaderMap, HeaderValue};
 use register::Type;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::{hash_map::Iter, HashMap};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -149,6 +148,23 @@ pub struct FusenRequest {
 }
 
 impl FusenRequest {
+    pub fn new_for_client(method: &str, fields_ty: Vec<String>, bodys: Vec<String>) -> Self {
+        let mut query_fields = None;
+        let mut bytes = BytesMut::new();
+        if method.to_lowercase().as_str() != "post" {
+            let mut vec = vec![];
+            for (idx, body) in bodys.into_iter().enumerate() {
+                vec.push((fields_ty[idx].to_owned(), body));
+            }
+            let _ = query_fields.insert(vec);
+        } else {
+            bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
+        }
+        FusenRequest {
+            query_fields,
+            body: bytes.into(),
+        }
+    }
     pub fn new(query_fields: Option<Vec<(String, String)>>, body: Bytes) -> Self {
         FusenRequest { query_fields, body }
     }
@@ -179,7 +195,7 @@ impl FusenRequest {
             new_fields = serde_json::from_slice(&self.body)?;
         } else {
             new_fields.push(String::from_utf8(self.body.to_vec())?);
-        } 
+        }
         Ok(new_fields)
     }
 }

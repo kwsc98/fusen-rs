@@ -81,18 +81,15 @@ impl Trie {
                                     entry.0[1..entry.0.len() - 1].to_string(),
                                     item.to_string(),
                                 ));
-                                if let Some((mut temp_fields, mut temp_fields_ty)) =
-                                    query_result.fields
-                                {
-                                    fields.append(&mut temp_fields);
-                                    fields_ty.append(&mut temp_fields_ty);
+                                if let Some(mut temp_query_fields) = query_result.query_fields {
+                                    query_fields.append(&mut temp_query_fields);
                                 }
                                 return Some(QueryResult {
                                     path: query_result.path,
-                                    fields: if fields.is_empty() {
+                                    query_fields: if query_fields.is_empty() {
                                         None
                                     } else {
-                                        Some((fields, fields_ty))
+                                        Some(query_fields)
                                     },
                                 });
                             }
@@ -108,10 +105,10 @@ impl Trie {
             .as_ref()
             .map(|path| QueryResult {
                 path: path.clone(),
-                fields: if fields.is_empty() {
+                query_fields: if query_fields.is_empty() {
                     None
                 } else {
-                    Some((fields, fields_ty))
+                    Some(query_fields)
                 },
             })
     }

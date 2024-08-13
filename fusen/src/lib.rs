@@ -65,7 +65,7 @@ pub struct FusenApplicationBuilder {
 
 impl FusenApplicationBuilder {
     pub fn application_name(mut self, application_name: &str) -> Self {
-        self.application_name = application_name.to_owned();
+        application_name.clone_into(&mut self.application_name);
         self
     }
 

@@ -86,7 +86,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let version : Option<&str> = #version;
                     let group : Option<&str> = #group;
                     let mut mate_data = fusen_rs::fusen_common::MetaData::new();
-                    let mut request = fusen_rs::fusen_common::FusenRequest::new(req_vec,Some(fields_ty));
+                    let mut request = fusen_rs::fusen_common::FusenRequest::new_for_client(#methos_type,fields_ty,req_vec);
                     let mut context = fusen_rs::fusen_common::FusenContext::new(
                         fusen_rs::fusen_common::logs::get_uuid(),
                         fusen_rs::fusen_common::ContextInfo::default()

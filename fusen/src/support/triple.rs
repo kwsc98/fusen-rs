@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use prost::Message;
 
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -36,7 +37,7 @@ pub struct TripleExceptionWrapper {
 }
 
 impl TripleRequestWrapper {
-    pub fn from(strs: &Vec<String>) -> Self {
+    pub fn from(strs: Vec<String>) -> Self {
         let mut trip = TripleRequestWrapper {
             serialize_type: "fastjson".to_string(),
             args: Default::default(),
@@ -48,12 +49,12 @@ impl TripleRequestWrapper {
         }
         trip
     }
-    pub fn get_req(self) -> Vec<String> {
+    pub fn get_body(self) -> Bytes {
         let mut res = vec![];
         for str in self.args {
             res.push(String::from_utf8(str).unwrap());
         }
-        res
+        Bytes::copy_from_slice(serde_json::to_string(&res).unwrap().as_bytes())
     }
 }
 
