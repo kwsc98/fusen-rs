@@ -7,8 +7,8 @@ use fusen_rs::handler::aspect::Aspect;
 use fusen_rs::handler::loadbalance::LoadBalance;
 use fusen_rs::handler::HandlerLoad;
 use fusen_rs::protocol::socket::InvokerAssets;
+use fusen_rs::register::ResourceInfo;
 use fusen_rs::{fusen_common, FusenApplicationContext};
-use rand::prelude::SliceRandom;
 use std::sync::Arc;
 use tracing::info;
 
@@ -18,12 +18,11 @@ struct CustomLoadBalance;
 impl LoadBalance for CustomLoadBalance {
     async fn select(
         &self,
-        invokers: Vec<Arc<InvokerAssets>>,
+        invokers: Arc<ResourceInfo>,
     ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
         invokers
-            .choose(&mut rand::thread_rng())
-            .ok_or(fusen_rs::Error::from("not find server : CustomLoadBalance"))
-            .cloned()
+            .select()
+            .ok_or("not find server : CustomLoadBalance".into())
     }
 }
 

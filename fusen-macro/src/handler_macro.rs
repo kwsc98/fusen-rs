@@ -30,7 +30,7 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                 impl fusen_rs::handler::loadbalance::LoadBalance_ for #item_self {
                     fn select_(
                         &'static self,
-                        invokers: Vec<std::sync::Arc<fusen_rs::protocol::socket::InvokerAssets>>,
+                        invokers: std::sync::Arc<fusen_rs::register::ResourceInfo>,
                     ) -> fusen_rs::fusen_common::FusenFuture<Result<std::sync::Arc<fusen_rs::protocol::socket::InvokerAssets>, fusen_rs::Error>> {
                         Box::pin(async move {
                            self.select(invokers).await
@@ -58,9 +58,12 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
             },
         ),
         _ => {
-            return syn::Error::new_spanned(trait_ident, "handler must impl 'LoadBalance', 'Aspect'")
-                .into_compile_error()
-                .into()
+            return syn::Error::new_spanned(
+                trait_ident,
+                "handler must impl 'LoadBalance', 'Aspect'",
+            )
+            .into_compile_error()
+            .into()
         }
     };
     quote!(

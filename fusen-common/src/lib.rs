@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use codec::CodecType;
 use error::FusenError;
 use http::{HeaderMap, HeaderValue};
@@ -10,6 +11,7 @@ pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 pub type FusenResult<T> = std::result::Result<T, FusenError>;
 pub mod codec;
+pub mod config;
 pub mod date_util;
 pub mod error;
 pub mod logs;
@@ -19,7 +21,6 @@ pub mod register;
 pub mod server;
 pub mod trie;
 pub mod url;
-pub mod config;
 
 #[derive(Debug)]
 pub struct MetaData {
@@ -76,7 +77,10 @@ impl Default for MetaData {
     fn default() -> Self {
         let mut inner = HashMap::new();
         inner.insert("prefer.serialization".to_owned(), "fastjson".to_owned());
-        inner.insert("preserved.register.source".to_owned(), "SPRING_CLOUD".to_owned());
+        inner.insert(
+            "preserved.register.source".to_owned(),
+            "SPRING_CLOUD".to_owned(),
+        );
         inner.insert("protocol".to_owned(), "tri".to_owned());
         Self { inner }
     }
@@ -191,7 +195,7 @@ impl FusenRequest {
 
 #[derive(Debug)]
 pub struct FusenResponse {
-    pub response: std::result::Result<String, FusenError>,
+    pub response: std::result::Result<Bytes, FusenError>,
     pub response_ty: Option<&'static str>,
 }
 

@@ -58,13 +58,13 @@ impl TripleRequestWrapper {
 }
 
 impl TripleResponseWrapper {
-    pub fn form(strs: &[u8]) -> Self {
+    pub fn form(data: Vec<u8>) -> Self {
         let mut trip = TripleResponseWrapper {
             serialize_type: "fastjson".to_string(),
             data: Default::default(),
             r#type: Default::default(),
         };
-        trip.data = strs.to_vec();
+        trip.data = data;
         trip
     }
     pub fn is_empty_body(&self) -> bool {

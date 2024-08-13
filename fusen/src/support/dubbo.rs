@@ -98,6 +98,7 @@ fn get_info(mut url: &str) -> crate::Result<Resource> {
             }),
         host: path.0,
         port: path.1,
+        weight: None,
         params: HashMap::new(),
     };
     Ok(info)

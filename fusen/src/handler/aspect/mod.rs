@@ -76,16 +76,15 @@ impl FusenFilter for AspectClientFilter {
             let handler_controller = self
                 .handle_context
                 .get_controller(&context.context_info.get_handler_key());
-            let resource_info: ResourceInfo = self
+            let resource_info: Arc<ResourceInfo> = self
                 .route
                 .get_server_resource(&context)
                 .await
                 .map_err(|e| FusenError::Info(e.to_string()))?;
-            let ResourceInfo { socket } = resource_info;
             let socket = handler_controller
                 .as_ref()
                 .get_load_balance()
-                .select_(socket)
+                .select_(resource_info)
                 .await?;
             let request = self.request_handle.encode(&context)?;
             let response: http::Response<hyper::body::Incoming> =

@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 #[derive(Clone)]
 pub struct Route {
-    register: Arc<Box<dyn Register>>,
+    register: Option<Arc<Box<dyn Register>>>,
     sender: UnboundedSender<(RouteSender, oneshot::Sender<RouteReceiver>)>,
 }
 
@@ -25,7 +25,7 @@ pub enum RouteReceiver {
 }
 
 impl Route {
-    pub fn new(register: Arc<Box<dyn Register>>) -> Self {
+    pub fn new(register: Option<Arc<Box<dyn Register>>>) -> Self {
         let (s, mut r) = mpsc::unbounded_channel::<(RouteSender, oneshot::Sender<RouteReceiver>)>();
         tokio::spawn(async move {
             let mut cache = HashMap::<String, Directory>::new();
@@ -48,7 +48,10 @@ impl Route {
     }
 
     #[async_recursion]
-    pub async fn get_server_resource(&self, context: &FusenContext) -> crate::Result<ResourceInfo> {
+    pub async fn get_server_resource(
+        &self,
+        context: &FusenContext,
+    ) -> crate::Result<Arc<ResourceInfo>> {
         let name = &context.context_info.class_name;
         let version = context.context_info.version.as_ref();
         let mut key = name.to_owned();
@@ -77,6 +80,7 @@ impl Route {
                         methods: vec![],
                         host: fusen_common::net::get_ip(),
                         port: None,
+                        weight: None,
                         params: context.meta_data.clone_map(),
                     };
                     let directory =
@@ -90,12 +94,15 @@ impl Route {
                                 methods: vec![],
                                 host: host.clone(),
                                 port: None,
+                                weight: None,
                                 params: HashMap::new(),
                             };
                             let _ = directory.change(vec![resource_server]).await;
                             directory
+                        } else if let Some(register) = &self.register {
+                            register.subscribe(resource_server).await?
                         } else {
-                            self.register.subscribe(resource_server).await?
+                            return Err("must set register".into());
                         };
                     let oneshot = oneshot::channel();
                     self.sender

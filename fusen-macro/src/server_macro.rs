@@ -87,7 +87,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                 ).await;
                 param.response.response = match res {
                     Ok(res) => {
-                        let res = serde_json::to_string(&res);
+                        let res = fusen_rs::fusen_common::codec::object_to_bytes(&res);
                         match res {
                             Ok(res) => Ok(res),
                             Err(err) => Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()))

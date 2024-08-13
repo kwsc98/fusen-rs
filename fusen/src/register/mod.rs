@@ -1,6 +1,8 @@
 use self::nacos::FusenNacos;
 use crate::protocol::socket::{InvokerAssets, Socket};
 use fusen_common::{net::get_path, register::RegisterType, FusenFuture, MethodResource};
+use fusen_macro::Data;
+use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{
@@ -45,6 +47,7 @@ pub struct Resource {
     pub methods: Vec<MethodResource>,
     pub host: String,
     pub port: Option<String>,
+    pub weight: Option<f64>,
     pub params: HashMap<String, String>,
 }
 
@@ -81,7 +84,7 @@ pub enum DirectorySender {
 }
 
 pub enum DirectoryReceiver {
-    GET(Vec<Arc<InvokerAssets>>),
+    GET(Arc<ResourceInfo>),
     CHANGE,
 }
 
@@ -90,9 +93,40 @@ pub struct Directory {
     sender: UnboundedSender<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct ResourceInfo {
-    pub socket: Vec<Arc<InvokerAssets>>,
+    dist: Option<WeightedIndex<f64>>,
+    sockets: Vec<Arc<InvokerAssets>>,
+}
+
+impl ResourceInfo {
+    pub fn new(sockets: Vec<Arc<InvokerAssets>>) -> Self {
+        if sockets.is_empty() {
+            Self {
+                sockets,
+                dist: None,
+            }
+        } else {
+            let weights: Vec<f64> = sockets
+                .iter()
+                .map(|s| s.resource.weight.map_or(1_f64, |e| e))
+                .collect();
+            let dist = WeightedIndex::new(weights).unwrap();
+            Self {
+                sockets,
+                dist: Some(dist),
+            }
+        }
+    }
+
+    pub fn select(&self) -> Option<Arc<InvokerAssets>> {
+        self.dist.as_ref().map(|e| {
+            self.sockets
+                .get(e.sample(&mut thread_rng()))
+                .cloned()
+                .unwrap()
+        })
+    }
 }
 
 impl Directory {
@@ -100,22 +134,26 @@ impl Directory {
         let (s, mut r) =
             mpsc::unbounded_channel::<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>();
         tokio::spawn(async move {
-            let mut cache: Vec<Arc<InvokerAssets>> = vec![];
+            let mut cache: Arc<ResourceInfo> = Arc::new(ResourceInfo::new(vec![]));
             while let Some(msg) = r.recv().await {
                 match msg.0 {
                     DirectorySender::GET => {
                         let _ = msg.1.send(DirectoryReceiver::GET(cache.clone()));
                     }
                     DirectorySender::CHANGE(resources) => {
-                        let map = cache.iter().fold(HashMap::new(), |mut map, e| {
-                            let key = get_path(e.resource.host.clone(), e.resource.port.as_deref());
-                            map.insert(key, e.clone());
-                            map
-                        });
+                        let map = cache
+                            .get_sockets()
+                            .iter()
+                            .fold(HashMap::new(), |mut map, e| {
+                                let key =
+                                    get_path(e.resource.host.clone(), e.resource.port.as_deref());
+                                map.insert(format!("{}-{:?}", key, e.resource.weight), e.clone());
+                                map
+                            });
                         let mut res = vec![];
                         for item in resources {
                             let key = get_path(item.host.clone(), item.port.as_deref());
-                            res.push(match map.get(&key) {
+                            res.push(match map.get(&format!("{}-{:?}", key, item.weight)) {
                                 Some(info) => info.clone(),
                                 None => Arc::new(InvokerAssets {
                                     resource: item,
@@ -127,7 +165,7 @@ impl Directory {
                                 }),
                             });
                         }
-                        cache = res;
+                        cache = Arc::new(ResourceInfo::new(res));
                         let _ = msg.1.send(DirectoryReceiver::CHANGE);
                     }
                 }
@@ -136,12 +174,12 @@ impl Directory {
         Self { sender: s }
     }
 
-    pub async fn get(&self) -> Result<ResourceInfo, crate::Error> {
+    pub async fn get(&self) -> Result<Arc<ResourceInfo>, crate::Error> {
         let oneshot = oneshot::channel();
         let _ = self.sender.send((DirectorySender::GET, oneshot.0));
         let rev = oneshot.1.await.map_err(|e| e.to_string())?;
         match rev {
-            DirectoryReceiver::GET(rev) => Ok(ResourceInfo { socket: rev }),
+            DirectoryReceiver::GET(rev) => Ok(rev),
             DirectoryReceiver::CHANGE => Err("err receiver".into()),
         }
     }

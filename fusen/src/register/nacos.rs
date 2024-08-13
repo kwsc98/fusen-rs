@@ -178,6 +178,7 @@ fn to_resources(service_instances: Vec<ServiceInstance>) -> Vec<Resource> {
             methods: vec![],
             host: e.ip().to_string(),
             port: Some(e.port().to_string()),
+            weight: Some(e.weight),
             params: e.metadata().clone(),
         };
         vec.push(resource);
