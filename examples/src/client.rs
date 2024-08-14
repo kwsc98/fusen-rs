@@ -88,7 +88,7 @@ async fn main() {
         .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev dubbo msg : {:?}", res);
-    //通过SpringCloud进行服务注册与发现，并且进行HTTP+JSON进行调用
+    //通过SpringCloud进行服务注册与发现，并且进行HTTP1+JSON进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::SpringCloud)));
     let res = client
         .sayHelloV2(ReqDto::default().str("world".to_string()))
