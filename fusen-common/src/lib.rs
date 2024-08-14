@@ -202,9 +202,6 @@ impl FusenResponse {
     pub fn insert_return_ty(&mut self, ty: &'static str) {
         let _ = self.response_ty.insert(ty);
     }
-    pub fn set_response(&mut self, response: std::result::Result<Bytes, FusenError>) {
-        self.response = response
-    }
     pub fn into_response(self) -> std::result::Result<Bytes, FusenError> {
         self.response
     }
@@ -238,12 +235,6 @@ impl FusenContext {
     }
     pub fn insert_server_type(&mut self, server_tyep: Type) {
         self.server_type = server_tyep
-    }
-    pub fn get_mut_response(&mut self) -> &mut FusenResponse {
-        &mut self.response
-    }
-    pub fn get_mut_request(&mut self) -> &mut FusenRequest {
-        &mut self.request
     }
     pub fn into_response(self) -> FusenResponse {
         self.response
