@@ -1,11 +1,11 @@
 use examples::{DemoService, ReqDto, ResDto};
 use fusen_rs::fusen_common::config::get_config_by_file;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
-use fusen_rs::fusen_macro::{asset, handler};
+use fusen_rs::fusen_procedural_macro::{asset, handler};
 use fusen_rs::handler::aspect::Aspect;
 use fusen_rs::handler::HandlerLoad;
 use fusen_rs::{fusen_common, FusenApplicationContext};
-use fusen_rs::{fusen_common::FusenResult, fusen_macro::fusen_server};
+use fusen_rs::{fusen_common::FusenResult, fusen_procedural_macro::fusen_server};
 use tracing::info;
 
 struct ServerLogAspect;
@@ -43,9 +43,7 @@ impl DemoService for DemoServiceImpl {
     #[asset(path="/sayHelloV2-http",method = POST)]
     async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
         info!("res : {:?}", req);
-        Ok(ResDto {
-            str: "Hello ".to_owned() + &req.str + " V2",
-        })
+        Ok(ResDto::default().str("Hello ".to_owned() + req.get_str() + " V2"))
     }
     #[asset(path="/divide",method = GET)]
     async fn divideV2(&self, a: i32, b: i32) -> FusenResult<String> {

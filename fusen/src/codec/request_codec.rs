@@ -47,44 +47,55 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         &self,
         context: &FusenContext,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
-        let content_type = match &context.server_type {
+        let content_type = match context.get_server_type() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
         };
         let mut builder = Request::builder()
             .header("content-type", content_type.0)
             .header("connection", "keep-alive");
-        if let Some(version) = &context.context_info.version {
+        if let Some(version) = context.get_context_info().get_version() {
             builder
                 .headers_mut()
                 .unwrap()
                 .insert(content_type.1, HeaderValue::from_str(version).unwrap());
         }
-        let request = match context.context_info.path.clone() {
+        let request = match context.get_context_info().get_path().clone() {
             fusen_common::Path::GET(path) => builder
                 .method("GET")
-                .uri(get_path(path, context.request.query_fields.as_ref()))
+                .uri(get_path(
+                    path,
+                    context.get_request().get_query_fields().as_ref(),
+                ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::PUT(path) => builder
                 .method("PUT")
-                .uri(get_path(path, context.request.query_fields.as_ref()))
+                .uri(get_path(
+                    path,
+                    context.get_request().get_query_fields().as_ref(),
+                ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::DELETE(path) => builder
                 .method("DELETE")
-                .uri(get_path(path, context.request.query_fields.as_ref()))
+                .uri(get_path(
+                    path,
+                    context.get_request().get_query_fields().as_ref(),
+                ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::POST(mut path) => {
-                let body: Bytes = match &context.server_type {
+                let body: Bytes = match context.get_server_type() {
                     &Type::Dubbo => {
                         path = format!(
                             "/{}/{}",
-                            context.context_info.class_name, context.context_info.method_name
+                            context.get_context_info().get_class_name(),
+                            context.get_context_info().get_method_name()
                         );
-                        let fields: Vec<String> = serde_json::from_slice(&context.request.body)?;
+                        let fields: Vec<String> =
+                            serde_json::from_slice(context.get_request().get_body())?;
                         let triple_request_wrapper = TripleRequestWrapper::from(fields);
                         self.grpc_codec.encode(&triple_request_wrapper)?
                     }
-                    _ => Bytes::copy_from_slice(&context.request.body),
+                    _ => Bytes::copy_from_slice(context.get_request().get_body()),
                 };
                 let builder = builder.header("content-length", body.len());
                 builder

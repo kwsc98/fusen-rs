@@ -1,7 +1,7 @@
 use self::nacos::FusenNacos;
 use crate::protocol::socket::{InvokerAssets, Socket};
 use fusen_common::{net::get_path, register::RegisterType, FusenFuture, MethodResource};
-use fusen_macro::Data;
+use fusen_procedural_macro::Data;
 use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -38,17 +38,17 @@ impl RegisterBuilder {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Data, Default)]
 pub struct Resource {
-    pub server_name: String,
-    pub category: Category,
-    pub group: Option<String>,
-    pub version: Option<String>,
-    pub methods: Vec<MethodResource>,
-    pub host: String,
-    pub port: Option<String>,
-    pub weight: Option<f64>,
-    pub params: HashMap<String, String>,
+    server_name: String,
+    category: Category,
+    group: Option<String>,
+    version: Option<String>,
+    methods: Vec<MethodResource>,
+    host: String,
+    port: Option<String>,
+    weight: Option<f64>,
+    params: HashMap<String, String>,
 }
 
 impl Resource {
@@ -62,8 +62,9 @@ impl Resource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub enum Category {
+    #[default]
     Client,
     Server,
     Service,
@@ -109,7 +110,7 @@ impl ResourceInfo {
         } else {
             let weights: Vec<f64> = sockets
                 .iter()
-                .map(|s| s.resource.weight.map_or(1_f64, |e| e))
+                .map(|s| s.get_resource().get_weight().map_or(1_f64, |e| e))
                 .collect();
             let dist = WeightedIndex::new(weights).unwrap();
             Self {
@@ -145,9 +146,14 @@ impl Directory {
                             .get_sockets()
                             .iter()
                             .fold(HashMap::new(), |mut map, e| {
-                                let key =
-                                    get_path(e.resource.host.clone(), e.resource.port.as_deref());
-                                map.insert(format!("{}-{:?}", key, e.resource.weight), e.clone());
+                                let key = get_path(
+                                    e.get_resource().get_host().clone(),
+                                    e.get_resource().get_port().as_deref(),
+                                );
+                                map.insert(
+                                    format!("{}-{:?}", key, e.get_resource().get_weight()),
+                                    e.clone(),
+                                );
                                 map
                             });
                         let mut res = vec![];
@@ -155,14 +161,14 @@ impl Directory {
                             let key = get_path(item.host.clone(), item.port.as_deref());
                             res.push(match map.get(&format!("{}-{:?}", key, item.weight)) {
                                 Some(info) => info.clone(),
-                                None => Arc::new(InvokerAssets {
-                                    resource: item,
-                                    socket: Socket::new(if let Category::Service = category {
+                                None => Arc::new(InvokerAssets::new(
+                                    item,
+                                    Socket::new(if let Category::Service = category {
                                         Some("http2")
                                     } else {
                                         None
                                     }),
-                                }),
+                                )),
                             });
                         }
                         cache = Arc::new(ResourceInfo::new(res));

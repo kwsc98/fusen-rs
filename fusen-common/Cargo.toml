@@ -8,6 +8,7 @@ description.workspace = true
 
 
 [dependencies]
+fusen-procedural-macro.workspace = true
 #网络协议处理
 tokio.workspace = true
 http-body-util.workspace = true

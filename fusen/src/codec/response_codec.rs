@@ -45,28 +45,30 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
         &self,
         context: FusenContext,
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, crate::Error> {
-        let meta_data = &context.meta_data;
+        let meta_data = context.get_meta_data();
         let content_type = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => "application/json",
             fusen_common::codec::CodecType::GRPC => "application/grpc",
         };
         let body = match meta_data.get_codec() {
-            fusen_common::codec::CodecType::JSON => vec![match context.response.response {
-                Ok(res) => Frame::data(res),
-                Err(err) => {
-                    if let FusenError::Null = err {
-                        Frame::data(bytes::Bytes::from("null"))
-                    } else {
-                        return Err(crate::Error::from(err.to_string()));
+            fusen_common::codec::CodecType::JSON => {
+                vec![match context.into_response().into_response() {
+                    Ok(res) => Frame::data(res),
+                    Err(err) => {
+                        if let FusenError::Null = err {
+                            Frame::data(bytes::Bytes::from("null"))
+                        } else {
+                            return Err(crate::Error::from(err.to_string()));
+                        }
                     }
-                }
-            }],
+                }]
+            }
             fusen_common::codec::CodecType::GRPC => {
                 let mut status = "0";
                 let mut message = String::from("success");
                 let mut trailers = HeaderMap::new();
                 let mut vec = vec![];
-                match context.response.response {
+                match context.into_response().into_response() {
                     Ok(data) => {
                         let res_wrapper = TripleResponseWrapper::form(data.into());
                         let buf = self

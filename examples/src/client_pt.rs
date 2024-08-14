@@ -25,9 +25,7 @@ async fn main() {
         context.client(Type::Fusen),
     ))));
     let _ = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let start_time = get_now_date_time_as_millis();
@@ -43,9 +41,7 @@ async fn main() {
 async fn do_run(send: mpsc::Sender<i32>, client: &'static DemoServiceClient) {
     for _ in 0..1000000 {
         let res = client
-            .sayHelloV2(ReqDto {
-                str: "world".to_string(),
-            })
+            .sayHelloV2(ReqDto::default().str("world".to_string()))
             .await;
         if let Err(err) = res {
             info!("{:?}", err);

@@ -9,7 +9,7 @@ description.workspace = true
 
 [dependencies]
 fusen-common.workspace = true
-fusen-macro.workspace = true
+fusen-procedural-macro.workspace = true
 
 
 #网络协议处理

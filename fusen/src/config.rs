@@ -1,4 +1,4 @@
-use fusen_macro::Data;
+use fusen_procedural_macro::Data;
 use serde::{Deserialize, Serialize};
 
 use crate::handler::HandlerInfo;

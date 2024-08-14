@@ -75,7 +75,7 @@ impl FusenFilter for AspectClientFilter {
         Box::pin(async move {
             let handler_controller = self
                 .handle_context
-                .get_controller(&context.context_info.get_handler_key());
+                .get_controller(&context.get_context_info().get_handler_key());
             let resource_info: Arc<ResourceInfo> = self
                 .route
                 .get_server_resource(&context)
@@ -93,7 +93,7 @@ impl FusenFilter for AspectClientFilter {
                 .response_handle
                 .decode(response.map(|e| e.boxed()))
                 .await;
-            context.response.response = res;
+            context.get_mut_response().set_response(res);
             Ok(context)
         })
     }

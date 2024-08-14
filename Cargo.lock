@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "examples"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -424,9 +424,10 @@ dependencies = [
 
 [[package]]
 name = "fusen-common"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "bytes",
+ "fusen-procedural-macro",
  "http 1.1.0",
  "http-body-util",
  "hyper 1.4.1",
@@ -447,10 +448,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "fusen-macro"
-version = "0.6.3"
+name = "fusen-derive-macro"
+version = "0.6.4"
+
+[[package]]
+name = "fusen-procedural-macro"
+version = "0.6.4"
 dependencies = [
- "fusen-common",
+ "fusen-derive-macro",
  "proc-macro2",
  "quote",
  "serde",
@@ -460,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-rs"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -468,7 +473,7 @@ dependencies = [
  "bzip2",
  "flate2",
  "fusen-common",
- "fusen-macro",
+ "fusen-procedural-macro",
  "futures",
  "futures-util",
  "h2 0.4.5",

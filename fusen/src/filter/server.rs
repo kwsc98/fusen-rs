@@ -1,7 +1,9 @@
 use super::FusenFilter;
 use fusen_common::{
-    error::FusenError, server::RpcServer, trie::Trie, FusenContext, FusenFuture, MethodResource,
-    Path,
+    error::FusenError,
+    server::RpcServer,
+    trie::{QueryResult, Trie},
+    FusenContext, FusenFuture, Path,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -17,18 +19,20 @@ impl RpcServerFilter {
         let mut rest_trie = Trie::default();
         for item in &cache {
             let info = item.1.get_info();
-            for method in info.methods {
-                let MethodResource { path, name, method } = method;
+            for method in info.get_methods() {
+                let path = method.get_path().clone();
+                let name = method.get_name().clone();
+                let method = method.get_method().clone();
                 if path.contains('{') {
                     rest_trie.insert(path.clone());
                 }
                 hash_cache.insert(
                     Path::new(&method, path).get_key(),
-                    (info.id.to_string(), name.clone()),
+                    (info.get_id().to_string(), name.clone()),
                 );
                 hash_cache.insert(
-                    Path::new(&method, format!("/{}/{}", info.id, name.clone())).get_key(),
-                    (info.id.to_string(), name),
+                    Path::new(&method, format!("/{}/{}", info.get_id(), name.clone())).get_key(),
+                    (info.get_id().to_string(), name),
                 );
             }
         }
@@ -45,9 +49,9 @@ impl RpcServerFilter {
     }
 
     pub fn get_server(&self, context: &mut FusenContext) -> Option<&'static dyn RpcServer> {
-        let context_info = &context.context_info;
-        let mut class_name = context_info.class_name.clone();
-        if let Some(version) = &context_info.version {
+        let context_info = context.get_context_info();
+        let mut class_name = context_info.get_class_name().clone();
+        if let Some(version) = context_info.get_version() {
             class_name.push(':');
             class_name.push_str(version);
         }
@@ -61,7 +65,9 @@ impl FusenFilter for RpcServerFilter {
         match server {
             Some(server) => Box::pin(async move { Ok(server.invoke(context).await) }),
             None => Box::pin(async move {
-                context.response.response = Err(FusenError::NotFind);
+                context
+                    .get_mut_response()
+                    .set_response(Err(FusenError::NotFind));
                 Ok(context)
             }),
         }
@@ -81,24 +87,23 @@ pub struct PathCacheResult {
 }
 
 impl PathCache {
-    pub fn seach(&self, path: &mut Path) -> Option<PathCacheResult> {
-        if let Some(data) = self.path_cache.get(&path.get_key()) {
+    pub fn seach(&self, mut_path: &mut Path) -> Option<PathCacheResult> {
+        if let Some(data) = self.path_cache.get(&mut_path.get_key()) {
             Some(PathCacheResult {
                 class: data.0.clone(),
                 method: data.1.clone(),
                 fields: None,
             })
-        } else if let Some(rest_data) = self.rest_trie.search(&path.get_path()) {
-            path.update_path(rest_data.path);
-            if let Some(data) = self.path_cache.get(&path.get_key()) {
-                Some(PathCacheResult {
+        } else if let Some(rest_data) = self.rest_trie.search(&mut_path.get_path()) {
+            let QueryResult { path, query_fields } = rest_data;
+            mut_path.update_path(path);
+            self.path_cache
+                .get(&mut_path.get_key())
+                .map(|data| PathCacheResult {
                     class: data.0.clone(),
                     method: data.1.clone(),
-                    fields: rest_data.query_fields,
+                    fields: query_fields,
                 })
-            } else {
-                None
-            }
         } else {
             None
         }

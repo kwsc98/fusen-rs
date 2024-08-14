@@ -22,7 +22,7 @@ use fusen_common::{
     server::{RpcServer, ServerInfo},
     MetaData,
 };
-pub use fusen_macro;
+pub use fusen_procedural_macro;
 use handler::{aspect::AspectClientFilter, Handler, HandlerContext};
 use register::Register;
 use route::client::Route;
@@ -73,11 +73,11 @@ impl FusenApplicationBuilder {
 
     pub fn add_fusen_server(mut self, server: Box<dyn RpcServer>) -> Self {
         let info = server.get_info();
-        let server_name = info.id.to_string();
+        let server_name = info.get_id().to_string();
         let mut key = server_name.clone();
-        if let Some(version) = info.version {
+        if let Some(version) = info.get_version() {
             key.push(':');
-            key.push_str(&version);
+            key.push_str(version);
         }
         self.servers.insert(key, server);
         self
@@ -164,41 +164,38 @@ impl FusenApplicationContext {
     }
 
     pub async fn run(mut self) {
-        let port = self.server.port.clone();
+        let port = self.server.get_port().clone();
         let (sender, receiver) = broadcast::channel::<()>(1);
         let shutdown = Shutdown::new(receiver);
         let mut shutdown_complete_rx = self.server.run(shutdown).await;
         let mut resources = vec![];
         if let Some(register) = self.register.clone() {
             //首先注册server
-            let resource = Resource {
-                server_name: Default::default(),
-                category: Category::Server,
-                group: Default::default(),
-                version: Default::default(),
-                methods: Default::default(),
-                host: fusen_common::net::get_ip(),
-                port: port.clone(),
-                weight: None,
-                params: MetaData::default().inner,
-            };
+            let resource = Resource::default()
+                .category(Category::Server)
+                .host(fusen_common::net::get_ip())
+                .port(port.clone())
+                .params(MetaData::default().into_inner());
             resources.push(resource.clone());
             let _ = register.register(resource).await;
             //再注册service
-            for server in self.server.fusen_servers.values() {
-                let info: ServerInfo = server.get_info();
-                let server_name = info.id.to_string();
-                let resource = Resource {
-                    server_name,
-                    category: Category::Service,
-                    group: info.group,
-                    version: info.version,
-                    methods: info.methods,
-                    host: fusen_common::net::get_ip(),
-                    port: port.clone(),
-                    weight: None,
-                    params: MetaData::default().inner,
-                };
+            for server in self.server.get_fusen_servers().values() {
+                let ServerInfo {
+                    id,
+                    version,
+                    group,
+                    methods,
+                } = server.get_info();
+                let server_name = id;
+                let resource = Resource::default()
+                    .server_name(server_name)
+                    .category(Category::Service)
+                    .group(group)
+                    .version(version)
+                    .methods(methods)
+                    .host(fusen_common::net::get_ip())
+                    .port(port.clone())
+                    .params(MetaData::default().into_inner());
                 resources.push(resource.clone());
                 let _ = register.register(resource).await;
             }

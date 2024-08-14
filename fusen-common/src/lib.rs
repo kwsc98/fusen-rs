@@ -1,6 +1,7 @@
 use bytes::{Bytes, BytesMut};
 use codec::CodecType;
 use error::FusenError;
+use fusen_procedural_macro::Data;
 use http::{HeaderMap, HeaderValue};
 use register::Type;
 use serde::{Deserialize, Serialize};
@@ -22,9 +23,9 @@ pub mod server;
 pub mod trie;
 pub mod url;
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct MetaData {
-    pub inner: HashMap<String, String>,
+    inner: HashMap<String, String>,
 }
 
 impl MetaData {
@@ -37,7 +38,9 @@ impl MetaData {
         }
         CodecType::JSON
     }
-
+    pub fn into_inner(self) -> HashMap<String, String> {
+        self.inner
+    }
     pub fn get_value(&self, key: &str) -> Option<&String> {
         self.inner.get(key)
     }
@@ -86,12 +89,12 @@ impl Default for MetaData {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Data)]
 pub struct ContextInfo {
-    pub path: Path,
-    pub class_name: String,
-    pub method_name: String,
-    pub version: Option<String>,
+    path: Path,
+    class_name: String,
+    method_name: String,
+    version: Option<String>,
     group: Option<String>,
 }
 
@@ -119,32 +122,12 @@ impl ContextInfo {
         }
         key
     }
-    pub fn path(mut self, path: Path) -> Self {
-        self.path = path;
-        self
-    }
-    pub fn class_name(mut self, class_name: String) -> Self {
-        self.class_name = class_name;
-        self
-    }
-    pub fn method_name(mut self, method_name: String) -> Self {
-        self.method_name = method_name;
-        self
-    }
-    pub fn version(mut self, version: Option<String>) -> Self {
-        self.version = version;
-        self
-    }
-    pub fn group(mut self, group: Option<String>) -> Self {
-        self.group = group;
-        self
-    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct FusenRequest {
-    pub query_fields: Option<Vec<(String, String)>>,
-    pub body: Bytes,
+    query_fields: Option<Vec<(String, String)>>,
+    body: Bytes,
 }
 
 impl FusenRequest {
@@ -200,10 +183,10 @@ impl FusenRequest {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct FusenResponse {
-    pub response: std::result::Result<Bytes, FusenError>,
-    pub response_ty: Option<&'static str>,
+    response: std::result::Result<Bytes, FusenError>,
+    response_ty: Option<&'static str>,
 }
 
 impl Default for FusenResponse {
@@ -219,16 +202,22 @@ impl FusenResponse {
     pub fn insert_return_ty(&mut self, ty: &'static str) {
         let _ = self.response_ty.insert(ty);
     }
+    pub fn set_response(&mut self, response: std::result::Result<Bytes, FusenError>) {
+        self.response = response
+    }
+    pub fn into_response(self) -> std::result::Result<Bytes, FusenError> {
+        self.response
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct FusenContext {
-    pub unique_identifier: String,
-    pub server_type: Type,
-    pub meta_data: MetaData,
-    pub context_info: ContextInfo,
-    pub request: FusenRequest,
-    pub response: FusenResponse,
+    unique_identifier: String,
+    server_type: Type,
+    meta_data: MetaData,
+    context_info: ContextInfo,
+    request: FusenRequest,
+    response: FusenResponse,
 }
 
 impl FusenContext {
@@ -250,8 +239,14 @@ impl FusenContext {
     pub fn insert_server_type(&mut self, server_tyep: Type) {
         self.server_type = server_tyep
     }
-    pub fn get_server_type(&self) -> &Type {
-        &self.server_type
+    pub fn get_mut_response(&mut self) -> &mut FusenResponse {
+        &mut self.response
+    }
+    pub fn get_mut_request(&mut self) -> &mut FusenRequest {
+        &mut self.request
+    }
+    pub fn into_response(self) -> FusenResponse {
+        self.response
     }
     pub fn get_return_ty(&self) -> Option<&'static str> {
         self.response.response_ty
@@ -260,9 +255,9 @@ impl FusenContext {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MethodResource {
-    pub name: String,
-    pub path: String,
-    pub method: String,
+    name: String,
+    path: String,
+    method: String,
 }
 
 #[derive(Debug, Clone)]
@@ -344,6 +339,14 @@ impl MethodResource {
     }
     pub fn new(name: String, path: String, method: String) -> Self {
         Self { name, path, method }
+    }
+    pub fn new_macro(method_str: &str) -> Self {
+        let method: Vec<String> = serde_json::from_str(method_str).unwrap();
+        Self {
+            name: method[0].to_string(),
+            path: method[1].to_string(),
+            method: method[2].to_string(),
+        }
     }
     pub fn form_json_str(str: &str) -> Self {
         serde_json::from_str(str).unwrap()

@@ -1,7 +1,8 @@
-use crate::HandlerAttr;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemImpl, Type};
+
+use crate::HandlerAttr;
 
 pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
     let org_item = parse_macro_input!(item as ItemImpl);

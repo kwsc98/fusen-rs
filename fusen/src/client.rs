@@ -32,12 +32,12 @@ impl FusenClient {
     {
         let aspect_handler = self
             .handle_context
-            .get_controller(&context.context_info.get_handler_key())
+            .get_controller(&context.get_context_info().get_handler_key())
             .get_aspect();
         context.insert_server_type(self.server_type.clone());
         let context = aspect_handler.aroud_(self.client_filter, context).await?;
-        let return_ty = context.response.response_ty.unwrap();
-        match context.response.response {
+        let return_ty = context.get_response().get_response_ty().unwrap();
+        match context.into_response().into_response() {
             Ok(res) => {
                 let response = json_field_compatible(return_ty, res)?;
                 let response: Res =

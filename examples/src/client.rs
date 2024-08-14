@@ -2,7 +2,7 @@ use examples::{DemoServiceClient, ReqDto};
 use fusen_rs::fusen_common::config::get_config_by_file;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::register::Type;
-use fusen_rs::fusen_macro::handler;
+use fusen_rs::fusen_procedural_macro::handler;
 use fusen_rs::handler::aspect::Aspect;
 use fusen_rs::handler::loadbalance::LoadBalance;
 use fusen_rs::handler::HandlerLoad;
@@ -73,33 +73,25 @@ async fn main() {
         context.client(Type::Host("127.0.0.1:8081".to_string())),
     ));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev host msg : {:?}", res);
     //通过Fusen进行服务注册与发现，并且进行HTTP2+JSON进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev fusen msg : {:?}", res);
     // //通过Dubbo进行服务注册与发现，并且进行HTTP2+Grpc进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Dubbo)));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev dubbo msg : {:?}", res);
     //通过SpringCloud进行服务注册与发现，并且进行HTTP+JSON进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::SpringCloud)));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev springcloud msg : {:?}", res);
 }

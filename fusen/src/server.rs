@@ -1,12 +1,13 @@
 use crate::{handler::HandlerContext, protocol::server::TcpServer, support::shutdown::Shutdown};
 use fusen_common::server::RpcServer;
+use fusen_procedural_macro::Data;
 use std::{collections::HashMap, sync::Arc};
 
-#[derive(Default)]
+#[derive(Default, Data)]
 pub struct FusenServer {
-    pub port: Option<String>,
-    pub fusen_servers: HashMap<String, &'static dyn RpcServer>,
-    pub handler_context: Arc<HandlerContext>,
+    port: Option<String>,
+    fusen_servers: HashMap<String, &'static dyn RpcServer>,
+    handler_context: Arc<HandlerContext>,
 }
 
 impl FusenServer {

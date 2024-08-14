@@ -1,5 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+use fusen_procedural_macro::Data;
+
 #[derive(Debug, Default)]
 pub struct Trie {
     root: Rc<RefCell<TreeNode>>,
@@ -14,7 +16,7 @@ struct TreeNode {
     value: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct QueryResult {
     pub path: String,
     pub query_fields: Option<Vec<(String, String)>>,
