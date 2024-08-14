@@ -121,12 +121,6 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
         &self,
         mut response: Response<BoxBody<Bytes, hyper::Error>>,
     ) -> Result<Bytes, FusenError> {
-        if !response.status().is_success() {
-            return Err(FusenError::from(format!(
-                "err code : {}",
-                response.status().as_str()
-            )));
-        }
         let mut bytes = BytesMut::new();
         while let Some(Ok(frame)) = response.frame().await {
             if frame.is_trailers() {
@@ -159,6 +153,13 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                 }
             }
             bytes.extend(frame.into_data().unwrap());
+        }
+        if !response.status().is_success() {
+            let mut err_info = format!("errcode : {}", response.status().as_str());
+            if !bytes.is_empty() {
+                err_info.push_str(&format!(" ,message : {:?}", bytes));
+            }
+            return Err(FusenError::from(err_info));
         }
         let codec_type = response
             .headers()

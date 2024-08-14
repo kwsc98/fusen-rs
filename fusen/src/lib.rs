@@ -12,7 +12,6 @@ use crate::{
     handler::HandlerInfo,
     register::{Category, RegisterBuilder, Resource},
 };
-use bytes::Buf;
 use client::FusenClient;
 use codec::{request_codec::RequestHandler, response_codec::ResponseHandler};
 use config::FusenApplicationConfig;
@@ -45,13 +44,6 @@ pub type BoxBody<D, E> = http_body_util::combinators::BoxBody<D, E>;
 pub type StreamBody<D, E> = http_body_util::StreamBody<
     futures_util::stream::Iter<std::vec::IntoIter<std::result::Result<http_body::Frame<D>, E>>>,
 >;
-
-fn get_empty_body<D, E>() -> BoxBody<D, E>
-where
-    D: Buf + 'static,
-{
-    BoxBody::default()
-}
 
 #[derive(Default)]
 pub struct FusenApplicationBuilder {
