@@ -138,12 +138,11 @@ async fn main() {
 impl LoadBalance for CustomLoadBalance {
     async fn select(
         &self,
-        invokers: Vec<Arc<InvokerAssets>>,
+        invokers: Arc<ResourceInfo>,
     ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
         invokers
-            .choose(&mut rand::thread_rng())
-            .ok_or(fusen_rs::Error::from("not find server : CustomLoadBalance"))
-            .cloned()
+            .select()
+            .ok_or("not find server : CustomLoadBalance".into())
     }
 }
 ```
@@ -274,12 +273,11 @@ dubbo:
 这里我们使用spring-cloud-alibaba项目进行演示
 <https://github.com/alibaba/spring-cloud-alibaba>
 
-
 RustClient端调用SpringCloud需要将fusen_trait_id修改为目标服务id（application_name）
+
 ```rust
 #[fusen_trait(id = "service-provider")]
 ```
-
 
 Java的Server和Client端的代码也无需改造。直接启动即可。
 
