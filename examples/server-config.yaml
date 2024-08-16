@@ -1,5 +1,5 @@
 application_name: fusen-server
-port: 8081
+port: 8082
 register: register://NacosConfig?namespace=&password=&server_addr=127.0.0.1:8848&username=
 handler_infos:
   - id: org.apache.dubbo.springboot.demo.DemoService

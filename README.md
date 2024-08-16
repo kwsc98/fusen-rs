@@ -58,11 +58,8 @@ impl DemoService for DemoServiceImpl {
     #[asset(path="/sayHelloV2-http",method = POST)]
     async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
         info!("res : {:?}", req);
-        Ok(ResDto {
-            str: "Hello ".to_owned() + &req.str + " V2",
-        })
+        Ok(ResDto::default().str("Hello ".to_owned() + req.get_str() + " V2"))
     }
-
     #[asset(path="/divide",method = GET)]
     async fn divideV2(&self, a: i32, b: i32) -> FusenResult<String> {
         info!("res : a={:?},b={:?}", a, b);
@@ -104,33 +101,25 @@ async fn main() {
         context.client(Type::Host("127.0.0.1:8081".to_string())),
     ));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev host msg : {:?}", res);
     //通过Fusen进行服务注册与发现，并且进行HTTP2+JSON进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev fusen msg : {:?}", res);
-    // //通过Fusen进行服务注册与发现，并且进行HTTP2+Grpc进行调用
+    // //通过Dubbo进行服务注册与发现，并且进行HTTP2+Grpc进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Dubbo)));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev dubbo msg : {:?}", res);
-    //通过SpringCloud进行服务注册与发现，并且进行HTTP2+JSON进行调用
+    //通过SpringCloud进行服务注册与发现，并且进行HTTP1+JSON进行调用
     let client = DemoServiceClient::new(Arc::new(context.client(Type::SpringCloud)));
     let res = client
-        .sayHelloV2(ReqDto {
-            str: "world".to_string(),
-        })
+        .sayHelloV2(ReqDto::default().str("world".to_string()))
         .await;
     info!("rev springcloud msg : {:?}", res);
 }
@@ -149,12 +138,11 @@ async fn main() {
 impl LoadBalance for CustomLoadBalance {
     async fn select(
         &self,
-        invokers: Vec<Arc<InvokerAssets>>,
+        invokers: Arc<ResourceInfo>,
     ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
         invokers
-            .choose(&mut rand::thread_rng())
-            .ok_or(fusen_rs::Error::from("not find server : CustomLoadBalance"))
-            .cloned()
+            .select()
+            .ok_or("not find server : CustomLoadBalance".into())
     }
 }
 ```
@@ -285,12 +273,11 @@ dubbo:
 这里我们使用spring-cloud-alibaba项目进行演示
 <https://github.com/alibaba/spring-cloud-alibaba>
 
-
 RustClient端调用SpringCloud需要将fusen_trait_id修改为目标服务id（application_name）
+
 ```rust
 #[fusen_trait(id = "service-provider")]
 ```
-
 
 Java的Server和Client端的代码也无需改造。直接启动即可。
 

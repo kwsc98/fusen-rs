@@ -15,11 +15,11 @@ pub mod server;
 pub mod socket;
 
 pub struct StreamHandler {
-    pub builder: Arc<Builder<TokioExecutor>>,
-    pub tcp_stream: TcpStream,
-    pub route: &'static RpcServerFilter,
-    pub http_codec: Arc<FusenHttpCodec>,
-    pub handler_context: Arc<HandlerContext>,
-    pub shutdown: broadcast::Receiver<()>,
-    pub _shutdown_complete: mpsc::Sender<()>,
+    builder: Arc<Builder<TokioExecutor>>,
+    tcp_stream: TcpStream,
+    route: &'static RpcServerFilter,
+    http_codec: Arc<FusenHttpCodec>,
+    handler_context: Arc<HandlerContext>,
+    shutdown: broadcast::Receiver<()>,
+    _shutdown_complete: mpsc::Sender<()>,
 }

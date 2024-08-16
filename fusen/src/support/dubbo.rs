@@ -1,7 +1,6 @@
-use fusen_common::MethodResource;
-
 use crate::register::{Category, Resource};
-use std::{collections::HashMap, vec};
+use fusen_common::MethodResource;
+use std::vec;
 
 pub fn decode_url(url: &str) -> Result<Resource, crate::Error> {
     let url = &fusen_common::url::decode_url(url)?[..];
@@ -10,26 +9,26 @@ pub fn decode_url(url: &str) -> Result<Resource, crate::Error> {
 
 pub fn encode_url(resource: &Resource) -> String {
     let mut url = String::new();
-    match resource.category {
+    match resource.get_category() {
         Category::Client => url.push_str("consumer://"),
         Category::Service => url.push_str("tri://"),
         Category::Server => (),
     }
     url.push_str(&(get_path(resource) + "/"));
-    url.push_str(&(resource.server_name.clone() + "?"));
-    url.push_str(&("interface=".to_owned() + &resource.server_name));
+    url.push_str(&(resource.get_server_name().to_owned() + "?"));
+    url.push_str(&("interface=".to_owned() + resource.get_server_name()));
     url.push_str(&get_field_url(
         "&methods",
-        &resource.methods.iter().fold(vec![], |mut vec, e| {
+        &resource.get_methods().iter().fold(vec![], |mut vec, e| {
             vec.push(e.get_path()[1..].to_owned());
             vec
         }),
     ));
-    if let Some(version) = &resource.version {
+    if let Some(version) = resource.get_version() {
         let value = vec![version.clone()];
         url.push_str(&get_field_url("&version", &value));
     }
-    match resource.category {
+    match resource.get_category() {
         Category::Client => url.push_str("&dubbo=2.0.2&release=3.3.0-beta.1&side=consumer"),
         Category::Service => url.push_str(
             "&dubbo=2.0.2&prefer.serialization=fastjson&release=3.3.0-beta.1&side=provider",
@@ -49,8 +48,8 @@ fn get_ip(path: &str) -> (String, Option<String>) {
 }
 
 fn get_path(info: &Resource) -> String {
-    let mut host = info.host.clone();
-    if let Some(port) = info.port.clone() {
+    let mut host = info.get_host().clone();
+    if let Some(port) = info.get_port().clone() {
         host.push(':');
         host.push_str(&port);
     }
@@ -81,25 +80,25 @@ fn get_info(mut url: &str) -> crate::Result<Resource> {
     if !group.is_empty() {
         let _ = regroup.insert(vision[0].clone());
     }
-    let info = Resource {
-        server_name,
-        category,
-        group: regroup,
-        version: revision,
-        methods: get_field_values(info[1], "methods")
-            .iter()
-            .fold(vec![], |mut vec, e| {
-                vec.push(MethodResource::new(
-                    e.to_string(),
-                    "/".to_owned() + e,
-                    "POST".to_owned(),
-                ));
-                vec
-            }),
-        host: path.0,
-        port: path.1,
-        params: HashMap::new(),
-    };
+    let info = Resource::default()
+        .server_name(server_name)
+        .category(category)
+        .group(regroup)
+        .version(revision)
+        .methods(
+            get_field_values(info[1], "methods")
+                .iter()
+                .fold(vec![], |mut vec, e| {
+                    vec.push(MethodResource::new(
+                        e.to_string(),
+                        "/".to_owned() + e,
+                        "POST".to_owned(),
+                    ));
+                    vec
+                }),
+        )
+        .host(path.0)
+        .port(path.1);
     Ok(info)
 }
 

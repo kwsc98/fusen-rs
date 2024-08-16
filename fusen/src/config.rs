@@ -1,4 +1,4 @@
-use fusen_macro::Data;
+use fusen_procedural_macro::Data;
 use serde::{Deserialize, Serialize};
 
 use crate::handler::HandlerInfo;
@@ -7,6 +7,6 @@ use crate::handler::HandlerInfo;
 pub struct FusenApplicationConfig {
     application_name: String,
     port: Option<u16>,
-    register: String,
+    register: Option<String>,
     handler_infos: Option<Vec<HandlerInfo>>,
 }

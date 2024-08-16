@@ -1,4 +1,4 @@
-use fusen_common::fusen_attr;
+use fusen_derive_macro::fusen_attr;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse::Parser, parse_macro_input, Attribute, DeriveInput, Meta};
@@ -65,7 +65,7 @@ pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
     let id = &org_item.ident;
     let token = quote! {
 
-        #[derive(serde::Serialize, serde::Deserialize, Default, fusen_macro::Data)]
+        #[derive(serde::Serialize, serde::Deserialize, Default, fusen_procedural_macro::Data)]
         #org_item
 
         impl #id {

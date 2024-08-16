@@ -3,14 +3,13 @@ use fusen_common::{
     error::{BoxFusenError, FusenError},
     FusenFuture,
 };
-use http_body_util::{combinators::BoxBody, BodyExt};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::{service::Service, Request, Response};
 use std::{convert::Infallible, sync::Arc};
 
 use crate::{
     codec::{http_codec::FusenHttpCodec, HttpCodec},
     filter::FusenFilter,
-    get_empty_body,
     handler::HandlerContext,
 };
 
@@ -46,7 +45,7 @@ where
         let request = request.map(|e| e.boxed());
         let context = http_codec.decode(request).await?;
         let handler = handler_context
-            .get_controller(&context.context_info.get_handler_key())
+            .get_controller(&context.get_context_info().get_handler_key())
             .get_aspect();
         let context = handler.aroud_(fusen_filter, context).await?;
         let response = http_codec.encode(context).await?;
@@ -78,7 +77,12 @@ where
                         }
                         Response::builder()
                             .status(status)
-                            .body(get_empty_body())
+                            .body(
+                                Full::new(Bytes::copy_from_slice(
+                                    format!("{:?}", fusen_error).as_bytes(),
+                                ))
+                                .boxed(),
+                            )
                             .unwrap()
                     }
                 },

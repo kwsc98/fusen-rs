@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 #[derive(Clone)]
 pub struct Route {
-    register: Arc<Box<dyn Register>>,
+    register: Option<Arc<Box<dyn Register>>>,
     sender: UnboundedSender<(RouteSender, oneshot::Sender<RouteReceiver>)>,
 }
 
@@ -25,7 +25,7 @@ pub enum RouteReceiver {
 }
 
 impl Route {
-    pub fn new(register: Arc<Box<dyn Register>>) -> Self {
+    pub fn new(register: Option<Arc<Box<dyn Register>>>) -> Self {
         let (s, mut r) = mpsc::unbounded_channel::<(RouteSender, oneshot::Sender<RouteReceiver>)>();
         tokio::spawn(async move {
             let mut cache = HashMap::<String, Directory>::new();
@@ -48,11 +48,14 @@ impl Route {
     }
 
     #[async_recursion]
-    pub async fn get_server_resource(&self, context: &FusenContext) -> crate::Result<ResourceInfo> {
-        let name = &context.context_info.class_name;
-        let version = context.context_info.version.as_ref();
+    pub async fn get_server_resource(
+        &self,
+        context: &FusenContext,
+    ) -> crate::Result<Arc<ResourceInfo>> {
+        let name = context.get_context_info().get_class_name();
+        let version = context.get_context_info().get_version().as_ref();
         let mut key = name.to_owned();
-        key.push_str(&format!(":{:?}", context.server_type));
+        key.push_str(&format!(":{:?}", context.get_server_type()));
         if let Some(version) = version {
             key.push_str(&format!(":{}", version));
         }
@@ -63,40 +66,33 @@ impl Route {
         match rev {
             RouteReceiver::GET(rev) => {
                 if rev.is_none() {
-                    let category = match context.server_type {
+                    let category = match context.get_server_type() {
                         fusen_common::register::Type::Dubbo => Category::Service,
                         fusen_common::register::Type::SpringCloud => Category::Server,
                         fusen_common::register::Type::Fusen => Category::Service,
                         fusen_common::register::Type::Host(_) => Category::Server,
                     };
-                    let resource_server = Resource {
-                        server_name: name.to_string(),
-                        category,
-                        group: None,
-                        version: version.map(|e| e.to_string()),
-                        methods: vec![],
-                        host: fusen_common::net::get_ip(),
-                        port: None,
-                        params: context.meta_data.clone_map(),
+                    let resource_server = Resource::default()
+                        .server_name(name.to_owned())
+                        .category(category)
+                        .version(version.map(|e| e.to_owned()))
+                        .host(fusen_common::net::get_ip())
+                        .params(context.get_meta_data().clone_map());
+                    let directory = if let fusen_common::register::Type::Host(host) =
+                        context.get_server_type()
+                    {
+                        let directory = Directory::new(Category::Server).await;
+                        let resource_server = Resource::default()
+                            .server_name(name.to_owned())
+                            .category(Category::Server)
+                            .host(host.clone());
+                        let _ = directory.change(vec![resource_server]).await;
+                        directory
+                    } else if let Some(register) = &self.register {
+                        register.subscribe(resource_server).await?
+                    } else {
+                        return Err("must set register".into());
                     };
-                    let directory =
-                        if let fusen_common::register::Type::Host(host) = &context.server_type {
-                            let directory = Directory::new(Category::Server).await;
-                            let resource_server = Resource {
-                                server_name: name.to_string(),
-                                category: Category::Server,
-                                group: None,
-                                version: None,
-                                methods: vec![],
-                                host: host.clone(),
-                                port: None,
-                                params: HashMap::new(),
-                            };
-                            let _ = directory.change(vec![resource_server]).await;
-                            directory
-                        } else {
-                            self.register.subscribe(resource_server).await?
-                        };
                     let oneshot = oneshot::channel();
                     self.sender
                         .send((RouteSender::CHANGE((key, directory.clone())), oneshot.0))?;

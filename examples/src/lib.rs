@@ -1,14 +1,14 @@
-use fusen_rs::fusen_macro::{asset, fusen_trait};
+use fusen_rs::fusen_procedural_macro::{asset, fusen_trait, Data};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, Data)]
 pub struct ReqDto {
-    pub str: String,
+    str: String,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, Data)]
 pub struct ResDto {
-    pub str: String,
+    str: String,
 }
 
 #[fusen_trait(id = "org.apache.dubbo.springboot.demo.DemoService")]

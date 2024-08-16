@@ -1,4 +1,5 @@
 use fusen_common::error::FusenError;
+use fusen_procedural_macro::Data;
 use http::{Request, Response, Uri, Version};
 use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
@@ -9,10 +10,10 @@ use tracing::error;
 pub type HttpSocket = Client<HttpsConnector<HttpConnector>, BoxBody<bytes::Bytes, Infallible>>;
 use crate::register::Resource;
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct InvokerAssets {
-    pub resource: Resource,
-    pub socket: Socket,
+    resource: Resource,
+    socket: Socket,
 }
 
 #[derive(Debug)]
@@ -41,6 +42,9 @@ impl Socket {
 }
 
 impl InvokerAssets {
+    pub fn new(resource: Resource, socket: Socket) -> Self {
+        Self { resource, socket }
+    }
     pub async fn send_request(
         &self,
         mut request: Request<BoxBody<bytes::Bytes, Infallible>>,

@@ -19,6 +19,9 @@ pub fn data(item: TokenStream) -> TokenStream {
             ident_name = ident_name[2..ident_name.len()].to_string();
         }
         let get_name = format_ident!("get_{}", ident_name);
+        let get_mut_name = format_ident!("get_mut_{}", ident_name);
+        let set_name = format_ident!("set_{}", ident_name);
+
         vec.push(quote!(
             pub fn #ident(mut self,#ident : #_type) -> Self {
                 self.#ident = #ident;
@@ -26,6 +29,13 @@ pub fn data(item: TokenStream) -> TokenStream {
             }
             pub fn #get_name(&self) -> &#_type {
                 &self.#ident
+            }
+            pub fn #get_mut_name(&mut self) -> &mut #_type {
+                &mut self.#ident
+            }
+            pub fn #set_name(&mut self,#ident : #_type) -> &mut #_type {
+                self.#ident = #ident;
+                &mut self.#ident
             }
         ));
         vec

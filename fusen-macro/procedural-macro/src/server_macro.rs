@@ -1,4 +1,3 @@
-use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl};
@@ -16,8 +15,8 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
     };
     let org_item = parse_macro_input!(item as ItemImpl);
     let methods_info = match get_resource_by_server(org_item.clone()) {
-        Ok(methods_info) => methods_info.iter().fold(vec![], |mut vec, e| {
-            vec.push(e.to_json_str());
+        Ok(methods_info) => methods_info.into_iter().fold(vec![], |mut vec, e| {
+            vec.push(serde_json::to_string(&e).unwrap());
             vec
         }),
         Err(err) => return err.into_compile_error().into(),
@@ -48,7 +47,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let token = quote! {
                             let result : Result<#request_type,_>  = serde_json::from_slice(req_poi_param[idx].as_bytes());
                             if let Err(err) = result {
-                                param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
+                                param.get_mut_response().set_response(Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string())));
                                 return param;
                             }
                             let #request : #request_type = result.unwrap();
@@ -62,17 +61,17 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
             },
             );
             vec.push(quote! {
-                if &param.context_info.method_name[..] == stringify!(#method) {
+                if &param.get_context_info().get_method_name()[..] == stringify!(#method) {
                     let fields_name = vec![#(
                         stringify!(#req_pat),
                     )*];
                     let fields_ty = vec![#(
                         stringify!(#req_type),
                     )*];
-                let req_poi_param = match param.request.get_fields(fields_name,fields_ty) {
+                let req_poi_param = match param.get_mut_request().get_fields(fields_name,fields_ty) {
                      Ok(res) => res,
                      Err(err) => {
-                        param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
+                        param.get_mut_response().set_response(Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string())));
                         return param;
                      }
                 };
@@ -85,16 +84,16 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         #req_pat,
                     )*
                 ).await;
-                param.response.response = match res {
+                param.get_mut_response().set_response( match res {
                     Ok(res) => {
-                        let res = serde_json::to_string(&res);
+                        let res = fusen_rs::fusen_common::codec::object_to_bytes(&res);
                         match res {
                             Ok(res) => Ok(res),
                             Err(err) => Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()))
                         }
                     },
                     Err(info) => Err(info)
-                };
+                });
                 return param;
             }
             }
@@ -115,7 +114,7 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
 
                let mut methods : Vec<fusen_rs::fusen_common::MethodResource> = vec![];
                #(
-                methods.push(fusen_rs::fusen_common::MethodResource::form_json_str(#methods_info));
+                   methods.push(fusen_rs::fusen_common::MethodResource::new_macro(#methods_info));
                )*
                fusen_rs::fusen_common::server::ServerInfo::new(#id,#version,#group,methods)
             }
@@ -124,7 +123,11 @@ pub fn fusen_server(attr: FusenAttr, item: TokenStream) -> TokenStream {
         impl #item_self {
             async fn prv_invoke (&self, mut param : fusen_rs::fusen_common::FusenContext) -> fusen_rs::fusen_common::FusenContext {
                 #(#items_fn)*
-                param.response.response = Err(fusen_rs::fusen_common::error::FusenError::from(format!("not find method by {}",param.context_info.method_name)));
+                let error_info = format!(
+                    "not find method by {}",
+                    param.get_context_info().get_method_name()
+                );
+                param.get_mut_response().set_response(Err(fusen_rs::fusen_common::error::FusenError::from(error_info)));
                 return param;
             }
         }
@@ -152,7 +155,7 @@ fn get_server_item(item: ItemImpl) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_server(item: ItemImpl) -> Result<Vec<MethodResource>, syn::Error> {
+fn get_resource_by_server(item: ItemImpl) -> Result<Vec<(String, String, String)>, syn::Error> {
     let mut res = vec![];
     let attrs = &item.attrs;
     let resource = get_asset_by_attrs(attrs)?;
@@ -177,11 +180,7 @@ fn get_resource_by_server(item: ItemImpl) -> Result<Vec<MethodResource>, syn::Er
             };
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
-            res.push(MethodResource::new(
-                item_fn.sig.ident.to_string(),
-                parent_path,
-                method,
-            ));
+            res.push((item_fn.sig.ident.to_string(), parent_path, method));
         }
     }
     Ok(res)

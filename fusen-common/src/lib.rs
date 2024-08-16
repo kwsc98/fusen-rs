@@ -1,5 +1,7 @@
+use bytes::{Bytes, BytesMut};
 use codec::CodecType;
 use error::FusenError;
+use fusen_procedural_macro::Data;
 use http::{HeaderMap, HeaderValue};
 use register::Type;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ pub type Response<T> = std::result::Result<T, String>;
 pub type FusenFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 pub type FusenResult<T> = std::result::Result<T, FusenError>;
 pub mod codec;
+pub mod config;
 pub mod date_util;
 pub mod error;
 pub mod logs;
@@ -19,11 +22,10 @@ pub mod register;
 pub mod server;
 pub mod trie;
 pub mod url;
-pub mod config;
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct MetaData {
-    pub inner: HashMap<String, String>,
+    inner: HashMap<String, String>,
 }
 
 impl MetaData {
@@ -36,7 +38,9 @@ impl MetaData {
         }
         CodecType::JSON
     }
-
+    pub fn into_inner(self) -> HashMap<String, String> {
+        self.inner
+    }
     pub fn get_value(&self, key: &str) -> Option<&String> {
         self.inner.get(key)
     }
@@ -76,18 +80,21 @@ impl Default for MetaData {
     fn default() -> Self {
         let mut inner = HashMap::new();
         inner.insert("prefer.serialization".to_owned(), "fastjson".to_owned());
-        inner.insert("preserved.register.source".to_owned(), "SPRING_CLOUD".to_owned());
+        inner.insert(
+            "preserved.register.source".to_owned(),
+            "SPRING_CLOUD".to_owned(),
+        );
         inner.insert("protocol".to_owned(), "tri".to_owned());
         Self { inner }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Data)]
 pub struct ContextInfo {
-    pub path: Path,
-    pub class_name: String,
-    pub method_name: String,
-    pub version: Option<String>,
+    path: Path,
+    class_name: String,
+    method_name: String,
+    version: Option<String>,
     group: Option<String>,
 }
 
@@ -115,62 +122,46 @@ impl ContextInfo {
         }
         key
     }
-    pub fn path(mut self, path: Path) -> Self {
-        self.path = path;
-        self
-    }
-    pub fn class_name(mut self, class_name: String) -> Self {
-        self.class_name = class_name;
-        self
-    }
-    pub fn method_name(mut self, method_name: String) -> Self {
-        self.method_name = method_name;
-        self
-    }
-    pub fn version(mut self, version: Option<String>) -> Self {
-        self.version = version;
-        self
-    }
-    pub fn group(mut self, group: Option<String>) -> Self {
-        self.group = group;
-        self
-    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct FusenRequest {
-    pub fields: Vec<String>,
-    pub fields_ty: Option<Vec<String>>,
+    query_fields: Option<Vec<(String, String)>>,
+    body: Bytes,
 }
 
 impl FusenRequest {
-    pub fn new(fields: Vec<String>, fields_ty: Option<Vec<String>>) -> Self {
-        FusenRequest { fields, fields_ty }
+    pub fn new_for_client(method: &str, fields_ty: Vec<String>, bodys: Vec<String>) -> Self {
+        let mut query_fields = None;
+        let mut bytes = BytesMut::new();
+        if method.to_lowercase().as_str() != "post" {
+            let mut vec = vec![];
+            for (idx, body) in bodys.into_iter().enumerate() {
+                vec.push((fields_ty[idx].to_owned(), body));
+            }
+            let _ = query_fields.insert(vec);
+        } else {
+            bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
+        }
+        FusenRequest {
+            query_fields,
+            body: bytes.into(),
+        }
     }
-    pub fn insert_fields_ty(&mut self, fields_ty: Vec<&'static str>) {
-        let _ = self
-            .fields_ty
-            .insert(fields_ty.iter().fold(vec![], |mut vec, e| {
-                vec.push(e.to_string());
-                vec
-            }));
+    pub fn new(query_fields: Option<Vec<(String, String)>>, body: Bytes) -> Self {
+        FusenRequest { query_fields, body }
     }
     pub fn get_fields(
         &mut self,
         temp_fields_name: Vec<&str>,
         temp_fields_ty: Vec<&str>,
-    ) -> Result<&Vec<String>> {
-        if let Some(fields_name) = &self.fields_ty {
+    ) -> Result<Vec<String>> {
+        let mut new_fields = vec![];
+        if let Some(fields_name) = &self.query_fields {
             let mut hash_map = HashMap::with_capacity(8);
-            for item in fields_name.iter().enumerate() {
-                let _ = hash_map.insert(
-                    item.1.clone(),
-                    self.fields
-                        .get(item.0)
-                        .map_or(Err("fields handler error"), |e| Ok(e.clone()))?,
-                );
+            for item in fields_name.iter() {
+                let _ = hash_map.insert(item.0.clone(), item.1.clone());
             }
-            let mut new_fields = vec![];
             for item in temp_fields_name.iter().enumerate() {
                 let fields = hash_map.get(*item.1).ok_or("fields handler error")?;
                 let mut temp = String::new();
@@ -183,16 +174,19 @@ impl FusenRequest {
                 }
                 new_fields.push(temp);
             }
-            self.fields = new_fields;
+        } else if self.body.starts_with(b"[") {
+            new_fields = serde_json::from_slice(&self.body)?;
+        } else {
+            new_fields.push(String::from_utf8(self.body.to_vec())?);
         }
-        Ok(&self.fields)
+        Ok(new_fields)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct FusenResponse {
-    pub response: std::result::Result<String, FusenError>,
-    pub response_ty: Option<&'static str>,
+    response: std::result::Result<Bytes, FusenError>,
+    response_ty: Option<&'static str>,
 }
 
 impl Default for FusenResponse {
@@ -208,16 +202,19 @@ impl FusenResponse {
     pub fn insert_return_ty(&mut self, ty: &'static str) {
         let _ = self.response_ty.insert(ty);
     }
+    pub fn into_response(self) -> std::result::Result<Bytes, FusenError> {
+        self.response
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Data)]
 pub struct FusenContext {
-    pub unique_identifier: String,
-    pub server_type: Type,
-    pub meta_data: MetaData,
-    pub context_info: ContextInfo,
-    pub request: FusenRequest,
-    pub response: FusenResponse,
+    unique_identifier: String,
+    server_type: Type,
+    meta_data: MetaData,
+    context_info: ContextInfo,
+    request: FusenRequest,
+    response: FusenResponse,
 }
 
 impl FusenContext {
@@ -239,8 +236,8 @@ impl FusenContext {
     pub fn insert_server_type(&mut self, server_tyep: Type) {
         self.server_type = server_tyep
     }
-    pub fn get_server_type(&self) -> &Type {
-        &self.server_type
+    pub fn into_response(self) -> FusenResponse {
+        self.response
     }
     pub fn get_return_ty(&self) -> Option<&'static str> {
         self.response.response_ty
@@ -249,9 +246,9 @@ impl FusenContext {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MethodResource {
-    pub name: String,
-    pub path: String,
-    pub method: String,
+    name: String,
+    path: String,
+    method: String,
 }
 
 #[derive(Debug, Clone)]
@@ -333,6 +330,14 @@ impl MethodResource {
     }
     pub fn new(name: String, path: String, method: String) -> Self {
         Self { name, path, method }
+    }
+    pub fn new_macro(method_str: &str) -> Self {
+        let method: Vec<String> = serde_json::from_str(method_str).unwrap();
+        Self {
+            name: method[0].to_string(),
+            path: method[1].to_string(),
+            method: method[2].to_string(),
+        }
     }
     pub fn form_json_str(str: &str) -> Self {
         serde_json::from_str(str).unwrap()

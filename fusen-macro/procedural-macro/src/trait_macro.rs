@@ -1,5 +1,4 @@
 use crate::{get_asset_by_attrs, FusenAttr};
-use fusen_common::MethodResource;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use std::collections::HashMap;
@@ -17,14 +16,11 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemTrait);
     let mut methods_cache = HashMap::new();
     let methods_info = match get_resource_by_trait(input.clone()) {
-        Ok(methods_info) => {
-            methods_info.into_iter().fold(vec![], |mut vec, e| {
-                vec.push(e.to_json_str());
-                let MethodResource { path, name, method } = e;
-                methods_cache.insert(name, (path, method));
-                vec
-            })
-        }
+        Ok(methods_info) => methods_info.into_iter().fold(vec![], |mut vec, e| {
+            vec.push(serde_json::to_string(&e).unwrap());
+            methods_cache.insert(e.0.to_owned(), (e.1.to_owned(), e.2.to_owned()));
+            vec
+        }),
         Err(err) => return err.into_compile_error().into(),
     };
     let id = match attr.id {
@@ -86,7 +82,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let version : Option<&str> = #version;
                     let group : Option<&str> = #group;
                     let mut mate_data = fusen_rs::fusen_common::MetaData::new();
-                    let mut request = fusen_rs::fusen_common::FusenRequest::new(req_vec,Some(fields_ty));
+                    let mut request = fusen_rs::fusen_common::FusenRequest::new_for_client(#methos_type,fields_ty,req_vec);
                     let mut context = fusen_rs::fusen_common::FusenContext::new(
                         fusen_rs::fusen_common::logs::get_uuid(),
                         fusen_rs::fusen_common::ContextInfo::default()
@@ -98,7 +94,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         request,
                         mate_data,
                     );
-                    context.response.insert_return_ty(stringify!(#output_type));
+                    context.get_mut_response().insert_return_ty(stringify!(#output_type));
                     let res : Result<#output_type,fusen_rs::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(context).await;
                     return res;
                 }
@@ -125,7 +121,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         pub fn get_info(&self) -> fusen_rs::fusen_common::server::ServerInfo {
             let mut methods : Vec<fusen_rs::fusen_common::MethodResource> = vec![];
             #(
-                methods.push(fusen_rs::fusen_common::MethodResource::form_json_str(#methods_info));
+                methods.push(fusen_rs::fusen_common::MethodResource::new_macro(#methods_info));
             )*
             fusen_rs::fusen_common::server::ServerInfo::new(#id,#version,#group,methods)
         }
@@ -168,7 +164,7 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_trait(item: ItemTrait) -> Result<Vec<MethodResource>, syn::Error> {
+fn get_resource_by_trait(item: ItemTrait) -> Result<Vec<(String, String, String)>, syn::Error> {
     let mut res = vec![];
     let attrs = &item.attrs;
     let resource = get_asset_by_attrs(attrs)?;
@@ -193,11 +189,7 @@ fn get_resource_by_trait(item: ItemTrait) -> Result<Vec<MethodResource>, syn::Er
             };
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
-            res.push(MethodResource::new(
-                item_fn.sig.ident.to_string(),
-                parent_path,
-                method,
-            ));
+            res.push((item_fn.sig.ident.to_string(), parent_path, method));
         }
     }
     Ok(res)

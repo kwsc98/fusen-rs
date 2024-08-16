@@ -1,7 +1,7 @@
 use super::{Category, Directory, Register};
 use crate::register::Resource;
 use fusen_common::FusenFuture;
-use fusen_macro::url_config;
+use fusen_procedural_macro::url_config;
 use nacos_sdk::api::{
     naming::{
         NamingChangeEvent, NamingEventListener, NamingService, NamingServiceBuilder,
@@ -178,6 +178,7 @@ fn to_resources(service_instances: Vec<ServiceInstance>) -> Vec<Resource> {
             methods: vec![],
             host: e.ip().to_string(),
             port: Some(e.port().to_string()),
+            weight: Some(e.weight),
             params: e.metadata().clone(),
         };
         vec.push(resource);

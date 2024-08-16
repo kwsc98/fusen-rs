@@ -36,6 +36,6 @@ impl HttpCodec<Bytes, hyper::Error> for FusenHttpCodec {
         &self,
         context: fusen_common::FusenContext,
     ) -> Result<http::Response<BoxBody<bytes::Bytes, Infallible>>, crate::Error> {
-        self.response_handle.encode(&context)
+        self.response_handle.encode(context)
     }
 }

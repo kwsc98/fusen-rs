@@ -1,4 +1,4 @@
-use super::{grpc_codec::GrpcBodyCodec, json_codec::JsonBodyCodec, BodyCodec};
+use super::{grpc_codec::GrpcBodyCodec, BodyCodec};
 use crate::support::triple::TripleResponseWrapper;
 use bytes::{Bytes, BytesMut};
 use fusen_common::{codec::CodecType, error::FusenError, FusenContext};
@@ -8,14 +8,12 @@ use http_body_util::{combinators::BoxBody, BodyExt};
 use std::convert::Infallible;
 
 pub(crate) trait ResponseCodec<T, E> {
-    fn encode(&self, msg: &FusenContext) -> Result<Response<BoxBody<T, Infallible>>, crate::Error>;
+    fn encode(&self, msg: FusenContext) -> Result<Response<BoxBody<T, Infallible>>, crate::Error>;
 
-    async fn decode(&self, request: Response<BoxBody<T, E>>) -> Result<String, FusenError>;
+    async fn decode(&self, request: Response<BoxBody<T, E>>) -> Result<Bytes, FusenError>;
 }
 
 pub struct ResponseHandler {
-    json_codec:
-        Box<dyn BodyCodec<bytes::Bytes, EncodeType = String, DecodeType = String> + Sync + Send>,
     grpc_codec: Box<
         (dyn BodyCodec<
             bytes::Bytes,
@@ -28,12 +26,9 @@ pub struct ResponseHandler {
 
 impl ResponseHandler {
     pub fn new() -> Self {
-        let json_codec: JsonBodyCodec<bytes::Bytes, String, String> =
-            JsonBodyCodec::<bytes::Bytes, String, String>::new();
         let grpc_codec =
             GrpcBodyCodec::<bytes::Bytes, TripleResponseWrapper, TripleResponseWrapper>::new();
         ResponseHandler {
-            json_codec: Box::new(json_codec),
             grpc_codec: Box::new(grpc_codec),
         }
     }
@@ -48,32 +43,34 @@ impl Default for ResponseHandler {
 impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
     fn encode(
         &self,
-        context: &FusenContext,
+        context: FusenContext,
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, crate::Error> {
-        let meta_data = &context.meta_data;
+        let meta_data = context.get_meta_data();
         let content_type = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => "application/json",
             fusen_common::codec::CodecType::GRPC => "application/grpc",
         };
         let body = match meta_data.get_codec() {
-            fusen_common::codec::CodecType::JSON => vec![match &context.response.response {
-                Ok(res) => Frame::data(Bytes::from(res.as_bytes().to_vec())),
-                Err(err) => {
-                    if let FusenError::Null = err {
-                        Frame::data(bytes::Bytes::from("null"))
-                    } else {
-                        return Err(crate::Error::from(err.to_string()));
+            fusen_common::codec::CodecType::JSON => {
+                vec![match context.into_response().into_response() {
+                    Ok(res) => Frame::data(res),
+                    Err(err) => {
+                        if let FusenError::Null = err {
+                            Frame::data(bytes::Bytes::from("null"))
+                        } else {
+                            return Err(crate::Error::from(err.to_string()));
+                        }
                     }
-                }
-            }],
+                }]
+            }
             fusen_common::codec::CodecType::GRPC => {
                 let mut status = "0";
                 let mut message = String::from("success");
                 let mut trailers = HeaderMap::new();
                 let mut vec = vec![];
-                match context.response.response.as_ref() {
+                match context.into_response().into_response() {
                     Ok(data) => {
-                        let res_wrapper = TripleResponseWrapper::form(data.as_bytes());
+                        let res_wrapper = TripleResponseWrapper::form(data.into());
                         let buf = self
                             .grpc_codec
                             .encode(&res_wrapper)
@@ -83,7 +80,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                     Err(err) => {
                         message = match err {
                             FusenError::Null => {
-                                let res_wrapper = TripleResponseWrapper::form("null".as_bytes());
+                                let res_wrapper = TripleResponseWrapper::form(b"null".to_vec());
                                 let buf = self
                                     .grpc_codec
                                     .encode(&res_wrapper)
@@ -125,13 +122,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
     async fn decode(
         &self,
         mut response: Response<BoxBody<Bytes, hyper::Error>>,
-    ) -> Result<String, FusenError> {
-        if !response.status().is_success() {
-            return Err(FusenError::from(format!(
-                "err code : {}",
-                response.status().as_str()
-            )));
-        }
+    ) -> Result<Bytes, FusenError> {
         let mut bytes = BytesMut::new();
         while let Some(Ok(frame)) = response.frame().await {
             if frame.is_trailers() {
@@ -165,6 +156,13 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
             }
             bytes.extend(frame.into_data().unwrap());
         }
+        if !response.status().is_success() {
+            let mut err_info = format!("errcode : {}", response.status().as_str());
+            if !bytes.is_empty() {
+                err_info.push_str(&format!(" ,message : {:?}", bytes));
+            }
+            return Err(FusenError::from(err_info));
+        }
         let codec_type = response
             .headers()
             .iter()
@@ -176,19 +174,10 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
             });
         let bytes: Bytes = bytes.into();
         let res = match codec_type {
-            CodecType::JSON => {
-                if !bytes.to_ascii_lowercase().starts_with(b"\"") {
-                    String::from_utf8(bytes.to_vec())
-                        .map_err(|e| FusenError::from(e.to_string()))?
-                } else {
-                    self.json_codec
-                        .decode(&bytes)
-                        .map_err(|e| FusenError::from(e.to_string()))?
-                }
-            }
+            CodecType::JSON => bytes,
             CodecType::GRPC => {
                 let response = self.grpc_codec.decode(&bytes)?;
-                String::from_utf8(response.data).map_err(|e| FusenError::from(e.to_string()))?
+                Bytes::copy_from_slice(&response.data)
             }
         };
         Ok(res)
