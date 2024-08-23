@@ -50,6 +50,10 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
             fusen_common::codec::CodecType::JSON => "application/json",
             fusen_common::codec::CodecType::GRPC => "application/grpc",
         };
+        let mut builder = Response::builder().header("content-type", content_type);
+        for (key, value) in context.get_response().get_headers() {
+            builder = builder.header(key, value);
+        }
         let body = match meta_data.get_codec() {
             fusen_common::codec::CodecType::JSON => {
                 vec![match context.into_response().into_response() {
@@ -112,8 +116,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
         });
         let stream = futures_util::stream::iter(chunks);
         let stream_body = http_body_util::StreamBody::new(stream);
-        let response = Response::builder()
-            .header("content-type", content_type)
+        let response = builder
             .body(stream_body.boxed())
             .map_err(FusenError::from)?;
         Ok(response)

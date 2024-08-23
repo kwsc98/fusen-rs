@@ -126,6 +126,7 @@ impl ContextInfo {
 
 #[derive(Debug, Data)]
 pub struct FusenRequest {
+    headers: HashMap<String, String>,
     query_fields: Option<Vec<(String, String)>>,
     body: Bytes,
 }
@@ -144,12 +145,17 @@ impl FusenRequest {
             bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
         }
         FusenRequest {
+            headers: Default::default(),
             query_fields,
             body: bytes.into(),
         }
     }
     pub fn new(query_fields: Option<Vec<(String, String)>>, body: Bytes) -> Self {
-        FusenRequest { query_fields, body }
+        FusenRequest {
+            headers: Default::default(),
+            query_fields,
+            body,
+        }
     }
     pub fn get_fields(
         &mut self,
@@ -185,6 +191,7 @@ impl FusenRequest {
 
 #[derive(Debug, Data)]
 pub struct FusenResponse {
+    headers: HashMap<String, String>,
     response: std::result::Result<Bytes, FusenError>,
     response_ty: Option<&'static str>,
 }
@@ -192,6 +199,7 @@ pub struct FusenResponse {
 impl Default for FusenResponse {
     fn default() -> Self {
         Self {
+            headers: Default::default(),
             response: Err(FusenError::Null),
             response_ty: Default::default(),
         }

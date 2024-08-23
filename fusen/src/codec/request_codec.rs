@@ -9,7 +9,7 @@ use fusen_common::{
     error::FusenError, logs::get_uuid, register::Type, ContextInfo, FusenContext, FusenRequest,
     MetaData, Path,
 };
-use http::{HeaderValue, Request};
+use http::Request;
 use http_body_util::{BodyExt, Full};
 use std::{convert::Infallible, sync::Arc};
 
@@ -54,11 +54,11 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let mut builder = Request::builder()
             .header("content-type", content_type.0)
             .header("connection", "keep-alive");
+        for (key, value) in context.get_request().get_headers() {
+            builder = builder.header(key, value);
+        }
         if let Some(version) = context.get_context_info().get_version() {
-            builder
-                .headers_mut()
-                .unwrap()
-                .insert(content_type.1, HeaderValue::from_str(version).unwrap());
+            builder = builder.header(content_type.1, version);
         }
         let request = match context.get_context_info().get_path().clone() {
             fusen_common::Path::GET(path) => builder
