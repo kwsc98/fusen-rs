@@ -1,4 +1,4 @@
-use examples::{DemoService, ReqDto, ResDto};
+use examples::{DemoService, LogAspect, ReqDto, ResDto};
 use fusen_rs::fusen_common::config::get_config_by_file;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_procedural_macro::{asset, handler};
@@ -78,6 +78,7 @@ async fn main() {
         // ))
         .add_fusen_server(Box::new(server))
         .add_handler(ServerLogAspect.load())
+        .add_handler(LogAspect::default().level("info".to_owned()).load())
         .build()
         .run()
         .await;

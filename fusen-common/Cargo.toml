@@ -31,6 +31,7 @@ tracing.workspace = true
 tracing-futures.workspace = true
 tracing-subscriber.workspace = true
 pretty_env_logger.workspace = true
+chrono.workspace = true
 #注册中心
 nacos-sdk.workspace = true
 rand.workspace = true

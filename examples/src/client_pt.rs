@@ -1,6 +1,8 @@
-use examples::{DemoServiceClient, ReqDto};
+use examples::{DemoServiceClient, LogAspect, ReqDto};
+use fusen_rs::fusen_common::config::get_config_by_file;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::register::Type;
+use fusen_rs::handler::HandlerLoad;
 use fusen_rs::register::nacos::NacosConfig;
 use fusen_rs::{fusen_common, FusenApplicationContext};
 use std::sync::Arc;
@@ -8,18 +10,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
-        .application_name("fusen-client-pt")
-        .register(Some(
-            NacosConfig::default()
-                .server_addr("127.0.0.1:8848".to_owned())
-                .to_url()
-                .unwrap()
-                .as_str(),
-        ))
+        .init(get_config_by_file("examples/client-config.yaml").unwrap())
+        .add_handler(LogAspect::default().level("info".to_owned()).load())
         .build();
     let client = Box::leak(Box::new(DemoServiceClient::new(Arc::new(
         context.client(Type::Fusen),
