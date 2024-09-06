@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "examples"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "async-trait",
  "bytes",
@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-common"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "bytes",
  "chrono",
@@ -472,11 +472,11 @@ dependencies = [
 
 [[package]]
 name = "fusen-derive-macro"
-version = "0.6.7"
+version = "0.6.8"
 
 [[package]]
 name = "fusen-procedural-macro"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "fusen-derive-macro",
  "proc-macro2",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-rs"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "async-recursion",
  "async-trait",
