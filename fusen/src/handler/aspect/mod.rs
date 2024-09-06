@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::HandlerContext;
 use crate::codec::request_codec::RequestCodec;
 use crate::codec::response_codec::ResponseCodec;
 use crate::register::ResourceInfo;
@@ -12,8 +13,11 @@ use crate::{
 use fusen_common::error::FusenError;
 use fusen_common::FusenContext;
 use http_body_util::BodyExt;
-
-use super::HandlerContext;
+use opentelemetry::propagation::TextMapPropagator;
+use opentelemetry::trace::TraceContextExt;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[allow(async_fn_in_trait)]
 pub trait Aspect {
@@ -49,6 +53,7 @@ pub struct AspectClientFilter {
     response_handle: ResponseHandler,
     handle_context: Arc<HandlerContext>,
     route: Route,
+    trace_context_propagator: TraceContextPropagator,
 }
 
 impl AspectClientFilter {
@@ -63,6 +68,7 @@ impl AspectClientFilter {
             response_handle,
             handle_context,
             route,
+            trace_context_propagator: TraceContextPropagator::new(),
         }
     }
 }
@@ -86,6 +92,11 @@ impl FusenFilter for AspectClientFilter {
                 .get_load_balance()
                 .select_(resource_info)
                 .await?;
+            let span_context = Span::current().context();
+            if span_context.has_active_span() {
+                self.trace_context_propagator
+                    .inject_context(&span_context, context.get_mut_request().get_mut_headers());
+            }
             let request = self.request_handle.encode(&context)?;
             let response: http::Response<hyper::body::Incoming> =
                 socket.send_request(request).await?;

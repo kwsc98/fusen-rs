@@ -208,27 +208,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
 
 [[package]]
-name = "bzip2"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdb116a6ef3f6c3698828873ad02c3014b3c85cadb88496095628e3ef1e347f8"
-dependencies = [
- "bzip2-sys",
- "libc",
-]
-
-[[package]]
-name = "bzip2-sys"
-version = "0.1.11+1.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "736a955f3fa7875102d57c82b8cac37ec45224a07fd32d58f9f7a186b6cd4cdc"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
-]
-
-[[package]]
 name = "cc"
 version = "1.0.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -272,15 +251,6 @@ name = "core-foundation-sys"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ea2b9bc92be3c2baa9334a323ebca2d6f074ff852cd1d7b11064035cd3868f"
-
-[[package]]
-name = "crc32fast"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a97769d94ddab943e4510d138150169a2758b5ef3eb191a9ee688de3e23ef7b3"
-dependencies = [
- "cfg-if",
-]
 
 [[package]]
 name = "crossbeam-channel"
@@ -397,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "examples"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "async-trait",
  "bytes",
@@ -440,16 +410,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
-name = "flate2"
-version = "1.0.30"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f54427cfd1c7829e2a139fcefea601bf088ebca651d2bf53ebc600eac295dae"
-dependencies = [
- "crc32fast",
- "miniz_oxide",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -481,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-common"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "bytes",
  "chrono",
@@ -512,11 +472,11 @@ dependencies = [
 
 [[package]]
 name = "fusen-derive-macro"
-version = "0.6.6"
+version = "0.6.7"
 
 [[package]]
 name = "fusen-procedural-macro"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "fusen-derive-macro",
  "proc-macro2",
@@ -528,13 +488,11 @@ dependencies = [
 
 [[package]]
 name = "fusen-rs"
-version = "0.6.6"
+version = "0.6.7"
 dependencies = [
  "async-recursion",
  "async-trait",
  "bytes",
- "bzip2",
- "flate2",
  "fusen-common",
  "fusen-procedural-macro",
  "futures",
@@ -548,18 +506,19 @@ dependencies = [
  "hyper-util",
  "lazy_static",
  "nacos-sdk",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "pin-project-lite",
  "pretty_env_logger",
  "prost",
  "prost-types",
- "protobuf-json-mapping",
  "rand",
  "serde",
  "serde_json",
  "tokio",
- "tower",
  "tracing",
  "tracing-futures",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
 ]
@@ -1465,37 +1424,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60caa6738c7369b940c3d49246a8d1749323674c65cb13010134f5c9bad5b519"
 dependencies = [
  "prost",
-]
-
-[[package]]
-name = "protobuf"
-version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df67496db1a89596beaced1579212e9b7c53c22dca1d9745de00ead76573d514"
-dependencies = [
- "once_cell",
- "protobuf-support",
- "thiserror",
-]
-
-[[package]]
-name = "protobuf-json-mapping"
-version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "781abbf9eedba12bd3496bc019d24d2f683adc2b5291d8d0acb39dbddc7c2a02"
-dependencies = [
- "protobuf",
- "protobuf-support",
- "thiserror",
-]
-
-[[package]]
-name = "protobuf-support"
-version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70e2d30ab1878b2e72d1e2fc23ff5517799c9929e2cf81a8516f9f4dcf2b9cf3"
-dependencies = [
- "thiserror",
 ]
 
 [[package]]

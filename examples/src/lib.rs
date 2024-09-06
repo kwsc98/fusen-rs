@@ -49,6 +49,15 @@ impl LogAspect {
 }
 
 impl LogAspect {
+    fn get_parent_span(&self, path: &str) -> Span {
+        match self.get_level().as_str() {
+            "info" => info_span!("begin_span", path = path),
+            "debug" => debug_span!("begin_span", path = path),
+            "warn" => warn_span!("begin_span", path = path),
+            "error" => error_span!("begin_span", path = path),
+            _ => tracing::trace_span!("begin_span", path = path),
+        }
+    }
     fn get_new_span(&self, context: Context, path: &str) -> Span {
         let span = match self.get_level().as_str() {
             "info" => info_span!(
@@ -95,10 +104,7 @@ impl Aspect for LogAspect {
         );
         let mut first_span = None;
         if !span_context.has_active_span() {
-            let span = self.get_new_span(
-                span_context,
-                &context.get_context_info().get_path().get_key(),
-            );
+            let span = self.get_parent_span(&context.get_context_info().get_path().get_key());
             span_context = span.context();
             let _ = first_span.insert(span);
         }

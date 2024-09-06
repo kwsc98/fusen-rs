@@ -45,7 +45,7 @@ impl RequestHandler {
 impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     fn encode(
         &self,
-        context: &FusenContext,
+        context: &FusenContext,        
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
         let content_type = match context.get_server_type() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),

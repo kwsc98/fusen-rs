@@ -1,10 +1,8 @@
 use examples::{DemoServiceClient, LogAspect, ReqDto};
 use fusen_rs::fusen_common::config::get_config_by_file;
-use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
-use fusen_rs::fusen_common::logs1::LogConfig;
+use fusen_rs::fusen_common::logs::LogConfig;
 use fusen_rs::fusen_common::register::Type;
 use fusen_rs::fusen_procedural_macro::handler;
-use fusen_rs::handler::aspect::Aspect;
 use fusen_rs::handler::loadbalance::LoadBalance;
 use fusen_rs::handler::HandlerLoad;
 use fusen_rs::protocol::socket::InvokerAssets;
@@ -21,30 +19,10 @@ impl LoadBalance for CustomLoadBalance {
         &self,
         invokers: Arc<ResourceInfo>,
     ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
+        let _span = info_span!("CustomLoadBalance").or_current();
         invokers
             .select()
             .ok_or("not find server : CustomLoadBalance".into())
-    }
-}
-
-struct ClientLogAspect;
-
-#[handler(id = "ClientLogAspect")]
-impl Aspect for ClientLogAspect {
-    async fn aroud(
-        &self,
-        filter: &'static dyn fusen_rs::filter::FusenFilter,
-        context: fusen_common::FusenContext,
-    ) -> Result<fusen_common::FusenContext, fusen_rs::Error> {
-        let start_time = get_now_date_time_as_millis();
-        info!("client send request : {:?}", context);
-        let context = filter.call(context).await;
-        info!(
-            "client receive response RT : {:?}ms : {:?}",
-            get_now_date_time_as_millis() - start_time,
-            context
-        );
-        context
     }
 }
 
@@ -56,7 +34,7 @@ async fn main() {
             "fusen-rs=debug,client=debug,examples=debug".to_owned(),
         ))
         .endpoint(Some("http://127.0.0.1:4317".to_owned()));
-    let _log_work = fusen_common::logs1::init_log(&log_config, "fusen-client");
+    let _log_work = fusen_common::logs::init_log(&log_config, "fusen-client");
     let context = FusenApplicationContext::builder()
         //使用配置文件进行初始化
         .init(get_config_by_file("examples/client-config.yaml").unwrap())
@@ -84,10 +62,6 @@ async fn main() {
         .await;
     info!("rev host msg : {:?}", res);
     //通过Fusen进行服务注册与发现，并且进行HTTP2+JSON进行调用
-    let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
-    let res = client
-        .sayHelloV2(ReqDto::default().str("world".to_string()))
-        .await;
     let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
     let res = client
         .sayHelloV2(ReqDto::default().str("world".to_string()))

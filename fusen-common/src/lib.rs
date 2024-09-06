@@ -16,7 +16,6 @@ pub mod config;
 pub mod date_util;
 pub mod error;
 pub mod logs;
-pub mod logs1;
 pub mod r#macro;
 pub mod net;
 pub mod register;
