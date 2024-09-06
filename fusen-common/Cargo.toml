@@ -22,7 +22,6 @@ serde_json.workspace = true
 uuid.workspace = true
 bytes.workspace = true
 percent-encoding.workspace = true
-
 toml.workspace = true
 serde_yaml.workspace = true
 
@@ -32,6 +31,12 @@ tracing-futures.workspace = true
 tracing-subscriber.workspace = true
 pretty_env_logger.workspace = true
 chrono.workspace = true
+tracing-opentelemetry.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+tracing-appender.workspace = true
+
 #注册中心
 nacos-sdk.workspace = true
 rand.workspace = true

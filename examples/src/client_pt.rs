@@ -15,7 +15,6 @@ async fn main() {
     fusen_common::logs::init_log();
     let context = FusenApplicationContext::builder()
         .init(get_config_by_file("examples/client-config.yaml").unwrap())
-        .add_handler(LogAspect::default().level("info".to_owned()).load())
         .build();
     let client = Box::leak(Box::new(DemoServiceClient::new(Arc::new(
         context.client(Type::Fusen),
