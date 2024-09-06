@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.7"
+version = "0.6.8"
 authors = ["kwsc98 <kwsc98@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -17,10 +17,10 @@ description = "RPC framework for service registration and discovery through API 
 
 
 [workspace.dependencies]
-fusen-common = { path = "fusen-common", version = "0.6.7" }
-fusen-rs = { path = "fusen", version = "0.6.7" }
-fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.6.7" }
-fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.6.7" }
+fusen-common = { path = "fusen-common", version = "0.6.8" }
+fusen-rs = { path = "fusen", version = "0.6.8" }
+fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.6.8" }
+fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.6.8" }
 
 #网络协议处理
 tokio = { version = "1.40.0", features = ["full"] }
