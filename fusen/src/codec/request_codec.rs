@@ -6,7 +6,7 @@ use crate::{
 };
 use bytes::{Bytes, BytesMut};
 use fusen_common::{
-    error::FusenError, logs::get_uuid, register::Type, ContextInfo, FusenContext, FusenRequest,
+    error::FusenError, logs::get_trade_id, register::Type, ContextInfo, FusenContext, FusenRequest,
     MetaData, Path,
 };
 use http::Request;
@@ -45,7 +45,7 @@ impl RequestHandler {
 impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     fn encode(
         &self,
-        context: &FusenContext,
+        context: &FusenContext,        
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
         let content_type = match context.get_server_type() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
@@ -150,7 +150,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         };
         let unique_identifier = meta_data
             .get_value("unique_identifier")
-            .map_or(get_uuid(), |e| e.clone());
+            .map_or(get_trade_id(), |e| e.clone());
         let version = meta_data
             .get_value("tri-service-version")
             .map_or(meta_data.get_value("version"), Some)

@@ -5,3 +5,4 @@ handler_infos:
   - id: org.apache.dubbo.springboot.demo.DemoService
     handlers_id:
       - ServerLogAspect
+      - LogAspect
