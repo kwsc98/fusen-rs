@@ -12,6 +12,7 @@ fusen-rust是一个高性能，轻量级的微服务框架，通过使用Rust宏
 - :white_check_mark: 自定义组件(自定义负载均衡器,Aspect环绕通知组件)
 - :white_check_mark: 配置中心(本地文件配置, Nacos)
 - :white_check_mark: 优雅停机
+- :white_check_mark: 微服务链路追踪(opentelemetry)
 - :construction: HTTP3协议支持
 
 ## 快速开始
