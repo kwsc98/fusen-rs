@@ -9,7 +9,7 @@ use opentelemetry::{trace::TraceContextExt, Context};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use serde::{Deserialize, Serialize};
 use tracing::{debug_span, error, error_span, info, info_span, warn_span, Instrument, Span};
-use tracing_opentelemetry::span_ext::OpenTelemetrySpanExt;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Serialize, Deserialize, Default, Debug, Data)]
 pub struct ReqDto {
