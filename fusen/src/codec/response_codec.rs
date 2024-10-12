@@ -144,7 +144,7 @@ impl ResponseCodec<Bytes, hyper::Error> for ResponseHandler {
                                 }
                                 None => {
                                     "grpc-status=".to_owned()
-                                        + &String::from_utf8(else_status.to_vec()).unwrap()
+                                        + core::str::from_utf8(else_status).unwrap()
                                 }
                             };
                             match else_status {

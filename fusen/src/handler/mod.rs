@@ -1,7 +1,12 @@
+use crate::filter::FusenFilter;
+
 use self::loadbalance::{DefaultLoadBalance, LoadBalance_};
-use aspect::{Aspect_, DefaultAspect};
+use aspect::DefaultAspect;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, LinkedList},
+    sync::Arc,
+};
 pub mod aspect;
 pub mod loadbalance;
 
@@ -59,7 +64,7 @@ impl HandlerContext {
 
     pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), crate::Error> {
         let mut load_balance: Option<&'static dyn LoadBalance_> = None;
-        let mut aspect: Option<&'static dyn Aspect_> = None;
+        let mut aspect: LinkedList<&'static dyn FusenFilter> = LinkedList::new();
 
         for item in &handler_info.handlers_id {
             if let Some(handler) = self.get_handler(item) {
@@ -68,7 +73,7 @@ impl HandlerContext {
                         let _ = load_balance.insert(handler);
                     }
                     HandlerInvoker::Aspect(handler) => {
-                        let _ = aspect.insert(handler);
+                        aspect.push_back(handler);
                     }
                 };
             }
@@ -81,18 +86,10 @@ impl HandlerContext {
                 };
             }
         }
-        if aspect.is_none() {
-            if let Some(handler) = self.get_handler("DefaultAspect") {
-                match handler.handler_invoker {
-                    HandlerInvoker::Aspect(handler) => aspect.insert(handler),
-                    _ => return Err(crate::Error::from("DefaultAspect get Error")),
-                };
-            }
-        }
         let handler_controller = HandlerController {
             load_balance: load_balance
                 .ok_or_else(|| crate::Error::from("not find load_balance"))?,
-            aspect: aspect.ok_or_else(|| crate::Error::from("not find aspect"))?,
+            aspect,
         };
         self.cache
             .insert(handler_info.id, Arc::new(handler_controller));
@@ -102,21 +99,21 @@ impl HandlerContext {
 
 pub struct HandlerController {
     load_balance: &'static dyn LoadBalance_,
-    aspect: &'static dyn Aspect_,
+    aspect: LinkedList<&'static dyn FusenFilter>,
 }
 
 impl HandlerController {
     pub fn get_load_balance(&self) -> &'static dyn LoadBalance_ {
         self.load_balance
     }
-    pub fn get_aspect(&self) -> &'static dyn Aspect_ {
-        self.aspect
+    pub fn get_aspect(&self) -> LinkedList<&'static dyn FusenFilter> {
+        self.aspect.clone()
     }
 }
 
 pub enum HandlerInvoker {
     LoadBalance(&'static dyn LoadBalance_),
-    Aspect(&'static dyn Aspect_),
+    Aspect(&'static dyn FusenFilter),
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
