@@ -1,4 +1,4 @@
-use super::FusenFilter;
+use super::{FusenFilter, ProceedingJoinPoint};
 use fusen_common::{
     error::FusenError,
     server::RpcServer,
@@ -60,15 +60,21 @@ impl RpcServerFilter {
 }
 
 impl FusenFilter for RpcServerFilter {
-    fn call(&self, mut context: FusenContext) -> FusenFuture<Result<FusenContext, crate::Error>> {
-        let server = self.get_server(&mut context);
+    fn call(
+        &self,
+        mut join_point: ProceedingJoinPoint,
+    ) -> FusenFuture<Result<FusenContext, crate::Error>> {
+        let server = self.get_server(join_point.get_mut_context());
         match server {
-            Some(server) => Box::pin(async move { Ok(server.invoke(context).await) }),
+            Some(server) => {
+                Box::pin(async move { Ok(server.invoke(join_point.into_data()).await) })
+            }
             None => Box::pin(async move {
-                context
+                join_point
+                    .get_mut_context()
                     .get_mut_response()
                     .set_response(Err(FusenError::NotFind));
-                Ok(context)
+                Ok(join_point.into_data())
             }),
         }
     }

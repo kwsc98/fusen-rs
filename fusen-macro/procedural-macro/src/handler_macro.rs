@@ -45,14 +45,13 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                 Box::new(self)
             )),),
             quote! {
-                impl fusen_rs::handler::aspect::Aspect_ for #item_self {
-                    fn aroud_(
+                impl fusen_rs::filter::FusenFilter for #item_self {
+                    fn call(
                         &'static self,
-                        filter: &'static dyn fusen_rs::filter::FusenFilter,
-                        context: fusen_rs::fusen_common::FusenContext,
+                        join_point: fusen_rs::filter::ProceedingJoinPoint,
                     ) -> fusen_rs::fusen_common::FusenFuture<Result<fusen_rs::fusen_common::FusenContext, fusen_rs::Error>> {
                         Box::pin(async move {
-                            self.aroud(filter,context).await
+                            self.aroud(join_point).await
                         })
                     }
                 }

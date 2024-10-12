@@ -1,4 +1,5 @@
 use examples::{DemoService, LogAspect, ReqDto, ResDto};
+use fusen_rs::filter::ProceedingJoinPoint;
 use fusen_rs::fusen_common::config::get_config_by_file;
 use fusen_rs::fusen_common::date_util::get_now_date_time_as_millis;
 use fusen_rs::fusen_common::logs::LogConfig;
@@ -15,12 +16,11 @@ struct ServerLogAspect;
 impl Aspect for ServerLogAspect {
     async fn aroud(
         &self,
-        filter: &'static dyn fusen_rs::filter::FusenFilter,
-        context: fusen_common::FusenContext,
+        join_point: ProceedingJoinPoint,
     ) -> Result<fusen_common::FusenContext, fusen_rs::Error> {
         let start_time = get_now_date_time_as_millis();
-        info!("server receive request : {:?}", context);
-        let context = filter.call(context).await;
+        info!("server receive request : {:?}", join_point.get_context());
+        let context = join_point.proceed().await;
         info!(
             "server dispose done RT : {:?}ms : {:?}",
             get_now_date_time_as_millis() - start_time,

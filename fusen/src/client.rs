@@ -1,4 +1,4 @@
-use crate::filter::FusenFilter;
+use crate::filter::{FusenFilter, ProceedingJoinPoint};
 use crate::handler::HandlerContext;
 use fusen_common::codec::json_field_compatible;
 use fusen_common::error::FusenError;
@@ -30,12 +30,14 @@ impl FusenClient {
     where
         Res: Send + Sync + Serialize + for<'a> Deserialize<'a> + Default,
     {
-        let aspect_handler = self
+        let mut aspect_handler = self
             .handle_context
             .get_controller(&context.get_context_info().get_handler_key())
             .get_aspect();
         context.insert_server_type(self.server_type.clone());
-        let context = aspect_handler.aroud_(self.client_filter, context).await?;
+        aspect_handler.push_back(self.client_filter);
+        let join_point = ProceedingJoinPoint::new(aspect_handler, context);
+        let context = join_point.proceed().await?;
         let return_ty = context.get_response().get_response_ty().unwrap();
         match context.into_response().into_response() {
             Ok(res) => {

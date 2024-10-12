@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use fusen_rs::{
+    filter::ProceedingJoinPoint,
     fusen_common::{self, date_util::get_now_date_time_as_millis, FusenContext, FusenRequest},
     fusen_procedural_macro::{asset, fusen_trait, handler, Data},
     handler::aspect::Aspect,
@@ -95,33 +96,52 @@ impl LogAspect {
 impl Aspect for LogAspect {
     async fn aroud(
         &self,
-        filter: &'static dyn fusen_rs::filter::FusenFilter,
-        mut context: fusen_common::FusenContext,
+        mut join_point: ProceedingJoinPoint,
     ) -> Result<fusen_common::FusenContext, fusen_rs::Error> {
         let mut span_context = self.get_trace_context_propagator().extract_with_context(
             &Span::current().context(),
-            context.get_meta_data().get_inner(),
+            join_point.get_context().get_meta_data().get_inner(),
         );
         let mut first_span = None;
         if !span_context.has_active_span() {
-            let span = self.get_parent_span(&context.get_context_info().get_path().get_key());
+            let span = self.get_parent_span(
+                &join_point
+                    .get_context()
+                    .get_context_info()
+                    .get_path()
+                    .get_key(),
+            );
             span_context = span.context();
             let _ = first_span.insert(span);
         }
         let span = self.get_new_span(
             span_context,
-            &context.get_context_info().get_path().get_key(),
+            &join_point
+                .get_context()
+                .get_context_info()
+                .get_path()
+                .get_key(),
         );
         let trace_id = span.context().span().span_context().trace_id().to_string();
         span.set_attribute("trace_id", trace_id.to_owned());
-        if context.get_meta_data().get_value("traceparent").is_none() {
-            self.get_trace_context_propagator()
-                .inject_context(&span.context(), context.get_mut_request().get_mut_headers());
+        if join_point
+            .get_context()
+            .get_meta_data()
+            .get_value("traceparent")
+            .is_none()
+        {
+            self.get_trace_context_propagator().inject_context(
+                &span.context(),
+                join_point
+                    .get_mut_context()
+                    .get_mut_request()
+                    .get_mut_headers(),
+            );
         };
         let future = async move {
             let start_time = get_now_date_time_as_millis();
             info!(message = "start handler");
-            let context = filter.call(context).await;
+            let context = join_point.proceed().await;
             info!(
                 message = "end handler",
                 elapsed = get_now_date_time_as_millis() - start_time,

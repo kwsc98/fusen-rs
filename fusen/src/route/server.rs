@@ -9,7 +9,7 @@ use std::{convert::Infallible, sync::Arc};
 
 use crate::{
     codec::{http_codec::FusenHttpCodec, HttpCodec},
-    filter::FusenFilter,
+    filter::{FusenFilter, ProceedingJoinPoint},
     handler::HandlerContext,
 };
 
@@ -44,10 +44,12 @@ where
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, FusenError> {
         let request = request.map(|e| e.boxed());
         let context = http_codec.decode(request).await?;
-        let handler = handler_context
+        let mut handler = handler_context
             .get_controller(&context.get_context_info().get_handler_key())
             .get_aspect();
-        let context = handler.aroud_(fusen_filter, context).await?;
+        handler.push_back(fusen_filter);
+        let join_point = ProceedingJoinPoint::new(handler, context);
+        let context = join_point.proceed().await?;
         let response = http_codec.encode(context).await?;
         Ok(response)
     }
