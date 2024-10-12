@@ -150,22 +150,20 @@ impl LoadBalance for CustomLoadBalance {
 
 ### Aspect
 
-动态代理的概念相信大家都不陌生,这是Java对类进行增强的一种技术,而Spring框架利用此特性封装出了更高级的模型, 那就是AOP面先切面编程模型. 本组件就是参考了此模型,实现了环绕式通知模型, 用户可以基于此组件实现各种组件需求，比如说服务熔断/限流,请求的前置后置处理,链路追踪,请求响应时间监控等需求.
+动态代理的概念相信大家都不陌生,这是Java对类进行增强的一种技术,而Spring框架利用此特性封装出了更高级的模型, 那就是AOP面先切面编程模型. 本组件就是参考了此模型,实现了环绕式通知模型, 用户可以基于此组件实现各种组件需求，比如说服务熔断/限流,请求的前置后置处理,链路追踪,请求响应时间监控等需求,并且Aspect组件支持多层嵌套调用,提供灵活的定义方式满足用户复杂需求.
 
 ```rust
-#[handler(id = "ClientLogAspect" )]
-impl Aspect for ClientLogAspect {
+#[handler(id = "ServerLogAspect")]
+impl Aspect for ServerLogAspect {
     async fn aroud(
         &self,
-        filter: &'static dyn fusen_rs::filter::FusenFilter,
-        context: fusen_common::FusenContext,
+        join_point: ProceedingJoinPoint,
     ) -> Result<fusen_common::FusenContext, fusen_rs::Error> {
         let start_time = get_now_date_time_as_millis();
-        info!("client send request : {:?}", context);
-        //执行RPC调用
-        let context = filter.call(context).await;
+        info!("server receive request : {:?}", join_point.get_context());
+        let context = join_point.proceed().await;
         info!(
-            "client receive response RT : {:?}ms : {:?}",
+            "server dispose done RT : {:?}ms : {:?}",
             get_now_date_time_as_millis() - start_time,
             context
         );
