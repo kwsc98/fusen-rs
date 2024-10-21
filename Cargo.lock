@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "examples"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-common"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "bytes",
  "chrono",
@@ -473,11 +473,11 @@ dependencies = [
 
 [[package]]
 name = "fusen-derive-macro"
-version = "0.6.9"
+version = "0.6.10"
 
 [[package]]
 name = "fusen-procedural-macro"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "fusen-derive-macro",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-rs"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -742,9 +742,9 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
-version = "1.4.1"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50dfd22e0e76d0f662d429a5f80fcaf3855009297eab6a0a9f8543834744ba05"
+checksum = "bbbff0a806a4728c99295b254c8838933b5b082d75e3cb70c8dab21fdfbcfa9a"
 dependencies = [
  "bytes",
  "futures-channel",
