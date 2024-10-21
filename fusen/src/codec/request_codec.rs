@@ -11,7 +11,7 @@ use fusen_common::{
 };
 use http::Request;
 use http_body_util::{BodyExt, Full};
-use std::{convert::Infallible, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 pub(crate) trait RequestCodec<T, E> {
     fn encode(&self, msg: &FusenContext) -> Result<Request<BoxBody<T, Infallible>>, crate::Error>;
@@ -45,7 +45,7 @@ impl RequestHandler {
 impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     fn encode(
         &self,
-        context: &FusenContext,        
+        context: &FusenContext,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, crate::Error> {
         let content_type = match context.get_server_type() {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
@@ -65,21 +65,21 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method("GET")
                 .uri(get_path(
                     path,
-                    context.get_request().get_query_fields().as_ref(),
+                    context.get_request().get_query_fields(),
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::PUT(path) => builder
                 .method("PUT")
                 .uri(get_path(
                     path,
-                    context.get_request().get_query_fields().as_ref(),
+                    context.get_request().get_query_fields(),
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::DELETE(path) => builder
                 .method("DELETE")
                 .uri(get_path(
                     path,
-                    context.get_request().get_query_fields().as_ref(),
+                    context.get_request().get_query_fields(),
                 ))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::POST(mut path) => {
@@ -114,40 +114,37 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let meta_data = MetaData::from(request.headers());
         let path = request.uri().path().to_string();
         let method = request.method().to_string().to_lowercase();
-        let mut temp_query_fields_ty: Vec<(String, String)> = vec![];
+        let mut temp_query_fields_ty: HashMap<String, String> = HashMap::new();
         let mut body = BytesMut::new();
-        if method.contains("get") {
-            let url = request.uri().to_string();
-            let url: Vec<&str> = url.split('?').collect();
-            if url.len() > 1 {
-                let params: Vec<&str> = url[1].split('&').collect();
-                for item in params {
-                    let item: Vec<&str> = item.split('=').collect();
-                    temp_query_fields_ty.push((item[0].to_owned(), item[1].to_owned()));
-                }
+        let url = request.uri().to_string();
+        let url: Vec<&str> = url.split('?').collect();
+        if url.len() > 1 {
+            let params: Vec<&str> = url[1].split('&').collect();
+            for item in params {
+                let item: Vec<&str> = item.split('=').collect();
+                temp_query_fields_ty.insert(item[0].to_owned(), item[1].to_owned());
             }
-        } else {
-            let mut bytes = BytesMut::new();
-            while let Some(Ok(frame)) = request.body_mut().frame().await {
-                if frame.is_data() {
-                    bytes.extend(frame.into_data().unwrap());
-                }
+        }
+        let mut bytes = BytesMut::new();
+        while let Some(Ok(frame)) = request.body_mut().frame().await {
+            if frame.is_data() {
+                bytes.extend(frame.into_data().unwrap());
             }
-            let bytes: Bytes = bytes.into();
-            match meta_data.get_codec() {
-                fusen_common::codec::CodecType::JSON => {
-                    body.extend_from_slice(&bytes);
-                }
-                fusen_common::codec::CodecType::GRPC => {
-                    let bytes = self
-                        .grpc_codec
-                        .decode(&bytes)
-                        .map_err(FusenError::from)?
-                        .get_body();
-                    body.extend_from_slice(&bytes);
-                }
+        }
+        let bytes: Bytes = bytes.into();
+        match meta_data.get_codec() {
+            fusen_common::codec::CodecType::JSON => {
+                body.extend_from_slice(&bytes);
             }
-        };
+            fusen_common::codec::CodecType::GRPC => {
+                let bytes = self
+                    .grpc_codec
+                    .decode(&bytes)
+                    .map_err(FusenError::from)?
+                    .get_body();
+                body.extend_from_slice(&bytes);
+            }
+        }
         let unique_identifier = meta_data
             .get_value("unique_identifier")
             .map_or(get_trade_id(), |e| e.clone());
@@ -164,8 +161,10 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .path_cache
             .seach(&mut path)
             .ok_or(FusenError::NotFind)?;
-        if let Some(mut fields) = fields {
-            temp_query_fields_ty.append(&mut fields);
+        if let Some(fields) = fields {
+            for (key, value) in fields {
+                temp_query_fields_ty.insert(key, value);
+            }
         }
         let context = FusenContext::new(
             unique_identifier,
@@ -174,30 +173,23 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method_name(method)
                 .path(path)
                 .version(version),
-            FusenRequest::new(
-                if temp_query_fields_ty.is_empty() {
-                    None
-                } else {
-                    Some(temp_query_fields_ty)
-                },
-                body.into(),
-            ),
+            FusenRequest::new(temp_query_fields_ty, body.into()),
             meta_data,
         );
         Ok(context)
     }
 }
 
-fn get_path(mut path: String, query_fields: Option<&Vec<(String, String)>>) -> String {
+fn get_path(mut path: String, query_fields: &HashMap<String, String>) -> String {
     if path.contains('{') {
         return get_rest_path(path, query_fields);
     }
-    if let Some(query_fields) = query_fields {
+    if !query_fields.is_empty() {
         path.push('?');
         for item in query_fields {
-            path.push_str(&item.0);
+            path.push_str(item.0);
             path.push('=');
-            path.push_str(&item.1);
+            path.push_str(item.1);
             path.push('&');
         }
         path.remove(path.len() - 1);
@@ -205,8 +197,8 @@ fn get_path(mut path: String, query_fields: Option<&Vec<(String, String)>>) -> S
     path
 }
 
-fn get_rest_path(mut path: String, query_fields: Option<&Vec<(String, String)>>) -> String {
-    if let Some(query_fields) = query_fields {
+fn get_rest_path(mut path: String, query_fields: &HashMap<String, String>) -> String {
+    if !query_fields.is_empty() {
         for item in query_fields {
             let temp = format!("{{{}}}", item.0);
             path = path.replace(&temp, &item.1.replace('\"', ""));

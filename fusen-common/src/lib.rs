@@ -127,20 +127,18 @@ impl ContextInfo {
 #[derive(Debug, Data)]
 pub struct FusenRequest {
     headers: HashMap<String, String>,
-    query_fields: Option<Vec<(String, String)>>,
+    query_fields: HashMap<String, String>,
     body: Bytes,
 }
 
 impl FusenRequest {
     pub fn new_for_client(method: &str, fields_ty: Vec<String>, bodys: Vec<String>) -> Self {
-        let mut query_fields = None;
+        let mut query_fields = HashMap::new();
         let mut bytes = BytesMut::new();
         if method.to_lowercase().as_str() != "post" {
-            let mut vec = vec![];
             for (idx, body) in bodys.into_iter().enumerate() {
-                vec.push((fields_ty[idx].to_owned(), body));
+                query_fields.insert(fields_ty[idx].to_owned(), body);
             }
-            let _ = query_fields.insert(vec);
         } else {
             bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
         }
@@ -150,7 +148,7 @@ impl FusenRequest {
             body: bytes.into(),
         }
     }
-    pub fn new(query_fields: Option<Vec<(String, String)>>, body: Bytes) -> Self {
+    pub fn new(query_fields: HashMap<String, String>, body: Bytes) -> Self {
         FusenRequest {
             headers: Default::default(),
             query_fields,
@@ -163,11 +161,8 @@ impl FusenRequest {
         temp_fields_ty: Vec<&str>,
     ) -> Result<Vec<String>> {
         let mut new_fields = vec![];
-        if let Some(fields_name) = &self.query_fields {
-            let mut hash_map = HashMap::with_capacity(8);
-            for item in fields_name.iter() {
-                let _ = hash_map.insert(item.0.clone(), item.1.clone());
-            }
+        if !self.query_fields.is_empty() {
+            let hash_map = &self.query_fields;
             for item in temp_fields_name.iter().enumerate() {
                 let fields = hash_map.get(*item.1).ok_or("fields handler error")?;
                 let mut temp = String::new();

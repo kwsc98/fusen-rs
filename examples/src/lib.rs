@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bytes::Bytes;
 use fusen_rs::{
     filter::ProceedingJoinPoint,
@@ -156,7 +158,7 @@ impl Aspect for LogAspect {
                 let mut context = FusenContext::new(
                     "unique_identifier".to_owned(),
                     Default::default(),
-                    FusenRequest::new(None, Bytes::new()),
+                    FusenRequest::new(HashMap::new(), Bytes::new()),
                     Default::default(),
                 );
                 *context.get_mut_response().get_mut_response() = Ok(Bytes::copy_from_slice(
