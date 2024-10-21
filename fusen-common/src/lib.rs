@@ -164,16 +164,17 @@ impl FusenRequest {
         if !self.query_fields.is_empty() {
             let hash_map = &self.query_fields;
             for item in temp_fields_name.iter().enumerate() {
-                let fields = hash_map.get(*item.1).ok_or("fields handler error")?;
-                let mut temp = String::new();
-                if "String" == temp_fields_ty[item.0] {
-                    temp.push('\"');
-                    temp.push_str(fields);
-                    temp.push('\"');
-                } else {
-                    temp.push_str(fields);
+                if let Some(fields) = hash_map.get(*item.1) {
+                    let mut temp = String::new();
+                    if "String" == temp_fields_ty[item.0] {
+                        temp.push('\"');
+                        temp.push_str(fields);
+                        temp.push('\"');
+                    } else {
+                        temp.push_str(fields);
+                    }
+                    new_fields.push(temp);
                 }
-                new_fields.push(temp);
             }
         } else if self.body.starts_with(b"[") {
             new_fields = serde_json::from_slice(&self.body)?;
