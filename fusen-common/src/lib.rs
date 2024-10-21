@@ -126,6 +126,7 @@ impl ContextInfo {
 
 #[derive(Debug, Data)]
 pub struct FusenRequest {
+    method: String,
     headers: HashMap<String, String>,
     query_fields: HashMap<String, String>,
     body: Bytes,
@@ -143,13 +144,15 @@ impl FusenRequest {
             bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
         }
         FusenRequest {
+            method: method.to_ascii_lowercase(),
             headers: Default::default(),
             query_fields,
             body: bytes.into(),
         }
     }
-    pub fn new(query_fields: HashMap<String, String>, body: Bytes) -> Self {
+    pub fn new(method: &str, query_fields: HashMap<String, String>, body: Bytes) -> Self {
         FusenRequest {
+            method: method.to_ascii_lowercase(),
             headers: Default::default(),
             query_fields,
             body,
@@ -161,20 +164,19 @@ impl FusenRequest {
         temp_fields_ty: Vec<&str>,
     ) -> Result<Vec<String>> {
         let mut new_fields = vec![];
-        if !self.query_fields.is_empty() {
+        if self.method != "post" {
             let hash_map = &self.query_fields;
             for item in temp_fields_name.iter().enumerate() {
-                if let Some(fields) = hash_map.get(*item.1) {
-                    let mut temp = String::new();
-                    if "String" == temp_fields_ty[item.0] {
-                        temp.push('\"');
-                        temp.push_str(fields);
-                        temp.push('\"');
-                    } else {
-                        temp.push_str(fields);
-                    }
-                    new_fields.push(temp);
+                let fields = hash_map.get(*item.1).ok_or("fields handler error")?;
+                let mut temp = String::new();
+                if "String" == temp_fields_ty[item.0] {
+                    temp.push('\"');
+                    temp.push_str(fields);
+                    temp.push('\"');
+                } else {
+                    temp.push_str(fields);
                 }
+                new_fields.push(temp);
             }
         } else if self.body.starts_with(b"[") {
             new_fields = serde_json::from_slice(&self.body)?;

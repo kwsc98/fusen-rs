@@ -113,7 +113,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
     ) -> Result<FusenContext, crate::Error> {
         let meta_data = MetaData::from(request.headers());
         let path = request.uri().path().to_string();
-        let method = request.method().to_string().to_lowercase();
+        let request_method = request.method().to_string().to_lowercase();
         let mut temp_query_fields_ty: HashMap<String, String> = HashMap::new();
         let mut body = BytesMut::new();
         let url = request.uri().to_string();
@@ -152,7 +152,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             .get_value("tri-service-version")
             .map_or(meta_data.get_value("version"), Some)
             .cloned();
-        let mut path = Path::new(&method, path);
+        let mut path = Path::new(&request_method, path);
         let PathCacheResult {
             class,
             method,
@@ -173,7 +173,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method_name(method)
                 .path(path)
                 .version(version),
-            FusenRequest::new(temp_query_fields_ty, body.into()),
+            FusenRequest::new(&request_method,temp_query_fields_ty, body.into()),
             meta_data,
         );
         Ok(context)

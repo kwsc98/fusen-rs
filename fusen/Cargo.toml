@@ -1,6 +1,6 @@
 [package]
 name = "fusen-rs"
-version.workspace = true
+version = "0.6.13"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
