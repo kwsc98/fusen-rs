@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "fusen-rs"
-version = "0.6.13"
+version = "0.6.14"
 dependencies = [
  "async-recursion",
  "async-trait",

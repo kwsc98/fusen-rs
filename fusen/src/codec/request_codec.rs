@@ -52,7 +52,6 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             _ => ("application/json", "version"),
         };
         let mut builder = Request::builder()
-            .header("content-type", content_type.0)
             .header("connection", "keep-alive");
         for (key, value) in context.get_request().get_headers() {
             builder = builder.header(key, value);
@@ -99,6 +98,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 };
                 let builder = builder.header("content-length", body.len());
                 builder
+                    .header("content-type", content_type.0)
                     .method("POST")
                     .uri(path)
                     .body(Full::new(body).boxed())
