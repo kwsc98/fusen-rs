@@ -1,7 +1,7 @@
 
-# `fusen-rs` A Rust-RPC framework that is most like an RPC framework
+# `fusen-rs` A most like an RPC framework
 
-fusen-rust is a high-performance, lightweight microservice framework that uses Rust macros to solve the current problems of complex use and low performance of mainstream rpc frameworks. It does not need to generate RPC calling code through scripts and scaffolding, and compiles it through macros. It uses "reflection" to achieve high-performance calls and meet the simplicity of RPC calls. It also supports Dubbo3. The SpringCloud microservice ecosystem can perform service registration discovery and mutual calls with Java projects, and supports user-defined components and other functions.
+fusen-rs is a high-performance, lightweight microservice framework that uses Rust macros to solve the current problems of complex use and low performance of mainstream rpc frameworks. It does not need to generate RPC calling code through scripts and scaffolding, and compiles it through macros. It uses "reflection" to achieve high-performance calls and meet the simplicity of RPC calls. It also supports Dubbo3. The SpringCloud microservice ecosystem can perform service registration discovery and mutual calls with Java projects, and supports user-defined components and other functions.
 
 [ [中文](./README_CN.md) ]
 
