@@ -1,23 +1,21 @@
 
-# `fusen-rs` A Rust-RPC framework that is most like an RPC framework
+# `fusen-rs` 一个最像RPC框架的Rust-RPC框架
 
-fusen-rust is a high-performance, lightweight microservice framework that uses Rust macros to solve the current problems of complex use and low performance of mainstream rpc frameworks. It does not need to generate RPC calling code through scripts and scaffolding, and compiles it through macros. It uses "reflection" to achieve high-performance calls and meet the simplicity of RPC calls. It also supports Dubbo3. The SpringCloud microservice ecosystem can perform service registration discovery and mutual calls with Java projects, and supports user-defined components and other functions.
+fusen-rust是一个高性能，轻量级的微服务框架，通过使用Rust宏来解决目前主流rpc框架使用复杂，性能低等问题，不需要通过脚本和脚手架生成RPC调用代码，通过宏来进行编译期"反射"来实现高性能的调用，满足RPC调用的简易性，同时支持Dubbo3,SpringCloud微服务生态可以与Java项目进行服务注册发现与互相调用,并且支持用户自定义组件等功能.
 
-[ [中文](./README_CN.md) ]
+## 功能列表
 
-## Function List
+- :white_check_mark: RPC调用抽象层(Rust宏)
+- :white_check_mark: 多协议支持(HTTP1, HTTP2)
+- :white_check_mark: 服务注册与发现(Nacos)
+- :white_check_mark: 微服务生态兼容(Dubbo3, SpringCloud)
+- :white_check_mark: 自定义组件(自定义负载均衡器,Aspect环绕通知组件)
+- :white_check_mark: 配置中心(本地文件配置, Nacos)
+- :white_check_mark: 优雅停机
+- :white_check_mark: 微服务链路追踪(opentelemetry)
+- :construction: HTTP3协议支持
 
-- :white_check_mark: RPC call abstraction layer (Rust macro)
-- :white_check_mark: Multi-protocol support (HTTP1, HTTP2)
-- :white_check_mark: Service registration and discovery (Nacos)
-- :white_check_mark: Microservice ecological compatibility (Dubbo3, SpringCloud)
-- :white_check_mark: Custom components (custom load balancer, Aspect surround notification component)
-- :white_check_mark: Configuration center (local file configuration, Nacos)
-- :white_check_mark: Graceful shutdown
-- :white_check_mark: Microservice link tracking (opentelemetry)
-- :construction: HTTP3 protocol support
-
-## Quick Start
+## 快速开始
 
 ### Common Interface
 
@@ -128,13 +126,13 @@ async fn main() {
 }
 ```
 
-## Custom component
+## 自定义组件
 
-Microservice custom components include load balancers, service breaker/current limiting components, pre- and post-request processors, service link tracking and other components. Since the components are highly customized, this project is provided with reference to the concept of AOP Two custom components are provided to provide flexible request processing.
+微服务自定义组件包括, 负载均衡器, 服务熔断/限流组件, 前置后置请求处理器, 服务链路追踪等组件. 由于组件的定制化程度较高, 所以本项目参考AOP的概念提供了两种自定义组件,来提供灵活的请求处理。
 
 ### LoadBalance
 
-Load balancing component, LoadBalance provides a select interface to implement user-defined service balancing configuration.
+负载均衡组件, LoadBalance提供一个select接口来实现用户自定义服务均衡配置。
 
 ```rust
 #[handler(id = "CustomLoadBalance")]
@@ -152,7 +150,7 @@ impl LoadBalance for CustomLoadBalance {
 
 ### Aspect
 
-I believe everyone is familiar with the concept of dynamic proxy. This is a technology used by Java to enhance classes, and the Spring framework uses this feature to encapsulate a more advanced model, which is the AOP aspect-first programming model. This component is a reference This model implements the wraparound notification model. Users can implement various component requirements based on this component, such as service circuit breaker/current limiting, request pre- and post-processing, link tracking, request response time monitoring and other requirements, and Aspect Components support multi-level nested calls and provide flexible definition methods to meet users' complex needs.
+动态代理的概念相信大家都不陌生,这是Java对类进行增强的一种技术,而Spring框架利用此特性封装出了更高级的模型, 那就是AOP面先切面编程模型. 本组件就是参考了此模型,实现了环绕式通知模型, 用户可以基于此组件实现各种组件需求，比如说服务熔断/限流,请求的前置后置处理,链路追踪,请求响应时间监控等需求,并且Aspect组件支持多层嵌套调用,提供灵活的定义方式满足用户复杂需求.
 
 ```rust
 #[handler(id = "ServerLogAspect")]
@@ -176,16 +174,16 @@ impl Aspect for ServerLogAspect {
 
 ## Dubbo3
 
-This project is also compatible with the dubbo3 protocol, and can easily perform service registration discovery and intermodulation with the Java version of the Dubbo3 project through interface exposure.
+本项目同时兼容dubbo3协议，可以很方便的与Java版本的Dubbo3项目通过接口暴露的方式进行服务注册发现和互调。
 
-Rust's Server and Client don't need to be modified at all, just like the above example.
+Rust的Server和Client完全不用改造就如上示例即可。
 
-The Java version of the Dubbo3 project does not need to be modified at the code level. It only needs to add some dependencies and configurations (because the way Dubbo3 uses interface exposure does not support the json serialization protocol by default, it uses the binary serialization format of fastjson2, so here we need to manually Add support for fastjson1)
+Java版本的Dubbo3项目，代码层面不需要改造，只需要添加一些依赖和配置（因Dubbo3使用接口暴露的方式默认不支持json序列化协议，而是采用fastjson2的二进制序列化格式，所以这里我们需手动添加fastjson1的支持）
 
-Here we use duboo3’s official sample dubbo-samples-spring-boot project for demonstration.
+这里我们使用duboo3的官方示例dubbo-samples-spring-boot项目进行演示
 <https://github.com/apache/dubbo-samples>
 
-First, we need to add the maven dependencies of fastjson and nacos to the pom.xml of the Server and Client services.
+首先我们需要把Server和Client的服务的pom.xml都添加fastjson和nacos的maven依赖
 
 ```java
 <dependency>
@@ -269,22 +267,22 @@ dubbo:
 
 ## SpringCloud
 
-At the same time, this project has also expanded the HTTP interface to be used as a WebServer framework, and also supports Spring Cloud service registration and discovery. Users can flexibly select and switch the protocols that need to be exposed, and support simultaneous exposure.
+同时本项目还拓展了HTTP接口可以当做一个WebServer框架，并且还支持了SpringCloud服务注册与发现，用户可以灵活的选择和切换需要暴露的协议，并且支持同时暴露。
 
-Here we use the spring-cloud-alibaba project for demonstration
+这里我们使用spring-cloud-alibaba项目进行演示
 <https://github.com/alibaba/spring-cloud-alibaba>
 
-When calling SpringCloud on RustClient, you need to change fusen_trait_id to the target service id (application_name)
+RustClient端调用SpringCloud需要将fusen_trait_id修改为目标服务id（application_name）
 
 ```rust
 #[fusen_trait(id = "service-provider")]
 ```
 
-There is no need to modify the Java server and client code. Just start it.
+Java的Server和Client端的代码也无需改造。直接启动即可。
 
 ### SpringCloud-Server
 
-Provider startup class
+Provider启动类
 package com.alibaba.cloud.examples.ProviderApplication
 
 ```java
@@ -306,7 +304,7 @@ public class EchoController {
 
 ### SpringCloud-Client
 
-Consumer startup class
+Consumer启动类
 package com.alibaba.cloud.examples.ConsumerApplication
 
 ```java
@@ -323,14 +321,14 @@ public class TestController {
 
 ```
 
-Test curl (curl => SpringCloud => fusen-rust)
+测试curl ( curl => SpringCloud => fusen-rust )
 <http://127.0.0.1:18083/divide-feign?a=1&b=2>
 
 ```rust
 2024-04-10T06:52:32.737307Z  INFO ThreadId(07) server: 33: res : a=1,b=2
 ```
 
-Test curl ( curl => fusen-rust )
+测试curl ( curl => fusen-rust )
 
 <http://127.0.0.1:8081/divide?a=2&b=3>
 
@@ -338,13 +336,13 @@ Test curl ( curl => fusen-rust )
 2024-04-10T06:54:26.436416Z  INFO ThreadId(512) server: 33: res : a=2,b=3
 ```
 
-Test curl ( curl => fusen-rust )
+测试curl ( curl => fusen-rust )
 
 curl --location --request POST '<http://127.0.0.1:8081/sayHelloV2-http>' \
 --header 'Content-Type: application/json' \
 --header 'Connection: keep-alive' \
 --data-raw '{
-"str" ​​: "World"
+    "str" : "World"
 }'
 
 ```rust
