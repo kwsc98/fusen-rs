@@ -51,8 +51,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             &Type::Dubbo => ("application/grpc", "tri-service-version"),
             _ => ("application/json", "version"),
         };
-        let mut builder = Request::builder()
-            .header("connection", "keep-alive");
+        let mut builder = Request::builder().header("connection", "keep-alive");
         for (key, value) in context.get_request().get_headers() {
             builder = builder.header(key, value);
         }
@@ -62,24 +61,15 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
         let request = match context.get_context_info().get_path().clone() {
             fusen_common::Path::GET(path) => builder
                 .method("GET")
-                .uri(get_path(
-                    path,
-                    context.get_request().get_query_fields(),
-                ))
+                .uri(get_path(path, context.get_request().get_query_fields()))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::PUT(path) => builder
                 .method("PUT")
-                .uri(get_path(
-                    path,
-                    context.get_request().get_query_fields(),
-                ))
+                .uri(get_path(path, context.get_request().get_query_fields()))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::DELETE(path) => builder
                 .method("DELETE")
-                .uri(get_path(
-                    path,
-                    context.get_request().get_query_fields(),
-                ))
+                .uri(get_path(path, context.get_request().get_query_fields()))
                 .body(Full::new(Bytes::new()).boxed()),
             fusen_common::Path::POST(mut path) => {
                 let body: Bytes = match context.get_server_type() {
@@ -89,8 +79,12 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                             context.get_context_info().get_class_name(),
                             context.get_context_info().get_method_name()
                         );
-                        let fields: Vec<String> =
-                            serde_json::from_slice(context.get_request().get_body())?;
+                        let body = context.get_request().get_body();
+                        let fields: Vec<String> = if body.starts_with(b"[") {
+                            serde_json::from_slice(body)?
+                        } else {
+                            vec![String::from_utf8(body.to_vec())?]
+                        };
                         let triple_request_wrapper = TripleRequestWrapper::from(fields);
                         self.grpc_codec.encode(&triple_request_wrapper)?
                     }
@@ -173,7 +167,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 .method_name(method)
                 .path(path)
                 .version(version),
-            FusenRequest::new(&request_method,temp_query_fields_ty, body.into()),
+            FusenRequest::new(&request_method, temp_query_fields_ty, body.into()),
             meta_data,
         );
         Ok(context)

@@ -141,7 +141,11 @@ impl FusenRequest {
                 query_fields.insert(fields_ty[idx].to_owned(), body);
             }
         } else {
-            bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
+            if bodys.len() == 1 {
+                bytes.extend_from_slice(bodys[0].as_bytes());
+            } else {
+                bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
+            }
         }
         FusenRequest {
             method: method.to_ascii_lowercase(),
