@@ -138,14 +138,16 @@ impl FusenRequest {
         let mut bytes = BytesMut::new();
         if method.to_lowercase().as_str() != "post" {
             for (idx, body) in bodys.into_iter().enumerate() {
-                query_fields.insert(fields_ty[idx].to_owned(), body);
+                let mut pre = 0;
+                if fields_ty[idx].starts_with("r#") {
+                    pre = 2;
+                }
+                query_fields.insert(fields_ty[idx][pre..].to_owned(), body.replace('\"', ""));
             }
+        } else if bodys.len() == 1 {
+            bytes.extend_from_slice(bodys[0].as_bytes());
         } else {
-            if bodys.len() == 1 {
-                bytes.extend_from_slice(bodys[0].as_bytes());
-            } else {
-                bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
-            }
+            bytes.extend_from_slice(serde_json::to_string(&bodys).unwrap().as_bytes());
         }
         FusenRequest {
             method: method.to_ascii_lowercase(),
@@ -171,7 +173,11 @@ impl FusenRequest {
         if self.method != "post" {
             let hash_map = &self.query_fields;
             for item in temp_fields_name.iter().enumerate() {
-                let fields = hash_map.get(*item.1).ok_or("fields handler error")?;
+                let mut pre = 0;
+                if item.1.starts_with("r#") {
+                    pre = 2;
+                };
+                let fields = hash_map.get(&item.1[pre..]).ok_or("fields handler error")?;
                 let mut temp = String::new();
                 if "String" == temp_fields_ty[item.0] {
                     temp.push('\"');

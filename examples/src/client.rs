@@ -26,7 +26,7 @@ impl LoadBalance for CustomLoadBalance {
     }
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
+#[tokio::main]
 async fn main() {
     let log_config = LogConfig::default()
         .devmode(Some(true))

@@ -195,7 +195,7 @@ fn get_rest_path(mut path: String, query_fields: &HashMap<String, String>) -> St
     if !query_fields.is_empty() {
         for item in query_fields {
             let temp = format!("{{{}}}", item.0);
-            path = path.replace(&temp, &item.1.replace('\"', ""));
+            path = path.replace(&temp, item.1);
         }
     }
     path

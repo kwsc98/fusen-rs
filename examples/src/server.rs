@@ -58,7 +58,7 @@ impl DemoService for DemoServiceImpl {
     }
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
+#[tokio::main]
 async fn main() {
     let log_config = LogConfig::default()
         .devmode(Some(true))
