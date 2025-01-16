@@ -22,46 +22,46 @@ fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.6.13" }
 fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.6.13" }
 
 #网络协议处理
-tokio = { version = "1.40.0", features = ["full"] }
-hyper = { version = "1.5.0", features = ["full"] }
+tokio = { version = "1.43.0", features = ["full"] }
+hyper = { version = "1.5.2", features = ["full"] }
 hyper-tls = { version = "0.6.0" }
 hyper-util = { version = "0.1.9", features = ["full"] }
-http = "1.1.0"
+http = "1.2.0"
 http-body = "1.0.1"
 http-body-util = "0.1.2"
-bytes = "1.7.2"
+bytes = "1.9.0"
 futures = "0.3.31"
-async-trait = "0.1.83"
+async-trait = "0.1.85"
 async-recursion = "1.1.1"
-h2 = "0.4.6"
+h2 = "0.4.7"
 futures-util = "0.3.31"
 
 #日志处理
-tracing = "0.1.40"
+tracing = "0.1.41"
 tracing-futures = { version = "0.2.5" }
-tracing-subscriber = { version = "0.3.18", features = ["json","env-filter"] }
+tracing-subscriber = { version = "0.3.19", features = ["json","env-filter"] }
 pretty_env_logger = "0.5.0"
-tracing-opentelemetry = "0.27.0"
-opentelemetry = "0.26.0"
-opentelemetry_sdk = { version = "0.26.0", features = ["rt-tokio"] }
-opentelemetry-otlp = "0.26.0"
+tracing-opentelemetry = "0.28.0"
+opentelemetry = "0.27.1"
+opentelemetry_sdk = { version = "0.27.1", features = ["rt-tokio"] }
+opentelemetry-otlp = "0.27.0"
 tracing-appender = "0.2.3"
 
 
 #json序列化
-serde = { version = "1.0.210", features = ["derive"] }
-serde_json = "1.0.128"
-uuid = { version = "1.10.0", features = ["v4"] }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.135"
+uuid = { version = "1.12.0", features = ["v4"] }
 
 percent-encoding = "2.3.1"
-pin-project-lite = "0.2.14"
+pin-project-lite = "0.2.16"
 lazy_static = "1.5.0"
-proc-macro2 = "1.0.87"
+proc-macro2 = "1.0.93"
 rand = "0.8.5"
 toml = "0.8.15"
 serde_yaml = "0.9.34"
 local-ip-address = "0.6.3"
-chrono = "0.4.38"
+chrono = "0.4.39"
 
 #注册中心
-nacos-sdk = "0.4.2"
+nacos-sdk = "0.4.3"
