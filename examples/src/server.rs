@@ -70,7 +70,7 @@ async fn main() {
     let server = DemoServiceImpl {
         _db: "我是一个DB数据库".to_string(),
     };
-    FusenApplicationContext::builder()
+    let _ = FusenApplicationContext::builder()
         //使用配置文件进行初始化
         .init(get_config_by_file("examples/server-config.yaml").unwrap())
         // .application_name("fusen-server")

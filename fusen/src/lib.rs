@@ -163,7 +163,7 @@ impl FusenApplicationContext {
         )
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(mut self) -> Result<()> {
         let port = self.server.get_port().clone();
         let (sender, receiver) = broadcast::channel::<()>(1);
         let shutdown = Shutdown::new(receiver);
@@ -177,7 +177,7 @@ impl FusenApplicationContext {
                 .port(port.clone())
                 .params(MetaData::default().into_inner());
             resources.push(resource.clone());
-            let _ = register.register(resource).await;
+            register.register(resource).await?;
             //再注册service
             for server in self.server.get_fusen_servers().values() {
                 let ServerInfo {
@@ -197,7 +197,7 @@ impl FusenApplicationContext {
                     .port(port.clone())
                     .params(MetaData::default().into_inner());
                 resources.push(resource.clone());
-                let _ = register.register(resource).await;
+                register.register(resource).await?;
             }
         }
         let register = self.register.clone();
@@ -217,5 +217,6 @@ impl FusenApplicationContext {
         });
         let _ = shutdown_complete_rx.recv().await;
         tracing::info!("fusen server shut");
+        Ok(())
     }
 }
