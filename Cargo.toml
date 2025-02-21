@@ -16,8 +16,8 @@ description = "RPC framework for service registration and discovery through API 
 
 
 [workspace.dependencies]
-fusen-common = { path = "fusen-common", version = "0.6.15" }
-fusen-rs = { path = "fusen", version = "0.6.15" }
+fusen-common = { path = "fusen-common", version = "0.6.16" }
+fusen-rs = { path = "fusen", version = "0.6.18" }
 fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.6.13" }
 fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.6.13" }
 

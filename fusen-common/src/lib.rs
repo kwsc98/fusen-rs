@@ -177,16 +177,22 @@ impl FusenRequest {
                 if item.1.starts_with("r#") {
                     pre = 2;
                 };
-                let fields = hash_map.get(&item.1[pre..]).ok_or("fields handler error")?;
-                let mut temp = String::new();
-                if "String" == temp_fields_ty[item.0] {
-                    temp.push('\"');
-                    temp.push_str(fields);
-                    temp.push('\"');
-                } else {
-                    temp.push_str(fields);
+                match hash_map.get(&item.1[pre..]) {
+                    Some(fields) => {
+                        let mut temp = String::new();
+                        if "String" == temp_fields_ty[item.0] {
+                            temp.push('\"');
+                            temp.push_str(fields);
+                            temp.push('\"');
+                        } else {
+                            temp.push_str(fields);
+                        }
+                        new_fields.push(temp);
+                    }
+                    None => {
+                        new_fields.push("null".to_owned());
+                    }
                 }
-                new_fields.push(temp);
             }
         } else if self.body.starts_with(b"[") {
             new_fields = serde_json::from_slice(&self.body)?;

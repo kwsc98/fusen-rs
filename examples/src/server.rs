@@ -52,9 +52,9 @@ impl DemoService for DemoServiceImpl {
         Ok(ResDto::default().str("Hello ".to_owned() + req.get_str() + " V2"))
     }
     #[asset(path="/divide",method = GET)]
-    async fn divideV2(&self, a: i32, b: i32) -> FusenResult<String> {
+    async fn divideV2(&self, a: i32, b: Option<i32>) -> FusenResult<String> {
         info!("res : a={:?},b={:?}", a, b);
-        Ok((a + b).to_string())
+        Ok((a).to_string())
     }
 }
 
