@@ -180,7 +180,9 @@ impl FusenRequest {
                 match hash_map.get(&item.1[pre..]) {
                     Some(fields) => {
                         let mut temp = String::new();
-                        if "String" == temp_fields_ty[item.0] {
+                        if "String" == temp_fields_ty[item.0]
+                            || "Option < String >" == temp_fields_ty[item.0]
+                        {
                             temp.push('\"');
                             temp.push_str(fields);
                             temp.push('\"');
