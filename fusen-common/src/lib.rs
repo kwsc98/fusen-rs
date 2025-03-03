@@ -136,7 +136,8 @@ impl FusenRequest {
     pub fn new_for_client(method: &str, fields_ty: Vec<String>, bodys: Vec<String>) -> Self {
         let mut query_fields = HashMap::new();
         let mut bytes = BytesMut::new();
-        if method.to_lowercase().as_str() != "post" {
+        let method_str = method.to_lowercase();
+        if method_str == "get" || method_str == "delete" {
             for (idx, body) in bodys.into_iter().enumerate() {
                 let mut pre = 0;
                 if fields_ty[idx].starts_with("r#") {
@@ -170,7 +171,7 @@ impl FusenRequest {
         temp_fields_ty: Vec<&str>,
     ) -> Result<Vec<String>> {
         let mut new_fields = vec![];
-        if self.method != "post" {
+        if self.method == "get" || self.method == "delete" {
             let hash_map = &self.query_fields;
             for item in temp_fields_name.iter().enumerate() {
                 let mut pre = 0;
@@ -290,6 +291,15 @@ impl Default for Path {
 }
 
 impl Path {
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Path::GET(_) => "GET",
+            Path::PUT(_) => "PUT",
+            Path::DELETE(_) => "DELETE",
+            Path::POST(_) => "POST",
+        }
+    }
+
     pub fn get_key(&self) -> String {
         let mut key = String::new();
         match self {

@@ -59,19 +59,11 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             builder = builder.header(content_type.1, version);
         }
         let request = match context.get_context_info().get_path().clone() {
-            fusen_common::Path::GET(path) => builder
-                .method("GET")
+            fusen_common::Path::GET(path) | fusen_common::Path::DELETE(path) => builder
+                .method(context.get_context_info().get_path().to_str())
                 .uri(get_path(path, context.get_request().get_query_fields()))
                 .body(Full::new(Bytes::new()).boxed()),
-            fusen_common::Path::PUT(path) => builder
-                .method("PUT")
-                .uri(get_path(path, context.get_request().get_query_fields()))
-                .body(Full::new(Bytes::new()).boxed()),
-            fusen_common::Path::DELETE(path) => builder
-                .method("DELETE")
-                .uri(get_path(path, context.get_request().get_query_fields()))
-                .body(Full::new(Bytes::new()).boxed()),
-            fusen_common::Path::POST(mut path) => {
+            fusen_common::Path::POST(mut path) | fusen_common::Path::PUT(mut path) => {
                 let body: Bytes = match context.get_server_type() {
                     &Type::Dubbo => {
                         path = format!(
@@ -93,7 +85,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
                 let builder = builder.header("content-length", body.len());
                 builder
                     .header("content-type", content_type.0)
-                    .method("POST")
+                    .method(context.get_context_info().get_path().to_str())
                     .uri(path)
                     .body(Full::new(body).boxed())
             }
