@@ -66,6 +66,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         fn_quote.push(
             quote! {
                     #[allow(non_snake_case)]
+                    #[allow(clippy::too_many_arguments)]
                     pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::fusen_common::error::FusenError> {
                     let mut req_vec : Vec<String> = vec![];
                     let fields_ty = vec![
