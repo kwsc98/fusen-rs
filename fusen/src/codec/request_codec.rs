@@ -177,7 +177,7 @@ fn get_path(mut path: String, query_fields: &HashMap<String, String>) -> String 
         for item in query_fields {
             path.push_str(item.0);
             path.push('=');
-            path.push_str(item.1);
+            path.push_str(&urlencoding::encode(item.1));
             path.push('&');
         }
         path.remove(path.len() - 1);
