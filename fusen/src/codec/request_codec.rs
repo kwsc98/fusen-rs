@@ -108,7 +108,9 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             let params: Vec<&str> = url[1].split('&').collect();
             for item in params {
                 let item: Vec<&str> = item.split('=').collect();
-                temp_query_fields_ty.insert(item[0].to_owned(), item[1].to_owned());
+                if let Ok(param) = urlencoding::decode(item[1]) {
+                    temp_query_fields_ty.insert(item[0].to_owned(), param.to_string());
+                }
             }
         }
         let mut bytes = BytesMut::new();
