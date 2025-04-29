@@ -14,7 +14,7 @@ pub struct RpcServerFilter {
 }
 
 impl RpcServerFilter {
-    pub fn new(cache: HashMap<String, &'static dyn RpcServer>) -> Self {
+    pub async fn new(cache: HashMap<String, &'static dyn RpcServer>) -> Self {
         let mut hash_cache = HashMap::new();
         let mut rest_trie = Trie::default();
         for item in &cache {
@@ -24,7 +24,7 @@ impl RpcServerFilter {
                 let name = method.get_name().clone();
                 let method = method.get_method().clone();
                 if path.contains('{') {
-                    rest_trie.insert(path.clone());
+                    rest_trie.insert(path.clone()).await;
                 }
                 hash_cache.insert(
                     Path::new(&method, path).get_key(),
@@ -93,14 +93,14 @@ pub struct PathCacheResult {
 }
 
 impl PathCache {
-    pub fn seach(&self, mut_path: &mut Path) -> Option<PathCacheResult> {
+    pub async fn seach(&self, mut_path: &mut Path) -> Option<PathCacheResult> {
         if let Some(data) = self.path_cache.get(&mut_path.get_key()) {
             Some(PathCacheResult {
                 class: data.0.clone(),
                 method: data.1.clone(),
                 fields: None,
             })
-        } else if let Some(rest_data) = self.rest_trie.search(&mut_path.get_path()) {
+        } else if let Some(rest_data) = self.rest_trie.search(&mut_path.get_path()).await {
             let QueryResult { path, query_fields } = rest_data;
             mut_path.update_path(path);
             self.path_cache

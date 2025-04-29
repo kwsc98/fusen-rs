@@ -147,7 +147,7 @@ impl RequestCodec<Bytes, hyper::Error> for RequestHandler {
             fields,
         } = self
             .path_cache
-            .seach(&mut path)
+            .seach(&mut path).await
             .ok_or(FusenError::NotFind)?;
         if let Some(fields) = fields {
             for (key, value) in fields {
