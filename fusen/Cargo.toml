@@ -1,6 +1,6 @@
 [package]
 name = "fusen-rs"
-version = "0.6.24"
+version = "0.8.0"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,44 +11,11 @@ description.workspace = true
 fusen-common.workspace = true
 fusen-procedural-macro.workspace = true
 
-
 #网络协议处理
-tokio.workspace = true
-hyper.workspace = true
-hyper-tls.workspace = true
-hyper-util.workspace = true
-http.workspace = true
-http-body.workspace = true
-http-body-util.workspace = true
-bytes.workspace = true
-futures.workspace = true
-async-trait.workspace = true
-async-recursion.workspace = true
-h2.workspace = true
-futures-util.workspace = true
-urlencoding.workspace = true
-
-#日志处理
-tracing.workspace = true
-tracing-futures.workspace = true
-tracing-subscriber.workspace = true
-pretty_env_logger.workspace = true
-opentelemetry_sdk.workspace = true
-opentelemetry.workspace = true
-tracing-opentelemetry.workspace = true
-
-
-#json序列化
-serde.workspace = true
-serde_json.workspace = true
-uuid.workspace = true
-
-prost = "0.13.1"
-prost-types = "0.13.1"
-
-pin-project-lite.workspace = true
-lazy_static.workspace = true
-
-#注册中心
-nacos-sdk.workspace = true
-rand.workspace = true
+tokio = "1.46.1"
+serde = "1.0.219"
+serde_json = "1.0.140"
+http = "1.3.1"
+bytes = "1.10.1"
+http-body-util = "0.1.3"
+hyper = "1.6.0"

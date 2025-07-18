@@ -1,6 +1,6 @@
 [package]
 name = "fusen-procedural-macro"
-version = "0.6.14"
+version = "0.8.1"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,10 +10,10 @@ description.workspace = true
 proc-macro = true
 
 [dependencies]
-fusen-derive-macro.workspace = true
+fusen-common.workspace = true
 #json序列化
-serde.workspace = true
-serde_json.workspace = true
-quote = "1.0.36"
-syn = { version = "2.0.71", features = ["full"] }
-proc-macro2.workspace = true
+serde = "1.0.219"
+serde_json = "1.0.140"
+quote = "1.0.40"
+syn = { version = "2.0.104", features = ["full"] }
+proc-macro2 = "1.0.95"

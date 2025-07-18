@@ -1,9 +1,8 @@
-use fusen_derive_macro::fusen_attr;
+use fusen_common::fusen_common_derive_macro::fusen_attr;
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{parse::Parser, parse_macro_input, Attribute, DeriveInput, Meta};
+use quote::{ToTokens, quote};
+use syn::{Attribute, DeriveInput, Meta, parse_macro_input};
 
-mod data;
 mod handler_macro;
 mod server_macro;
 mod trait_macro;
@@ -24,11 +23,6 @@ pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(attr) => trait_macro::fusen_trait(attr, item),
         Err(err) => err.into_compile_error().into(),
     }
-}
-
-#[proc_macro_derive(Data)]
-pub fn data(item: TokenStream) -> TokenStream {
-    data::data(item)
 }
 
 #[proc_macro_attribute]
