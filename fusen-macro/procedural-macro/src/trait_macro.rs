@@ -1,8 +1,8 @@
-use crate::{get_asset_by_attrs, FusenAttr};
+use crate::{FusenAttr, get_asset_by_attrs};
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use std::collections::HashMap;
-use syn::{parse_macro_input, FnArg, ItemTrait, ReturnType, TraitItem};
+use syn::{FnArg, ItemTrait, ReturnType, TraitItem, parse_macro_input};
 
 pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let group = match attr.group {

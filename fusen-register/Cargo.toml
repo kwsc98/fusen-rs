@@ -1,0 +1,16 @@
+[package]
+name = "fusen-register"
+version = "0.8.1"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+
+
+[dependencies]
+fusen-internal-common.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+nacos-sdk = "0.5.0"

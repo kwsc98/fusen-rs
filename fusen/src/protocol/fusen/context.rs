@@ -1,23 +1,19 @@
-use crate::{
-    protocol::fusen::{metadata::MetaData, path::Path, request::FusenRequest},
-    server::ServerType,
-};
+use crate::protocol::{fusen::{metadata::MetaData, request::FusenRequest, response::FusenResponse}, Protocol};
 
 #[derive(Debug)]
 pub struct FusenContext {
-    unique_identifier: String,
-    server_type: ServerType,
-    meta_data: MetaData,
-    context_info: ContextInfo,
-    request: FusenRequest,
-    response: FusenResponse,
+    pub unique_identifier: String,
+    pub metadata: MetaData,
+    pub context_info: ContextInfo,
+    pub protocol: Protocol,
+    pub request: FusenRequest,
+    pub response: FusenResponse,
 }
 
 #[derive(Debug)]
 pub struct ContextInfo {
-    path: Path,
-    class_name: String,
-    method_name: String,
-    version: Option<String>,
-    group: Option<String>,
+    pub class_name: String,
+    pub method_name: String,
+    pub version: Option<String>,
+    pub group: Option<String>,
 }

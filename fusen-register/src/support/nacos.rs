@@ -1,0 +1,205 @@
+use crate::{Register, directory::Directory, error::RegisterError};
+use fusen_internal_common::{BoxFuture, resource::service::ServiceResource};
+use nacos_sdk::api::{
+    naming::{
+        NamingChangeEvent, NamingEventListener, NamingService, NamingServiceBuilder,
+        ServiceInstance,
+    },
+    props::ClientProps,
+};
+use std::sync::Arc;
+use tracing::{error, info};
+
+#[derive(Clone)]
+pub struct NacosRegister {
+    naming_service: Arc<NamingService>,
+    _config: Arc<NacosConfig>,
+    protocol: Arc<Protocol>,
+    group: Option<String>,
+}
+
+pub enum Protocol {
+    SpringCloud(String),
+    Dubbo,
+    Fusen,
+}
+
+
+
+pub struct NacosConfig {
+    pub application_name: String,
+    pub server_addr: String,
+    pub namespace: String,
+    pub username: String,
+    pub password: String,
+}
+
+impl NacosRegister {
+    pub fn init(
+        config: NacosConfig,
+        protocol: Protocol,
+        group: Option<String>,
+    ) -> Result<Self, RegisterError> {
+        let mut client_props = ClientProps::new();
+        client_props = client_props
+            .server_addr(config.server_addr.clone())
+            .namespace(config.namespace.clone())
+            .app_name(config.application_name.clone())
+            .auth_username(config.username.clone())
+            .auth_password(config.password.clone());
+        let builder = NamingServiceBuilder::new(client_props);
+        let builder = if !config.username.is_empty() {
+            builder.enable_auth_plugin_http()
+        } else {
+            builder
+        };
+        let naming_service = Arc::new(
+            builder
+                .build()
+                .map_err(|e| RegisterError::Error(Box::new(e)))?,
+        );
+        let nacos = Self {
+            naming_service: naming_service.clone(),
+            _config: Arc::new(config),
+            protocol: Arc::new(protocol),
+            group,
+        };
+        Ok(nacos)
+    }
+}
+
+impl Register for NacosRegister {
+    fn register(&self, resource: Arc<ServiceResource>) -> BoxFuture<Result<(), RegisterError>> {
+        let nacos = self.clone();
+        Box::pin(async move {
+            let group = nacos.group.clone();
+            let service_name = get_service_name(&nacos, resource.as_ref());
+            let instance = build_instance(resource.as_ref());
+            info!("nacos register service: {service_name} - group: {group:?}");
+            let ret = nacos
+                .naming_service
+                .register_instance(service_name, group, instance)
+                .await;
+            if let Err(error) = ret {
+                error!("nacos register to nacos occur an error: {error:?}");
+                return Err(RegisterError::Error(Box::new(error)));
+            }
+            Ok(())
+        })
+    }
+
+    fn deregister(&self, resource: Arc<ServiceResource>) -> BoxFuture<Result<(), RegisterError>> {
+        let nacos = self.clone();
+        Box::pin(async move {
+            let group = nacos.group.clone();
+            let service_name = get_service_name(&nacos, resource.as_ref());
+            let instance = build_instance(resource.as_ref());
+            info!("nacos deregister service: {service_name} - group: {group:?}");
+            let ret = nacos
+                .naming_service
+                .deregister_instance(service_name, group, instance)
+                .await;
+            if let Err(error) = ret {
+                error!("nacos deregister to nacos occur an error: {error:?}",);
+                return Err(RegisterError::Error(Box::new(error)));
+            }
+            Ok(())
+        })
+    }
+
+    fn subscribe(
+        &self,
+        resource: Arc<ServiceResource>,
+    ) -> BoxFuture<Result<Directory, RegisterError>> {
+        let nacos = self.clone();
+        Box::pin(async move {
+            let group = nacos.group.clone();
+            let service_name = get_service_name(&nacos, resource.as_ref());
+            info!("subscribe service: {service_name} - grep: {group:?}");
+            let directory = Directory::new().await;
+            let directory_clone = directory.clone();
+            let naming_service = nacos.naming_service.clone();
+            let service_instances = naming_service
+                .get_all_instances(service_name.clone(), group.clone(), Vec::new(), false)
+                .await
+                .map_err(|error| RegisterError::Error(Box::new(error)))?;
+            let service_instances = to_service_resources(service_instances);
+            directory.change(service_instances).await?;
+            let event_listener = ServiceChangeListener::new(directory);
+            let event_listener = Arc::new(event_listener);
+            naming_service
+                .subscribe(service_name, group, Vec::new(), event_listener)
+                .await
+                .map_err(|error| RegisterError::Error(Box::new(error)))?;
+            Ok(directory_clone)
+        })
+    }
+}
+
+#[derive(Clone)]
+struct ServiceChangeListener {
+    directory: Directory,
+}
+
+impl ServiceChangeListener {
+    fn new(directory: Directory) -> Self {
+        Self { directory }
+    }
+}
+
+impl NamingEventListener for ServiceChangeListener {
+    fn event(&self, event: Arc<NamingChangeEvent>) {
+        info!("service change: {}", event.service_name.clone());
+        info!("nacos event: {:?}", event);
+        let directory = self.directory.clone();
+        let instances = event.instances.to_owned();
+        tokio::spawn(async move {
+            let instances = instances;
+            let resources = if let Some(instances) = instances {
+                to_service_resources(instances)
+            } else {
+                vec![]
+            };
+            let _ = directory.change(resources).await;
+        });
+    }
+}
+
+fn to_service_resources(service_instances: Vec<ServiceInstance>) -> Vec<ServiceResource> {
+    service_instances.into_iter().fold(vec![], |mut vec, e| {
+        if let Ok(socket_addr) = format!("{}:{}", e.ip(), e.port).parse() {
+            let resource = ServiceResource {
+                server_name: e.service_name.unwrap_or_default(),
+                group: None,
+                version: None,
+                methods: Default::default(),
+                socket_addr,
+                weight: Some(e.weight),
+                metadata: e.metadata,
+            };
+            vec.push(resource);
+        }
+        vec
+    })
+}
+
+pub fn get_service_name(nacos_register: &NacosRegister, resource: &ServiceResource) -> String {
+    match &nacos_register.protocol.as_ref() {
+        &Protocol::SpringCloud(app_name) => app_name.clone(),
+        &Protocol::Dubbo | Protocol::Fusen => format!(
+            "providers:{}:{}:{}",
+            resource.server_name,
+            resource.version.as_ref().map_or("", |e| e),
+            resource.group.as_ref().map_or("", |e| e),
+        ),
+    }
+}
+
+fn build_instance(resource: &ServiceResource) -> ServiceInstance {
+    nacos_sdk::api::naming::ServiceInstance {
+        ip: resource.socket_addr.ip().to_string(),
+        port: resource.socket_addr.port() as i32,
+        metadata: resource.metadata.clone(),
+        ..Default::default()
+    }
+}

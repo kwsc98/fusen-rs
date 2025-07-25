@@ -1,20 +1,18 @@
+use http::{Method, Uri};
+use serde_json::Value;
 use std::collections::HashMap;
-
-use bytes::Bytes;
-use http_body_util::combinators::BoxBody;
-
-use crate::protocol::fusen::path::Path;
-
-#[derive(Debug)]
-pub enum Request {
-    HttpRequest(http::Request<BoxBody<Bytes, hyper::Error>>),
-    FusenRequest(FusenRequest),
-}
 
 #[derive(Debug)]
 pub struct FusenRequest {
     pub path: Path,
+    pub querys: HashMap<String, String>,
     pub headers: HashMap<String, String>,
     pub extensions: Option<HashMap<String, String>>,
-    pub body: Bytes,
+    pub body: Vec<Value>,
+}
+
+#[derive(Debug)]
+pub struct Path {
+    pub method: Method,
+    pub uri: Uri,
 }

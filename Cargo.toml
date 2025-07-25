@@ -1,7 +1,9 @@
 [workspace]
 members = [
+    "fusen-common",
     "fusen-macro/derive-macro",
     "fusen-macro/procedural-macro",
+    "fusen-register",
     "fusen",
     # "examples",
 ]
@@ -14,6 +16,14 @@ license = "Apache-2.0"
 description = "RPC framework for service registration and discovery through API exposure, compatible with Dubbo3 protocol, intertunable with Java projects"
 
 [workspace.dependencies]
-fusen-common = "0.8.1"
+fusen-internal-common = { path = "fusen-common", version = "0.8.1" }
 fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.8.1" }
 fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.8.1" }
+fusen-register = { path = "fusen-register", version = "0.8.1" }
+fusen-rs = { path = "fusen", version = "0.8.0" }
+
+serde = "1.0.219"
+serde_json = "1.0.141"
+tokio = { version = "1.46.1", features = ["full"] }
+thiserror = "2.0.12"
+tracing = "0.1.41"

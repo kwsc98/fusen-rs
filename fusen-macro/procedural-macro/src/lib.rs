@@ -1,7 +1,6 @@
-use fusen_common::fusen_common_derive_macro::fusen_attr;
+use fusen_derive_macro::fusen_attr;
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote};
-use syn::{Attribute, DeriveInput, Meta, parse_macro_input};
+use syn::{Attribute, Meta};
 
 mod handler_macro;
 mod server_macro;
@@ -37,52 +36,6 @@ pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn asset(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
-}
-
-#[proc_macro_attribute]
-pub fn url_config(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = UrlConfigAttr::from_attr(attr);
-    if let Err(err) = attr {
-        return err.into_compile_error().into();
-    }
-    let attr = attr.unwrap();
-    let attr = attr.attr;
-    let org_item = parse_macro_input!(item as DeriveInput);
-    let Some(attr) = attr else {
-        return syn::Error::new_spanned(
-            org_item.to_token_stream(),
-            "url_config must label to attr",
-        )
-        .into_compile_error()
-        .into();
-    };
-    let id = &org_item.ident;
-    let token = quote! {
-
-        #[derive(serde::Serialize, serde::Deserialize, Default, fusen_procedural_macro::Data)]
-        #org_item
-
-        impl #id {
-            pub fn from_url(url : &str) -> Result<Self,fusen_common::Error> {
-                let info : Vec<&str> = url.split("://").collect();
-                if info[0] != #attr {
-                   return Err(format!("err1 url {}",url).into());
-                }
-                let info : Vec<&str> = info[1].split("?").collect();
-                if info[0] != stringify!(#id) {
-                    return Err(format!("err2 url {}",url).into());
-                }
-                fusen_common::url::from_url(info[1])
-            }
-            pub fn to_url(&self) -> Result<String, fusen_common::Error> {
-                let mut res = String::new();
-                res.push_str(&(#attr.to_owned() + "://" + stringify!(#id) + "?" ));
-                res.push_str(&(fusen_common::url::to_url(self)?));
-                Ok(res)
-            }
-        }
-    };
-    token.into()
 }
 
 fn get_asset_by_attrs(attrs: &Vec<Attribute>) -> Result<ResourceAttr, syn::Error> {
