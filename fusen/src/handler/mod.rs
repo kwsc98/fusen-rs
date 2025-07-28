@@ -1,8 +1,3 @@
-use std::{
-    collections::{HashMap, LinkedList},
-    sync::Arc,
-};
-
 use crate::{
     filter::FusenFilter,
     handler::{
@@ -10,11 +5,24 @@ use crate::{
         loadbalance::{DefaultLoadBalance, LoadBalance_},
     },
 };
+use std::{
+    collections::{HashMap, LinkedList},
+    sync::Arc,
+};
 
 pub mod aspect;
 pub mod loadbalance;
 
-#[derive(Clone)]
+pub struct HandlerController {
+    load_balance: &'static dyn LoadBalance_,
+    aspect: LinkedList<&'static dyn FusenFilter>,
+}
+
+pub enum HandlerInvoker {
+    LoadBalance(&'static dyn LoadBalance_),
+    Aspect(&'static dyn FusenFilter),
+}
+
 pub struct HandlerContext {
     handlers: HashMap<String, Arc<HandlerInvoker>>,
     cache: HashMap<String, Arc<HandlerController>>,
@@ -38,14 +46,4 @@ impl Default for HandlerContext {
         );
         context
     }
-}
-
-pub struct HandlerController {
-    load_balance: &'static dyn LoadBalance_,
-    aspect: LinkedList<&'static dyn FusenFilter>,
-}
-
-pub enum HandlerInvoker {
-    LoadBalance(&'static dyn LoadBalance_),
-    Aspect(&'static dyn FusenFilter),
 }

@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::SocketAddr};
 
 #[derive(Debug, Clone)]
 pub struct ServiceResource {
-    pub server_name: String,
+    pub service_name: String,
     pub group: Option<String>,
     pub version: Option<String>,
     pub methods: Vec<MethodResource>,

@@ -9,3 +9,4 @@ description.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+uuid = { version = "1.17.0", features = ["v4"] }

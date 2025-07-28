@@ -4,8 +4,9 @@ use fusen_register::Register;
 
 use crate::{error::FusenError, handler::HandlerContext, server::rpc::RpcServer};
 
-pub mod rpc;
+pub mod path;
 pub mod router;
+pub mod rpc;
 
 pub struct FusenServerContext {
     port: u16,

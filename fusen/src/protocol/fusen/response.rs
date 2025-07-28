@@ -1,11 +1,25 @@
+use serde_json::Value;
 use std::collections::HashMap;
-use bytes::Bytes;
+
+use crate::protocol::Protocol;
 
 #[derive(Debug)]
 pub struct FusenResponse {
+    pub protocol: Protocol,
     pub status: u16,
-    pub querys: HashMap<String, String>,
     pub headers: HashMap<String, String>,
     pub extensions: Option<HashMap<String, String>>,
-    pub body: Bytes,
+    pub bodys: Option<Value>,
+}
+
+impl Default for FusenResponse {
+    fn default() -> Self {
+        Self {
+            protocol: Protocol::Fusen,
+            status: 200,
+            headers: Default::default(),
+            extensions: Default::default(),
+            bodys: Default::default(),
+        }
+    }
 }

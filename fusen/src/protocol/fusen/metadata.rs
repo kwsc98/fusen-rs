@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MetaData {
-    inner: HashMap<String, String>,
+    pub inner: HashMap<String, String>,
 }

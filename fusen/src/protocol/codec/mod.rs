@@ -1,9 +1,9 @@
 use crate::{
     error::FusenError,
     protocol::{
-        codec::body::{RequestBodyCodec, json::JsonCodec, triple::TripleCodec},
+        Protocol,
+        codec::body::{RequestBodyCodec, ResponseBodyCodec, json::JsonCodec, triple::TripleCodec},
         fusen::{
-            context::FusenContext,
             request::{FusenRequest, Path},
             response::FusenResponse,
         },
@@ -11,7 +11,7 @@ use crate::{
 };
 use bytes::{Bytes, BytesMut};
 use http::{
-    Method, Request, Response,
+    Request, Response,
     header::{CONNECTION, CONTENT_TYPE},
 };
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -28,12 +28,11 @@ pub struct FusenHttpCodec {
 impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
     fn encode(
         &self,
-        context: &mut FusenContext,
+        fusen_request: &mut FusenRequest,
     ) -> Result<
         Request<http_body_util::combinators::BoxBody<Bytes, std::convert::Infallible>>,
         crate::error::FusenError,
     > {
-        let fusen_request = &mut context.request;
         let mut builder = Request::builder().header(CONNECTION, "keep-alive");
         for (key, value) in fusen_request.headers.drain() {
             builder = builder.header(key, value);
@@ -47,19 +46,15 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
             uri.pop();
         }
         let mut body = Bytes::new();
-        if let Method::POST = fusen_request.path.method {
-            match &context.protocol {
+        if let Some(bodys) = &mut fusen_request.bodys {
+            match &fusen_request.protocol {
                 super::Protocol::Dubbo => {
                     builder = builder.header(CONTENT_TYPE, "application/grpc");
-                    body = self
-                        .triple_codec
-                        .encode(fusen_request.body.drain(..).collect())?;
+                    body = RequestBodyCodec::encode(&self.triple_codec, bodys.drain(..).collect())?;
                 }
                 _ => {
                     builder = builder.header(CONTENT_TYPE, "application/json");
-                    body = self
-                        .triple_codec
-                        .encode(fusen_request.body.drain(..).collect())?;
+                    body = RequestBodyCodec::encode(&self.json_codec, bodys.drain(..).collect())?;
                 }
             };
         }
@@ -76,6 +71,39 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
     ) -> Result<FusenRequest, crate::error::FusenError> {
         let mut querys = HashMap::new();
         let mut headers = HashMap::new();
+        for (key, value) in request.headers_mut().drain() {
+            let Some(key) = key else {
+                continue;
+            };
+            headers.insert(
+                key.to_string().to_ascii_lowercase(),
+                String::from_utf8_lossy(value.as_bytes()).to_string(),
+            );
+        }
+        if let Some(request_querys) = request.uri().query() {
+            let request_querys: Vec<&str> = request_querys.split('&').collect();
+            for query in request_querys {
+                if let Some((key, value)) = query.split_once('=') {
+                    querys.insert(
+                        key.to_string(),
+                        urlencoding::decode(value)
+                            .map(|e| e.to_string())
+                            .unwrap_or(value.to_string()),
+                    );
+                }
+            }
+        }
+        let mut protocol = Protocol::Fusen;
+        let mut bodys = None;
+        if let Some(content_type) = headers.get(CONTENT_TYPE.as_str()) {
+            let bytes = read_body(request.body_mut()).await.freeze();
+            if content_type.starts_with("application/grpc") {
+                protocol = Protocol::Dubbo;
+                let _ = bodys.insert(RequestBodyCodec::decode(&self.triple_codec, bytes)?);
+            } else if content_type.starts_with("application/json") {
+                let _ = bodys.insert(RequestBodyCodec::decode(&self.json_codec, bytes)?);
+            }
+        };
         Ok(FusenRequest {
             path: Path {
                 method: request.method().clone(),
@@ -84,7 +112,8 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
             querys,
             headers,
             extensions: None,
-            body: (),
+            bodys,
+            protocol,
         })
     }
 }
@@ -92,36 +121,95 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
 impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
     fn encode(
         &self,
-        context: &mut FusenContext,
+        fusen_response: &mut FusenResponse,
     ) -> Result<
         http::Response<http_body_util::combinators::BoxBody<Bytes, std::convert::Infallible>>,
         crate::error::FusenError,
     > {
-        todo!()
+        let mut builder = Response::builder();
+        for (key, value) in fusen_response.headers.drain() {
+            builder = builder.header(key, value);
+        }
+        let mut body = Bytes::new();
+        if let Some(bodys) = fusen_response.bodys.take() {
+            match &fusen_response.protocol {
+                super::Protocol::Dubbo => {
+                    builder = builder.header(CONTENT_TYPE, "application/grpc");
+                    body = ResponseBodyCodec::encode(&self.triple_codec, bodys)?;
+                }
+                _ => {
+                    builder = builder.header(CONTENT_TYPE, "application/json");
+                    body = ResponseBodyCodec::encode(&self.json_codec, bodys)?;
+                }
+            };
+        }
+        builder
+            .status(fusen_response.status)
+            .body(Full::new(body).boxed())
+            .map_err(|error| FusenError::Error(Box::new(error)))
     }
 
     async fn decode(
         &self,
-        request: http::Response<http_body_util::combinators::BoxBody<Bytes, hyper::Error>>,
+        mut response: http::Response<http_body_util::combinators::BoxBody<Bytes, hyper::Error>>,
     ) -> Result<FusenResponse, crate::error::FusenError> {
-        todo!()
+        let mut headers: HashMap<String, String> = HashMap::new();
+        for (key, value) in response.headers_mut().drain() {
+            let Some(key) = key else {
+                continue;
+            };
+            headers.insert(
+                key.to_string().to_ascii_lowercase(),
+                String::from_utf8_lossy(value.as_bytes()).to_string(),
+            );
+        }
+        let mut protocol = Protocol::Fusen;
+        let mut bodys = None;
+        if let Some(content_type) = headers.get(CONTENT_TYPE.as_str()) {
+            let bytes = read_body(response.body_mut()).await.freeze();
+            if content_type.starts_with("application/grpc") {
+                protocol = Protocol::Dubbo;
+                let _ = bodys.insert(ResponseBodyCodec::decode(&self.triple_codec, bytes)?);
+            } else if content_type.starts_with("application/json") {
+                let _ = bodys.insert(ResponseBodyCodec::decode(&self.json_codec, bytes)?);
+            }
+        };
+        Ok(FusenResponse {
+            protocol,
+            status: response.status().as_u16(),
+            headers,
+            extensions: None,
+            bodys,
+        })
     }
 }
 
+#[allow(async_fn_in_trait)]
 pub trait RequestCodec<T, E> {
     fn encode(
         &self,
-        context: &mut FusenContext,
+        fusen_request: &mut FusenRequest,
     ) -> Result<Request<BoxBody<T, Infallible>>, FusenError>;
 
     async fn decode(&self, request: Request<BoxBody<T, E>>) -> Result<FusenRequest, FusenError>;
 }
 
+#[allow(async_fn_in_trait)]
 pub trait ResponseCodec<T, E> {
     fn encode(
         &self,
-        context: &mut FusenContext,
+        fusen_response: &mut FusenResponse,
     ) -> Result<Response<BoxBody<T, Infallible>>, FusenError>;
 
-    async fn decode(&self, request: Response<BoxBody<T, E>>) -> Result<FusenResponse, FusenError>;
+    async fn decode(&self, response: Response<BoxBody<T, E>>) -> Result<FusenResponse, FusenError>;
+}
+
+async fn read_body(body: &mut BoxBody<Bytes, hyper::Error>) -> BytesMut {
+    let mut mut_bytes = BytesMut::new();
+    while let Some(Ok(frame)) = body.frame().await {
+        if let Some(bytes) = frame.into_data().ok() {
+            mut_bytes.extend_from_slice(&bytes);
+        }
+    }
+    mut_bytes
 }

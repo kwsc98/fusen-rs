@@ -24,8 +24,6 @@ pub enum Protocol {
     Fusen,
 }
 
-
-
 pub struct NacosConfig {
     pub application_name: String,
     pub server_addr: String,
@@ -169,7 +167,7 @@ fn to_service_resources(service_instances: Vec<ServiceInstance>) -> Vec<ServiceR
     service_instances.into_iter().fold(vec![], |mut vec, e| {
         if let Ok(socket_addr) = format!("{}:{}", e.ip(), e.port).parse() {
             let resource = ServiceResource {
-                server_name: e.service_name.unwrap_or_default(),
+                service_name: e.service_name.unwrap_or_default(),
                 group: None,
                 version: None,
                 methods: Default::default(),
@@ -188,7 +186,7 @@ pub fn get_service_name(nacos_register: &NacosRegister, resource: &ServiceResour
         &Protocol::SpringCloud(app_name) => app_name.clone(),
         &Protocol::Dubbo | Protocol::Fusen => format!(
             "providers:{}:{}:{}",
-            resource.server_name,
+            resource.service_name,
             resource.version.as_ref().map_or("", |e| e),
             resource.group.as_ref().map_or("", |e| e),
         ),
