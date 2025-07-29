@@ -1,9 +1,9 @@
 use std::{convert::Infallible, sync::Arc};
 
 use bytes::Bytes;
-use fusen_internal_common::{BoxFuture, utils::uuid::uuid};
+use fusen_internal_common::{utils::uuid::uuid, BoxFuture};
 use http::{Request, Response};
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::service::Service;
 
 use crate::{
@@ -24,6 +24,7 @@ pub struct Router {
     http_codec: Arc<FusenHttpCodec>,
     path_cache: Arc<PathCache>,
     handler_context: Arc<HandlerContext>,
+    fusen_service_handler : Arc<>
 }
 
 impl Service<Request<hyper::body::Incoming>> for Router {
@@ -64,8 +65,8 @@ impl Service<Request<hyper::body::Incoming>> for Router {
                 response: FusenResponse::default(),
             };
             //通过service获取handler
-
-
+            let handler_controller = router.handler_context.get_controller(&context.method_info.service_info);
+            
             let response =
                 ResponseCodec::encode(router.http_codec.as_ref(), &mut context.response)?;
             Ok(response)

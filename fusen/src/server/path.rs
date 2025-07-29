@@ -12,9 +12,9 @@ pub struct PathCache {
 impl PathCache {
     pub async fn seach(&self, path: &Path) -> Option<QueryResult> {
         let key = format!("{}:{}", path.method, path.uri.path());
-        if let Some(handler_info) = self.path_cache.get(key.as_str()) {
+        if let Some(method_info) = self.path_cache.get(key.as_str()) {
             Some(QueryResult {
-                handler_info: handler_info.clone(),
+                method_info: method_info.clone(),
                 rest_fields: None,
             })
         } else if let Some(rest_data) = self.rest_trie.search(key.as_str()).await {
@@ -74,7 +74,7 @@ impl Trie {
         Self::search_by_nodes(&path, self.root.clone()).await
     }
 
-    #[async_recursion]
+    // #[async_recursion]
     async fn search_by_nodes(path: &str, mut temp: Arc<RwLock<TreeNode>>) -> Option<QueryResult> {
         let mut rest_fields: Vec<(String, String)> = vec![];
         let paths: Vec<&str> = path.split('/').collect();
@@ -138,8 +138,8 @@ impl Trie {
             .await
             .value
             .as_ref()
-            .map(|handler_info| QueryResult {
-                handler_info: handler_info.clone(),
+            .map(|method_info| QueryResult {
+                method_info: method_info.clone(),
                 rest_fields: if rest_fields.is_empty() {
                     None
                 } else {

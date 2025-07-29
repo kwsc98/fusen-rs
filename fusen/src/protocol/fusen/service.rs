@@ -2,8 +2,8 @@ use http::Method;
 
 #[derive(Debug)]
 pub struct ServiceInfo {
+    pub server_id: String,
     pub service_name: String,
-    pub method_name: String,
     pub version: Option<String>,
     pub group: Option<String>,
 }
@@ -16,4 +16,3 @@ pub struct MethodInfo {
     pub method_name: String,
     pub fields: Vec<(String, String)>,
 }
-
