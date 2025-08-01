@@ -1,13 +1,6 @@
-use std::{convert::Infallible, sync::Arc};
-
-use bytes::Bytes;
-use fusen_internal_common::{utils::uuid::uuid, BoxFuture};
-use http::{Request, Response};
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
-use hyper::service::Service;
-
 use crate::{
     error::FusenError,
+    filter::ProceedingJoinPoint,
     handler::HandlerContext,
     protocol::{
         codec::{FusenHttpCodec, RequestCodec, ResponseCodec},
@@ -16,15 +9,24 @@ use crate::{
             response::FusenResponse,
         },
     },
-    server::path::{PathCache, QueryResult},
+    server::{
+        path::{PathCache, QueryResult},
+        rpc::RpcServerHandler,
+    },
 };
+use bytes::Bytes;
+use fusen_internal_common::{BoxFuture, utils::uuid::uuid};
+use http::{Request, Response};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use hyper::service::Service;
+use std::{convert::Infallible, sync::Arc};
 
 #[derive(Clone)]
 pub struct Router {
     http_codec: Arc<FusenHttpCodec>,
     path_cache: Arc<PathCache>,
     handler_context: Arc<HandlerContext>,
-    fusen_service_handler : Arc<>
+    fusen_service_handler: Arc<RpcServerHandler>,
 }
 
 impl Service<Request<hyper::body::Incoming>> for Router {
@@ -57,7 +59,7 @@ impl Service<Request<hyper::body::Incoming>> for Router {
                     fusen_request.querys.insert(key, value);
                 }
             }
-            let mut context = FusenContext {
+            let context = FusenContext {
                 unique_identifier: uuid(),
                 metadata: MetaData::default(),
                 method_info,
@@ -65,8 +67,12 @@ impl Service<Request<hyper::body::Incoming>> for Router {
                 response: FusenResponse::default(),
             };
             //通过service获取handler
-            let handler_controller = router.handler_context.get_controller(&context.method_info.service_info);
-            
+            let handler_controller = router
+                .handler_context
+                .get_controller(&context.method_info.service_desc);
+            let aspect_handers = handler_controller.aspect.clone();
+            let join_point = ProceedingJoinPoint::new(aspect_handers, context);
+            let mut context = router.fusen_service_handler.call(join_point).await?;
             let response =
                 ResponseCodec::encode(router.http_codec.as_ref(), &mut context.response)?;
             Ok(response)

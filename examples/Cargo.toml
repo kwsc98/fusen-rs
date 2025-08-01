@@ -5,53 +5,13 @@ edition.workspace = true
 license.workspace = true
 description.workspace = true
 
-
-[[bin]]
-name = "client"
-path = "src/client.rs"
-[[bin]]
-name = "client-pt"
-path = "src/client_pt.rs"
-[[bin]]
-name = "server"
-path = "src/server.rs"
+# [[bin]]
+# name = "server"
+# path = "src/server.rs"
 
 
 
 [dependencies]
 fusen-rs.workspace = true
-
-#网络协议处理
-tokio.workspace = true
-hyper.workspace = true
-http.workspace = true
-http-body.workspace = true
-http-body-util.workspace = true
-bytes.workspace = true
-futures.workspace = true
-async-trait.workspace = true
-
-#日志处理
-tracing.workspace = true
-tracing-futures.workspace = true
-tracing-subscriber.workspace = true
-pretty_env_logger.workspace = true
-tracing-opentelemetry.workspace = true
-opentelemetry.workspace = true
-opentelemetry_sdk.workspace = true
-opentelemetry-otlp.workspace = true
-tracing-appender.workspace = true
-
-#json序列化
 serde.workspace = true
 serde_json.workspace = true
-uuid.workspace = true
-
-prost = "0.13.2"
-prost-build = "0.13.2"
-
-pin-project-lite.workspace = true
-lazy_static.workspace = true
-rand.workspace = true
-async-recursion.workspace = true
-

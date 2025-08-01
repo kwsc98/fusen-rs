@@ -5,19 +5,17 @@ use crate::{
         aspect::DefaultAspect,
         loadbalance::{DefaultLoadBalance, LoadBalance_},
     },
-    protocol::fusen::service::ServiceInfo,
+    protocol::fusen::service::ServiceDesc,
 };
-use std::{
-    collections::{HashMap, LinkedList},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 pub mod aspect;
 pub mod loadbalance;
 
+#[derive(Clone)]
 pub struct HandlerController {
-    load_balance: &'static dyn LoadBalance_,
-    aspect: LinkedList<&'static dyn FusenFilter>,
+    pub load_balance: &'static dyn LoadBalance_,
+    pub aspect: Arc<Vec<&'static dyn FusenFilter>>,
 }
 
 pub enum HandlerInvoker {
@@ -27,11 +25,11 @@ pub enum HandlerInvoker {
 
 pub struct HandlerContext {
     handlers: HashMap<String, Arc<HandlerInvoker>>,
-    cache: HashMap<String, Arc<HandlerController>>,
+    cache: HashMap<String, HandlerController>,
 }
 
 pub struct HandlerInfo {
-    service_info: ServiceInfo,
+    service_desc: ServiceDesc,
     handlers: Vec<String>,
 }
 
@@ -51,10 +49,9 @@ impl Default for HandlerContext {
             "DefaultAspect".to_string(),
             Arc::new(HandlerInvoker::Aspect(Box::leak(Box::new(DefaultAspect)))),
         );
-        context.load_controller(HandlerInfo {
-            service_info: ServiceInfo {
-                server_id: "DefaultHandlerController".to_string(),
-                service_name: Default::default(),
+        let _ = context.load_controller(HandlerInfo {
+            service_desc: ServiceDesc {
+                service_id: "DefaultHandlerController".to_string(),
                 version: Default::default(),
                 group: Default::default(),
             },
@@ -65,15 +62,14 @@ impl Default for HandlerContext {
 }
 
 impl HandlerContext {
-    pub fn get_controller(&self, service_info: &ServiceInfo) -> &HandlerController {
+    pub fn get_controller(&self, service_desc: &ServiceDesc) -> &HandlerController {
         self.cache
-            .get(&service_info.server_id)
+            .get(&service_desc.service_id)
             .unwrap_or(self.cache.get("DefaultHandlerController").unwrap())
     }
     pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), FusenError> {
         let mut load_balance: Option<&'static dyn LoadBalance_> = None;
-        let mut aspect: LinkedList<&'static dyn FusenFilter> = LinkedList::new();
-
+        let mut aspect: Vec<&'static dyn FusenFilter> = Vec::new();
         for handler_id in &handler_info.handlers {
             if let Some(handler_invoker) = self.get_handler(handler_id) {
                 match handler_invoker.as_ref() {
@@ -81,7 +77,7 @@ impl HandlerContext {
                         let _ = load_balance.insert(*handler);
                     }
                     HandlerInvoker::Aspect(handler) => {
-                        aspect.push_back(*handler);
+                        aspect.push(*handler);
                     }
                 };
             }
@@ -96,12 +92,10 @@ impl HandlerContext {
         }
         let handler_controller = HandlerController {
             load_balance: load_balance.unwrap(),
-            aspect,
+            aspect: Arc::new(aspect),
         };
-        self.cache.insert(
-            handler_info.service_info.server_id,
-            Arc::new(handler_controller),
-        );
+        self.cache
+            .insert(handler_info.service_desc.service_id, handler_controller);
         Ok(())
     }
     fn get_handler(&self, handler_id: &str) -> Option<Arc<HandlerInvoker>> {

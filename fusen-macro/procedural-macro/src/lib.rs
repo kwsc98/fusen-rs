@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 use syn::{Attribute, Meta};
 
 mod handler_macro;
-mod server_macro;
+mod service_macro;
 mod trait_macro;
 
 #[proc_macro_attribute]
@@ -25,12 +25,14 @@ pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn fusen_server(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn fusen_service(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = FusenAttr::from_attr(attr);
-    match attr {
-        Ok(attr) => server_macro::fusen_server(attr, item),
+    let de = match attr {
+        Ok(attr) => service_macro::fusen_service(attr, item),
         Err(err) => err.into_compile_error().into(),
-    }
+    };
+    println!("{:#?}", de.to_string());
+    de
 }
 
 #[proc_macro_attribute]

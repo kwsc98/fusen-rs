@@ -9,4 +9,5 @@ description.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+serde_json.workspace = true
 uuid = { version = "1.17.0", features = ["v4"] }

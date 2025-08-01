@@ -5,7 +5,7 @@ use crate::{
         codec::body::{RequestBodyCodec, ResponseBodyCodec, json::JsonCodec, triple::TripleCodec},
         fusen::{
             request::{FusenRequest, Path},
-            response::FusenResponse,
+            response::{FusenResponse, HttpStatus},
         },
     },
 };
@@ -131,7 +131,7 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
             builder = builder.header(key, value);
         }
         let mut body = Bytes::new();
-        if let Some(bodys) = fusen_response.bodys.take() {
+        if let Some(bodys) = fusen_response.body.take() {
             match &fusen_response.protocol {
                 super::Protocol::Dubbo => {
                     builder = builder.header(CONTENT_TYPE, "application/grpc");
@@ -144,7 +144,7 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
             };
         }
         builder
-            .status(fusen_response.status)
+            .status(fusen_response.http_status.status)
             .body(Full::new(body).boxed())
             .map_err(|error| FusenError::Error(Box::new(error)))
     }
@@ -164,22 +164,25 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
             );
         }
         let mut protocol = Protocol::Fusen;
-        let mut bodys = None;
+        let mut body = None;
         if let Some(content_type) = headers.get(CONTENT_TYPE.as_str()) {
             let bytes = read_body(response.body_mut()).await.freeze();
             if content_type.starts_with("application/grpc") {
                 protocol = Protocol::Dubbo;
-                let _ = bodys.insert(ResponseBodyCodec::decode(&self.triple_codec, bytes)?);
+                let _ = body.insert(ResponseBodyCodec::decode(&self.triple_codec, bytes)?);
             } else if content_type.starts_with("application/json") {
-                let _ = bodys.insert(ResponseBodyCodec::decode(&self.json_codec, bytes)?);
+                let _ = body.insert(ResponseBodyCodec::decode(&self.json_codec, bytes)?);
             }
         };
         Ok(FusenResponse {
             protocol,
-            status: response.status().as_u16(),
+            http_status: HttpStatus {
+                status: response.status().as_u16(),
+                message: None,
+            },
             headers,
             extensions: None,
-            bodys,
+            body,
         })
     }
 }

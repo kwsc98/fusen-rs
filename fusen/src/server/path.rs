@@ -74,7 +74,7 @@ impl Trie {
         Self::search_by_nodes(&path, self.root.clone()).await
     }
 
-    // #[async_recursion]
+    #[async_recursion]
     async fn search_by_nodes(path: &str, mut temp: Arc<RwLock<TreeNode>>) -> Option<QueryResult> {
         let mut rest_fields: Vec<(String, String)> = vec![];
         let paths: Vec<&str> = path.split('/').collect();
