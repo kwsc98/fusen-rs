@@ -16,8 +16,12 @@ pub struct RpcServerHandler {
 }
 
 impl RpcServerHandler {
-    pub async fn new(cache: HashMap<String, &'static dyn RpcService>) -> Self {
-        Self { cache }
+    pub fn new(cache: HashMap<String, Box<dyn RpcService>>) -> Self {
+        let mut leak_cache: HashMap<String, &'static dyn RpcService> = HashMap::default();
+        for (key, value) in cache {
+            let _ = leak_cache.insert(key, Box::leak(value));
+        }
+        Self { cache: leak_cache }
     }
 
     pub async fn call(
@@ -26,7 +30,7 @@ impl RpcServerHandler {
     ) -> Result<FusenContext, FusenError> {
         let service = self
             .cache
-            .get(&join_point.context.method_info.service_desc.service_id)
+            .get(join_point.context.method_info.service_desc.get_tag())
             .cloned();
         match service {
             Some(service) => service.invoke(join_point.proceed().await?).await,

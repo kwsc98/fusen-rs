@@ -23,10 +23,10 @@ use std::{convert::Infallible, sync::Arc};
 
 #[derive(Clone)]
 pub struct Router {
-    http_codec: Arc<FusenHttpCodec>,
-    path_cache: Arc<PathCache>,
-    handler_context: Arc<HandlerContext>,
-    fusen_service_handler: Arc<RpcServerHandler>,
+    pub http_codec: Arc<FusenHttpCodec>,
+    pub path_cache: Arc<PathCache>,
+    pub handler_context: Arc<HandlerContext>,
+    pub fusen_service_handler: Arc<RpcServerHandler>,
 }
 
 impl Service<Request<hyper::body::Incoming>> for Router {

@@ -29,8 +29,8 @@ pub struct HandlerContext {
 }
 
 pub struct HandlerInfo {
-    service_desc: ServiceDesc,
-    handlers: Vec<String>,
+    pub service_desc: ServiceDesc,
+    pub handlers: Vec<String>,
 }
 
 impl Default for HandlerContext {
@@ -50,11 +50,7 @@ impl Default for HandlerContext {
             Arc::new(HandlerInvoker::Aspect(Box::leak(Box::new(DefaultAspect)))),
         );
         let _ = context.load_controller(HandlerInfo {
-            service_desc: ServiceDesc {
-                service_id: "DefaultHandlerController".to_string(),
-                version: Default::default(),
-                group: Default::default(),
-            },
+            service_desc: ServiceDesc::new("DefaultHandlerController", None, None),
             handlers: vec![],
         });
         context
@@ -62,11 +58,17 @@ impl Default for HandlerContext {
 }
 
 impl HandlerContext {
+    pub fn load_handler(&mut self, handler: Handler) {
+        self.handlers
+            .insert(handler.id, Arc::new(handler.handler_invoker));
+    }
+
     pub fn get_controller(&self, service_desc: &ServiceDesc) -> &HandlerController {
         self.cache
-            .get(&service_desc.service_id)
-            .unwrap_or(self.cache.get("DefaultHandlerController").unwrap())
+            .get(service_desc.get_tag())
+            .unwrap_or(self.cache.get("DefaultHandlerController:None:None").unwrap())
     }
+
     pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), FusenError> {
         let mut load_balance: Option<&'static dyn LoadBalance_> = None;
         let mut aspect: Vec<&'static dyn FusenFilter> = Vec::new();
@@ -94,11 +96,23 @@ impl HandlerContext {
             load_balance: load_balance.unwrap(),
             aspect: Arc::new(aspect),
         };
-        self.cache
-            .insert(handler_info.service_desc.service_id, handler_controller);
+        self.cache.insert(
+            handler_info.service_desc.get_tag().to_owned(),
+            handler_controller,
+        );
         Ok(())
     }
+
     fn get_handler(&self, handler_id: &str) -> Option<Arc<HandlerInvoker>> {
         self.handlers.get(handler_id).cloned()
     }
+}
+
+pub struct Handler {
+    pub id: String,
+    pub handler_invoker: HandlerInvoker,
+}
+
+pub trait HandlerLoad {
+    fn load(self) -> Handler;
 }

@@ -23,6 +23,21 @@ impl PathCache {
             None
         }
     }
+    pub async fn build(method_infos: Vec<Arc<MethodInfo>>) -> Self {
+        let mut rest_trie = Trie::default();
+        let mut path_cache = HashMap::new();
+        for method_info in method_infos {
+            rest_trie.insert(method_info.clone()).await;
+            let _ = path_cache.insert(
+                format!("{}:{}", method_info.method, method_info.path),
+                method_info,
+            );
+        }
+        Self {
+            path_cache,
+            rest_trie,
+        }
+    }
 }
 
 #[derive(Debug, Default)]

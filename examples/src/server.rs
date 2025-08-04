@@ -1,10 +1,11 @@
-use examples::{DemoService, ReqDto, ResDto};
+use examples::DemoService;
 use fusen_rs::{
     error::FusenError,
-    fusen_procedural_macro::{asset, fusen_service}, server::rpc::RpcService,
+    fusen_procedural_macro::{asset, fusen_service},
+    server::FusenServerContext,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct DemoServiceImpl {
     _db: String,
 }
@@ -12,15 +13,16 @@ struct DemoServiceImpl {
 #[fusen_service]
 #[asset(path="/1122",method = GET)]
 impl DemoService for DemoServiceImpl {
+    #[asset(method = GET)]
     async fn sayHello(&self, req: String) -> Result<String, FusenError> {
         Ok("Hello ".to_owned() + &req)
     }
-    #[asset(path="/sayHelloV2-http",method = POST)]
-    async fn sayHelloV2(&self, req: ReqDto) -> Result<ResDto, FusenError> {
-        Ok(ResDto::default())
-    }
-    #[asset(path="/divide",method = GET)]
-    async fn divideV2(&self, a: i32, b: Option<String>) -> Result<String, FusenError> {
-        Ok((a).to_string())
-    }
+}
+
+#[tokio::main]
+async fn main() {
+    let fusen_server =
+        FusenServerContext::new(8081).services((Box::new(DemoServiceImpl::default()), vec![]));
+    let result = fusen_server.run().await;
+    println!("{:?}", result);
 }

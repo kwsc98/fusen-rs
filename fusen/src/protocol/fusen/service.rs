@@ -7,15 +7,22 @@ pub struct ServiceDesc {
     pub service_id: String,
     pub version: Option<String>,
     pub group: Option<String>,
+    tag: String,
 }
 
 impl ServiceDesc {
     pub fn new(service_id: &str, version: Option<&str>, group: Option<&str>) -> Self {
+        let tag = format!("{}:{:?}:{:?}", service_id, version, group);
         Self {
             service_id: service_id.to_owned(),
             version: version.map(|e| e.to_owned()),
             group: group.map(|e| e.to_owned()),
+            tag,
         }
+    }
+
+    pub fn get_tag(&self) -> &str {
+        &self.tag
     }
 }
 

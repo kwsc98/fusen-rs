@@ -5,13 +5,14 @@ edition.workspace = true
 license.workspace = true
 description.workspace = true
 
-# [[bin]]
-# name = "server"
-# path = "src/server.rs"
+[[bin]]
+name = "server"
+path = "src/server.rs"
 
 
 
 [dependencies]
 fusen-rs.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+tokio.workspace = true
+# serde.workspace = true
+# serde_json.workspace = true
