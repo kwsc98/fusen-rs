@@ -46,7 +46,7 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let request_type = &input.ty;
                     let token = quote! {
                             let #request : #request_type  = fusen_rs::fusen_internal_common::serde_json::from_value(req_poi_param.remove(idx))
-                                   .map_err(|error| fusen_rs::error::FusenError::Error(Box::new(error)))?;
+                                   .map_err(|error| fusen_rs::error::FusenError::HttpError(fusen_rs::protocol::fusen::response::HttpStatus { status : 400,message : Some(format!("{error:?}"))}))?;
                             idx += 1;
                     };
                     req_pat.push(request);
@@ -95,8 +95,8 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                let service_desc =  fusen_rs::protocol::fusen::service::ServiceDesc::new(#id,#version,#group);
                let mut methods : Vec<fusen_rs::protocol::fusen::service::MethodInfo> = vec![];
                #(
-                   let (method,path,method_name,fields) : (String,String,String,Vec<(String,String)>) = fusen_rs::fusen_internal_common::serde_json::from_str(#methods_info).unwrap();
-                   methods.push(fusen_rs::protocol::fusen::service::MethodInfo::new(service_desc.clone(),method,path,method_name,fields));
+                   let (method_name,method,path,fields) : (String,String,String,Vec<(String,String)>) = fusen_rs::fusen_internal_common::serde_json::from_str(#methods_info).unwrap();
+                   methods.push(fusen_rs::protocol::fusen::service::MethodInfo::new(service_desc.clone(),method_name,method,path,fields));
                )*
                fusen_rs::protocol::fusen::service::ServiceInfo::new(service_desc,methods)
             }
@@ -164,7 +164,7 @@ fn get_resource_by_service(
                     ));
                 }
             }
-            method_infos.push((method, parent_path, item_fn.sig.ident.to_string(), fields));
+            method_infos.push((item_fn.sig.ident.to_string(), method, parent_path, fields));
         }
     }
     Ok(method_infos)

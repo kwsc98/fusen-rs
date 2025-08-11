@@ -27,12 +27,10 @@ pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn fusen_service(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = FusenAttr::from_attr(attr);
-    let de = match attr {
+    match attr {
         Ok(attr) => service_macro::fusen_service(attr, item),
         Err(err) => err.into_compile_error().into(),
-    };
-    println!("{:#?}", de.to_string());
-    de
+    }
 }
 
 #[proc_macro_attribute]

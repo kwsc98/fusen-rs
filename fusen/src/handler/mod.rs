@@ -64,12 +64,14 @@ impl HandlerContext {
     }
 
     pub fn get_controller(&self, service_desc: &ServiceDesc) -> &HandlerController {
-        self.cache
-            .get(service_desc.get_tag())
-            .unwrap_or(self.cache.get("DefaultHandlerController:None:None").unwrap())
+        self.cache.get(service_desc.get_tag()).unwrap_or(
+            self.cache
+                .get("DefaultHandlerController:None:None")
+                .unwrap(),
+        )
     }
 
-    pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), FusenError> {
+    pub fn load_controller(&mut self, handler_info: HandlerInfo) {
         let mut load_balance: Option<&'static dyn LoadBalance_> = None;
         let mut aspect: Vec<&'static dyn FusenFilter> = Vec::new();
         for handler_id in &handler_info.handlers {
@@ -88,7 +90,7 @@ impl HandlerContext {
             if let Some(handler_invoker) = self.get_handler("DefaultLoadBalance") {
                 match handler_invoker.as_ref() {
                     HandlerInvoker::LoadBalance(handler) => load_balance.insert(*handler),
-                    _ => return Err(FusenError::Impossible),
+                    _ => panic!("{}", FusenError::Impossible),
                 };
             }
         }
@@ -100,7 +102,6 @@ impl HandlerContext {
             handler_info.service_desc.get_tag().to_owned(),
             handler_controller,
         );
-        Ok(())
     }
 
     fn get_handler(&self, handler_id: &str) -> Option<Arc<HandlerInvoker>> {

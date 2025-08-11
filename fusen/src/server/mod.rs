@@ -5,7 +5,7 @@ use crate::{
     protocol::{codec::FusenHttpCodec, http::server::TcpServer},
     server::{
         path::PathCache,
-        router::Router,
+        router::{Router, RouterContext},
         rpc::{RpcServerHandler, RpcService},
     },
 };
@@ -47,7 +47,7 @@ impl FusenServerContext {
         self
     }
 
-    pub fn services(mut self, (rpc_service, handlers): (Box<dyn RpcService>, Vec<String>)) -> Self {
+    pub fn service(mut self, (rpc_service, handlers): (Box<dyn RpcService>, Vec<String>)) -> Self {
         let service_info = rpc_service.get_service_info();
         self.service_handlers.push(HandlerInfo {
             service_desc: service_info.service_desc.clone(),
@@ -72,13 +72,13 @@ impl FusenServerContext {
             );
         }
         for service_handler in self.service_handlers {
-            self.handler_context.load_controller(service_handler)?;
+            self.handler_context.load_controller(service_handler);
         }
-        let router = Router {
-            http_codec: Arc::new(FusenHttpCodec::default()),
-            path_cache: Arc::new(PathCache::build(method_infos).await),
-            handler_context: Arc::new(self.handler_context),
-            fusen_service_handler: Arc::new(RpcServerHandler::new(self.services)),
+        let router_context = RouterContext {
+            http_codec: FusenHttpCodec::default(),
+            path_cache: PathCache::build(method_infos).await,
+            handler_context: self.handler_context,
+            fusen_service_handler: RpcServerHandler::new(self.services),
         };
         let notify_shutdown: tokio::sync::broadcast::Sender<()> = broadcast::channel(1).0;
         let shutdown = Shutdown::new(notify_shutdown.subscribe());
@@ -93,7 +93,14 @@ impl FusenServerContext {
             tokio::time::sleep(Duration::from_secs(5)).await;
             drop(notify_shutdown);
         });
-        let _ = TcpServer::run(port, router, shutdown).await;
+        let _ = TcpServer::run(
+            port,
+            Router {
+                context: Arc::new(router_context),
+            },
+            shutdown,
+        )
+        .await;
         Ok(())
     }
 }

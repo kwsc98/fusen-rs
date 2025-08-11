@@ -11,18 +11,18 @@ struct DemoServiceImpl {
 }
 
 #[fusen_service]
-#[asset(path="/1122",method = GET)]
+#[asset(path = "/1122")]
 impl DemoService for DemoServiceImpl {
-    #[asset(method = GET)]
-    async fn sayHello(&self, req: String) -> Result<String, FusenError> {
-        Ok("Hello ".to_owned() + &req)
+    // #[asset(method = GET)]
+    async fn sayHello(&self, req: Option<i64>) -> Result<String, FusenError> {
+        Ok(format!("Hello {req:?}"))
     }
 }
 
 #[tokio::main]
 async fn main() {
     let fusen_server =
-        FusenServerContext::new(8081).services((Box::new(DemoServiceImpl::default()), vec![]));
+        FusenServerContext::new(8081).service((Box::new(DemoServiceImpl::default()), vec![]));
     let result = fusen_server.run().await;
     println!("{:?}", result);
 }

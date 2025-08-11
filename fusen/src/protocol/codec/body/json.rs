@@ -1,6 +1,9 @@
 use crate::{
     error::FusenError,
-    protocol::codec::body::{RequestBodyCodec, ResponseBodyCodec},
+    protocol::{
+        codec::body::{RequestBodyCodec, ResponseBodyCodec},
+        fusen::response::HttpStatus,
+    },
 };
 use bytes::Bytes;
 use serde_json::Value;
@@ -29,8 +32,12 @@ impl RequestBodyCodec for JsonCodec {
         &self,
         bytes: bytes::Bytes,
     ) -> Result<Vec<serde_json::Value>, crate::error::FusenError> {
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|error| FusenError::Error(Box::new(error)))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            FusenError::HttpError(HttpStatus {
+                status: 400,
+                message: Some(format!("{error:?}")),
+            })
+        })?;
         return if value.is_null() {
             Ok(vec![])
         } else if value.is_array() {

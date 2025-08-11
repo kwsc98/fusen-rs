@@ -13,7 +13,7 @@ use fusen_rs::{error::FusenError, fusen_procedural_macro::{asset, fusen_service}
 
 // #[fusen_service]
 pub trait DemoService {
-    async fn sayHello(&self, name: String) -> Result<String, FusenError>;
+    async fn sayHello(&self, name: Option<i64>) -> Result<String, FusenError>;
 
     // #[asset(path = "/sayHelloV2-http", method = POST)]
     // async fn sayHelloV2(&self, name: ReqDto) -> Result<ResDto, FusenError>;

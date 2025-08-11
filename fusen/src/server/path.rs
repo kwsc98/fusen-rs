@@ -11,7 +11,7 @@ pub struct PathCache {
 
 impl PathCache {
     pub async fn seach(&self, path: &Path) -> Option<QueryResult> {
-        let key = format!("{}:{}", path.method, path.uri.path());
+        let key = format!("{}:{}", path.method, path.path);
         if let Some(method_info) = self.path_cache.get(key.as_str()) {
             Some(QueryResult {
                 method_info: method_info.clone(),

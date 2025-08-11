@@ -1,12 +1,12 @@
 use crate::{error::FusenError, protocol::Protocol};
-use http::{Method, Uri};
+use http::Method;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 #[derive(Debug)]
 pub struct Path {
     pub method: Method,
-    pub uri: Uri,
+    pub path: String,
 }
 
 #[derive(Debug)]
@@ -31,7 +31,7 @@ impl FusenRequest {
             } else {
                 &field_name
             };
-            let value = match self.headers.get(field_name) {
+            let value = match self.querys.get(field_name) {
                 Some(value) => {
                     let result = if *field_type == "String" || *field_type == "Option < String >" {
                         serde_json::from_str(&format!("{value:?}"))
@@ -45,5 +45,45 @@ impl FusenRequest {
             bodys.push(value);
         }
         Ok(bodys)
+    }
+
+    pub fn init_response(
+        protocol: Protocol,
+        method: &str,
+        path: &str,
+        field_pats: &[&str],
+        mut request_bodys: Vec<Value>,
+    ) -> Result<Self, FusenError> {
+        let method =
+            Method::from_str(method).map_err(|error| FusenError::Error(Box::new(error)))?;
+        let mut bodys = None;
+        let mut querys = HashMap::new();
+        if let Method::POST = method {
+            let _ = bodys.insert(request_bodys);
+        } else {
+            for (index, field_pat) in field_pats.iter().rev().enumerate() {
+                let field_name = if field_pat.starts_with("r#") {
+                    &field_pat[2..]
+                } else {
+                    &field_pat
+                };
+                let value = request_bodys.pop().unwrap();
+                if value.is_null() {
+                    continue;
+                }
+                querys.insert(field_name.to_owned(), todo!());
+            }
+        }
+        Ok(Self {
+            protocol: Protocol::Fusen,
+            path: Path {
+                method,
+                path: path.to_owned(),
+            },
+            querys: querys,
+            headers: Default::default(),
+            extensions: Default::default(),
+            bodys: bodys,
+        })
     }
 }

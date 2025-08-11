@@ -18,10 +18,13 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let methods_info = match get_resource_by_trait(input.clone()) {
         Ok(methods_info) => methods_info.into_iter().fold(vec![], |mut vec, e| {
             vec.push(serde_json::to_string(&e).unwrap());
-            methods_cache.insert(e.0.to_owned(), (e.1.to_owned(), e.2.to_owned()));
+            methods_cache.insert(
+                e.0.to_owned(),
+                (e.1.to_owned(), e.2.to_owned(), e.3.to_owned()),
+            );
             vec
         }),
-        Err(err) => return err.into_compile_error().into(),
+        Err(error) => return error.into_compile_error().into(),
     };
     let id = match attr.id {
         Some(trait_id) => {
@@ -47,11 +50,11 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         let asyncable = item.asyncness;
         let ident = item.ident;
         let inputs = item.inputs;
-        let mut fields_ty = vec![];
-        let req = inputs.iter().fold(vec![], |mut vec, e| {
-            if let FnArg::Typed(req) = e {
-                vec.push(req.pat.clone());
-                fields_ty.push(req.pat.to_token_stream().to_string());
+        let mut fields = vec![];
+        let request_pat = inputs.iter().fold(vec![], |mut vec, e| {
+            if let FnArg::Typed(request) = e {
+                vec.push(request.pat.clone());
+                fields.push(request.pat.to_token_stream().to_string());
             }
             vec
         });
@@ -62,28 +65,25 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             }
             ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
-        let (methos_path, methos_type) = methods_cache.get(&ident.to_string()).unwrap();
+        let (methos_path, methos_type, _) = methods_cache.get(&ident.to_string()).unwrap();
         fn_quote.push(
             quote! {
-                    #[allow(non_snake_case)]
-                    #[allow(clippy::too_many_arguments)]
-                    pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::fusen_common::error::FusenError> {
-                    let mut req_vec : Vec<String> = vec![];
-                    let fields_ty = vec![
+                pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::error::FusenError> {
+                    let mut request_body : Vec<String> = vec![];
+                    let fields_pat = [
                     #(
-                        #fields_ty.to_string(),
+                        #fields,
                     )*];
                     #(
-                        let mut res_poi_str = serde_json::to_string(&#req);
-                        if let Err(err) = res_poi_str {
-                            return Err(fusen_rs::fusen_common::error::FusenError::from(err.to_string()));
+                        let mut res_poi_str = serde_json::to_value(&#request_pat);
+                        if let Err(error) = res_poi_str {
+                            return Err(fusen_rs::fusen_common::error::FusenError::Error(Box::new(error)));
                         }
-                        req_vec.push(res_poi_str.unwrap());
+                        request_body.push(res_poi_str.unwrap());
                     )*
                     let version : Option<&str> = #version;
                     let group : Option<&str> = #group;
-                    let mut mate_data = fusen_rs::fusen_common::MetaData::new();
-                    let mut request = fusen_rs::fusen_common::FusenRequest::new_for_client(#methos_type,fields_ty,req_vec);
+                    let mut request = fusen_rs::fusen_common::FusenRequest::new_for_client(#methos_type,fields_ty,request_body);
                     let mut context = fusen_rs::fusen_common::FusenContext::new(
                         fusen_rs::fusen_common::logs::get_uuid(),
                         fusen_rs::fusen_common::ContextInfo::default()
@@ -109,24 +109,30 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
 
         #[derive(Clone)]
         #vis struct #rpc_client {
+            service_info: std::sync::Arc<fusen_rs::protocol::fusen::service::ServiceInfo>,
             client : std::sync::Arc<fusen_rs::client::FusenClient>
         }
         impl #rpc_client {
         #(
             #fn_quote
         )*
+
         pub fn new(client : std::sync::Arc<fusen_rs::client::FusenClient>) -> #rpc_client {
-            #rpc_client {client}
+            #rpc_client {
+                service_info : std::sync::Arc::new(Self::get_service_info()),
+                client
+            }
         }
 
-        pub fn get_info(&self) -> fusen_rs::fusen_common::server::ServerInfo {
-            let mut methods : Vec<fusen_rs::fusen_common::MethodResource> = vec![];
+        fn get_service_info() -> fusen_rs::protocol::fusen::service::ServiceInfo {
+            let service_desc =  fusen_rs::protocol::fusen::service::ServiceDesc::new(#id,#version,#group);
+            let mut methods : Vec<fusen_rs::protocol::fusen::service::MethodInfo> = vec![];
             #(
-                methods.push(fusen_rs::fusen_common::MethodResource::new_macro(#methods_info));
+                let (method_name,method,path,fields) : (String,String,String,Vec<(String,String)>) = fusen_rs::fusen_internal_common::serde_json::from_str(#methods_info).unwrap();
+                methods.push(fusen_rs::protocol::fusen::service::MethodInfo::new(service_desc.clone(),method_name,method,path,fields));
             )*
-            fusen_rs::fusen_common::server::ServerInfo::new(#id,#version,#group,methods)
-        }
-
+            fusen_rs::protocol::fusen::service::ServiceInfo::new(service_desc,methods)
+         }
        }
 
     };
@@ -165,12 +171,14 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_resource_by_trait(item: ItemTrait) -> Result<Vec<(String, String, String)>, syn::Error> {
-    let mut res = vec![];
+fn get_resource_by_trait(
+    item: ItemTrait,
+) -> Result<Vec<(String, String, String, Vec<(String, String)>)>, syn::Error> {
+    let mut method_infos = vec![];
     let attrs = &item.attrs;
     let resource = get_asset_by_attrs(attrs)?;
     let parent_path = match resource.path {
-        Some(path) => path,
+        Some(id) => id,
         None => "/".to_owned() + &item.ident.to_string(),
     };
     let parent_method = match resource.method {
@@ -190,8 +198,19 @@ fn get_resource_by_trait(item: ItemTrait) -> Result<Vec<(String, String, String)
             };
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
-            res.push((item_fn.sig.ident.to_string(), parent_path, method));
+            let mut fields = vec![];
+            for item in &item_fn.sig.inputs {
+                if let FnArg::Typed(input) = item {
+                    let request = &input.pat;
+                    let request_type = &input.ty;
+                    fields.push((
+                        request.into_token_stream().to_string(),
+                        request_type.into_token_stream().to_string(),
+                    ));
+                }
+            }
+            method_infos.push((item_fn.sig.ident.to_string(), method, parent_path, fields));
         }
     }
-    Ok(res)
+    Ok(method_infos)
 }
