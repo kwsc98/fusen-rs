@@ -3,8 +3,6 @@ use fusen_internal_common::{BoxFuture, resource::service::ServiceResource};
 use rand::Rng;
 use std::sync::Arc;
 
-
-
 #[allow(async_fn_in_trait)]
 pub trait LoadBalance {
     async fn select(

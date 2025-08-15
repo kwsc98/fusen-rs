@@ -1,11 +1,28 @@
 use crate::{
     error::FusenError,
-    handler::{Handler, HandlerContext, HandlerInfo},
-    protocol::Protocol,
+    filter::{FusenFilter, ProceedingJoinPoint},
+    handler::{Handler, HandlerContext, HandlerController, HandlerInfo},
+    protocol::{
+        Protocol,
+        codec::{FusenHttpCodec, RequestCodec, ResponseCodec},
+        fusen::{
+            context::FusenContext,
+            request::FusenRequest,
+            service::{MethodInfo, ServiceInfo},
+        },
+    },
 };
-use fusen_register::Register;
+use bytes::Bytes;
+use fusen_internal_common::{
+    resource::service::{MethodResource, ServiceResource},
+    utils::uuid::uuid,
+};
+use fusen_register::{Register, directory::Directory};
+use http_body_util::{BodyExt, combinators::BoxBody};
+use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 pub struct FusenClientContextBuilder {
     register: Option<Box<dyn Register>>,
@@ -30,11 +47,12 @@ impl FusenClientContextBuilder {
         FusenClientContext {
             register: self.register.map(|e| Arc::new(e)),
             handler_context: Arc::new(handler_context),
+            http_client: Box::leak(Box::new(HttpClient::default())),
         }
     }
 
     pub fn register(mut self, register: Box<dyn Register>) -> Self {
-        self.register.insert(register);
+        let _ = self.register.insert(register);
         self
     }
 
@@ -47,32 +65,155 @@ impl FusenClientContextBuilder {
 pub struct FusenClientContext {
     register: Option<Arc<Box<dyn Register>>>,
     handler_context: Arc<HandlerContext>,
+    http_client: &'static dyn FusenFilter,
 }
 
 impl FusenClientContext {
-    pub fn protocol(&self, protocol: Protocol) -> FusenClient {
-        FusenClient {
-            protocol,
-            register: self.register.clone(),
-            handler_context: self.handler_context.clone(),
+    pub async fn init_client(
+        &self,
+        service_info: ServiceInfo,
+        protocol: Protocol,
+    ) -> Result<FusenClient, FusenError> {
+        let mut methods = HashMap::new();
+        for method_info in service_info.method_infos {
+            methods.insert(method_info.method_name.to_string(), Arc::new(method_info));
         }
+        let handler_controller = self
+            .handler_context
+            .get_controller(&service_info.service_desc);
+        let mut service_resource = ServiceResource {
+            service_id: service_info.service_desc.service_id,
+            group: service_info.service_desc.group,
+            version: service_info.service_desc.version,
+            methods: methods
+                .values()
+                .map(|e| MethodResource {
+                    method_name: e.method_name.to_string(),
+                    path: e.path.to_string(),
+                    method: e.method.to_string(),
+                })
+                .collect(),
+            addr: Default::default(),
+            weight: Some(1.0),
+            metadata: Default::default(),
+        };
+        let directory = if let Protocol::Host(host) = &protocol {
+            service_resource.addr = host.to_string();
+            let directory = Directory::new();
+            directory
+                .change(vec![service_resource])
+                .await
+                .map_err(|error| FusenError::Error(Box::new(error)))?;
+            directory
+        } else {
+            let Some(register) = &self.register else {
+                return Err(FusenError::ErrorMessage("not find register"));
+            };
+            register
+                .subscribe(service_resource)
+                .await
+                .map_err(|error| FusenError::Error(Box::new(error)))?
+        };
+
+        Ok(FusenClient {
+            http_client: self.http_client,
+            protocol,
+            directory,
+            handler_controller: handler_controller.clone(),
+            methods,
+        })
     }
 }
 
 pub struct FusenClient {
+    pub http_client: &'static dyn FusenFilter,
     pub protocol: Protocol,
-    pub register: Option<Arc<Box<dyn Register>>>,
-    pub handler_context: Arc<HandlerContext>,
+    pub directory: Directory,
+    pub handler_controller: HandlerController,
+    pub methods: HashMap<String, Arc<MethodInfo>>,
 }
 
 impl FusenClient {
     pub async fn invoke(
         &self,
+        method_name: &str,
         method: &str,
-        url: &str,
+        path: &str,
         field_pats: &[&str],
-        request_body: Vec<Value>,
+        request_bodys: Vec<Value>,
     ) -> Result<Value, FusenError> {
-        todo!()
+        let mut fusen_request = FusenRequest::init_request(
+            self.protocol.clone(),
+            method,
+            path,
+            field_pats,
+            request_bodys,
+        )?;
+        let resources = self
+            .directory
+            .get()
+            .await
+            .map_err(|error| FusenError::Error(Box::new(error)))?;
+        let resource = self
+            .handler_controller
+            .load_balance
+            .select_(resources)
+            .await?;
+        fusen_request.addr = Some(resource.addr.to_owned());
+        let method_info = self.methods.get(method_name).unwrap();
+        let fusen_context = FusenContext {
+            unique_identifier: uuid(),
+            metadata: Default::default(),
+            method_info: method_info.clone(),
+            request: fusen_request,
+            response: Default::default(),
+        };
+        let proceeding_join_point = ProceedingJoinPoint::new(
+            self.handler_controller.aspect.clone(),
+            self.http_client,
+            fusen_context,
+        );
+        let context = proceeding_join_point.proceed().await?;
+        let response = context.response.ok_or(FusenError::Impossible)?;
+        match response.body {
+            Some(value) => Ok(value),
+            None => Ok(serde_json::to_value(()).unwrap()),
+        }
+    }
+}
+
+struct HttpClient {
+    pub http_codec: FusenHttpCodec,
+    pub http_client: Client<HttpsConnector<HttpConnector>, BoxBody<Bytes, Infallible>>,
+}
+
+impl Default for HttpClient {
+    fn default() -> Self {
+        Self {
+            http_codec: FusenHttpCodec::default(),
+            http_client: Client::builder(hyper_util::rt::TokioExecutor::new())
+                .build(HttpsConnector::new()),
+        }
+    }
+}
+
+impl FusenFilter for HttpClient {
+    fn call(
+        &'static self,
+        join_point: ProceedingJoinPoint,
+    ) -> fusen_internal_common::BoxFuture<Result<FusenContext, FusenError>> {
+        Box::pin(async move {
+            let mut fusen_context = join_point.context;
+            let http_request = RequestCodec::encode(&self.http_codec, &mut fusen_context.request)?;
+            let response = self
+                .http_client
+                .request(http_request)
+                .await
+                .map_err(|error| FusenError::Error(Box::new(error)))?;
+            let fusen_response =
+                ResponseCodec::decode(&self.http_codec, response.map(|e| e.boxed())).await?;
+            let _ = fusen_context.response.insert(fusen_response);
+            Ok(fusen_context)
+        })
     }
 }

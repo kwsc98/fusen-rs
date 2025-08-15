@@ -6,6 +6,9 @@ pub enum FusenError {
     #[error("Error : {0}")]
     Error(Box<dyn std::error::Error>),
 
+    #[error("ErrorMessage : {0}")]
+    ErrorMessage(&'static str),
+
     #[error("HttpStatus : {0}")]
     HttpError(HttpStatus),
 

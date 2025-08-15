@@ -2,7 +2,7 @@ pub mod codec;
 pub mod fusen;
 pub mod http;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub enum Protocol {
     Dubbo,
     SpringCloud(String),

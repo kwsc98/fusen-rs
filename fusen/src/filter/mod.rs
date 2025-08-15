@@ -12,14 +12,20 @@ pub trait FusenFilter: Send + Sync + 'static {
 pub struct ProceedingJoinPoint {
     index: usize,
     link: Arc<Vec<&'static dyn FusenFilter>>,
+    base_filter: Option<&'static dyn FusenFilter>,
     pub context: FusenContext,
 }
 
 impl ProceedingJoinPoint {
-    pub fn new(link: Arc<Vec<&'static dyn FusenFilter>>, context: FusenContext) -> Self {
+    pub fn new(
+        link: Arc<Vec<&'static dyn FusenFilter>>,
+        base_filter: &'static dyn FusenFilter,
+        context: FusenContext,
+    ) -> Self {
         Self {
             index: 0,
             link,
+            base_filter: Some(base_filter),
             context,
         }
     }
@@ -32,7 +38,13 @@ impl ProceedingJoinPoint {
                 self.index += 1;
                 filter.call(self).await
             }
-            None => Ok(self.into_data()),
+            None => {
+                if let Some(base_filter) = self.base_filter {
+                    base_filter.call(self).await
+                } else {
+                    Ok(self.into_data())
+                }
+            }
         }
     }
 }

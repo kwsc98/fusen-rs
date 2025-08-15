@@ -1,13 +1,9 @@
 use crate::{
     error::FusenError,
-    filter::ProceedingJoinPoint,
     handler::HandlerContext,
     protocol::{
         codec::{FusenHttpCodec, RequestCodec, ResponseCodec},
-        fusen::{
-            context::FusenContext, metadata::MetaData, request::FusenRequest,
-            response::FusenResponse,
-        },
+        fusen::{context::FusenContext, metadata::MetaData, request::FusenRequest},
     },
     server::{
         path::{PathCache, QueryResult},
@@ -80,16 +76,18 @@ async fn call(
         metadata: MetaData::default(),
         method_info,
         request: fusen_request,
-        response: FusenResponse::default(),
+        response: Default::default(),
     };
     //通过service获取handler
     let handler_controller = router
         .handler_context
         .get_controller(&context.method_info.service_desc);
     let aspect_handers = handler_controller.aspect.clone();
-    let join_point = ProceedingJoinPoint::new(aspect_handers, context);
-    let mut context = router.fusen_service_handler.call(join_point).await?;
-    let response = ResponseCodec::encode(&router.http_codec, &mut context.response)?;
+    let context = router
+        .fusen_service_handler
+        .call(aspect_handers, context)
+        .await?;
+    let response = ResponseCodec::encode(&router.http_codec, &mut context.response.unwrap())?;
     Ok(response)
 }
 

@@ -9,5 +9,5 @@ pub struct FusenContext {
     pub metadata: MetaData,
     pub method_info: Arc<MethodInfo>,
     pub request: FusenRequest,
-    pub response: FusenResponse,
+    pub response: Option<FusenResponse>,
 }

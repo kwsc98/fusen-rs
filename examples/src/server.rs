@@ -1,8 +1,6 @@
 use examples::DemoService;
 use fusen_rs::{
-    error::FusenError,
-    fusen_procedural_macro::{asset, fusen_service},
-    server::FusenServerContext,
+    error::FusenError, fusen_procedural_macro::fusen_service, server::FusenServerContext,
 };
 
 #[derive(Debug, Default)]
@@ -24,5 +22,5 @@ async fn main() {
     let fusen_server =
         FusenServerContext::new(8081).service((Box::new(DemoServiceImpl::default()), vec![]));
     let result = fusen_server.run().await;
-    println!("{:?}", result);
+    println!("{result:?}");
 }

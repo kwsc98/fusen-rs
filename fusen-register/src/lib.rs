@@ -12,8 +12,5 @@ pub trait Register: Send + Sync {
 
     fn deregister(&self, resource: Arc<ServiceResource>) -> BoxFuture<Result<(), RegisterError>>;
 
-    fn subscribe(
-        &self,
-        resource: Arc<ServiceResource>,
-    ) -> BoxFuture<Result<Directory, RegisterError>>;
+    fn subscribe(&self, resource: ServiceResource) -> BoxFuture<Result<Directory, RegisterError>>;
 }

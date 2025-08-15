@@ -37,7 +37,10 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
         for (key, value) in fusen_request.headers.drain() {
             builder = builder.header(key, value);
         }
-        let mut uri = fusen_request.path.path.to_owned();
+        let Some(addr) = &fusen_request.addr else {
+            return Err(FusenError::Impossible);
+        };
+        let mut uri = format!("{}{}", addr, fusen_request.path.path);
         if !fusen_request.querys.is_empty() {
             uri.push_str("?");
             for (key, value) in &fusen_request.querys {
@@ -109,6 +112,7 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
                 method: request.method().clone(),
                 path: request.uri().path().to_owned(),
             },
+            addr: None,
             querys,
             headers,
             extensions: None,

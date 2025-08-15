@@ -14,7 +14,7 @@ pub enum DirectorySender {
 }
 
 pub enum DirectoryReceiver {
-    GET(Arc<Vec<ServiceResource>>),
+    GET(Arc<Vec<Arc<ServiceResource>>>),
     CHANGE,
 }
 
@@ -23,19 +23,19 @@ pub struct Directory {
     sender: UnboundedSender<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>,
 }
 
-impl Directory {
-    pub async fn new() -> Self {
+impl Default for Directory {
+    fn default() -> Self {
         let (s, mut r) =
             mpsc::unbounded_channel::<(DirectorySender, oneshot::Sender<DirectoryReceiver>)>();
         tokio::spawn(async move {
-            let mut cache: Arc<Vec<ServiceResource>> = Arc::new(vec![]);
+            let mut cache: Arc<Vec<Arc<ServiceResource>>> = Arc::new(vec![]);
             while let Some(msg) = r.recv().await {
                 match msg.0 {
                     DirectorySender::GET => {
                         let _ = msg.1.send(DirectoryReceiver::GET(cache.clone()));
                     }
                     DirectorySender::CHANGE(resources) => {
-                        cache = Arc::new(resources);
+                        cache = Arc::new(resources.into_iter().map(|e| Arc::new(e)).collect());
                         let _ = msg.1.send(DirectoryReceiver::CHANGE);
                     }
                 }
@@ -43,8 +43,10 @@ impl Directory {
         });
         Self { sender: s }
     }
+}
 
-    pub async fn get(&self) -> Result<Arc<Vec<ServiceResource>>, RegisterError> {
+impl Directory {
+    pub async fn get(&self) -> Result<Arc<Vec<Arc<ServiceResource>>>, RegisterError> {
         let oneshot = oneshot::channel();
         let _ = self.sender.send((DirectorySender::GET, oneshot.0));
         let rev = oneshot

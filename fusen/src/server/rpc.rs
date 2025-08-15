@@ -1,12 +1,11 @@
 use crate::{
     error::FusenError,
+    filter::{FusenFilter, ProceedingJoinPoint},
     protocol::fusen::{context::FusenContext, service::ServiceInfo},
 };
-use fusen_internal_common::BoxFuture;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
-pub trait RpcService: Send + Sync {
-    fn invoke(&'static self, context: FusenContext) -> BoxFuture<Result<FusenContext, FusenError>>;
+pub trait RpcService: Send + Sync + FusenFilter {
     fn get_service_info(&self) -> ServiceInfo;
 }
 
@@ -26,14 +25,18 @@ impl RpcServerHandler {
 
     pub async fn call(
         &self,
-        join_point: crate::filter::ProceedingJoinPoint,
+        link: Arc<Vec<&'static dyn FusenFilter>>,
+        context: FusenContext,
     ) -> Result<FusenContext, FusenError> {
         let service = self
             .cache
-            .get(join_point.context.method_info.service_desc.get_tag())
+            .get(context.method_info.service_desc.get_tag())
             .cloned();
         match service {
-            Some(service) => service.invoke(join_point.proceed().await?).await,
+            Some(service) => {
+                let join_point = ProceedingJoinPoint::new(link, service, context);
+                join_point.proceed().await
+            }
             None => Err(FusenError::Impossible),
         }
     }

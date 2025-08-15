@@ -13,6 +13,7 @@ pub struct Path {
 pub struct FusenRequest {
     pub protocol: Protocol,
     pub path: Path,
+    pub addr: Option<String>,
     pub querys: HashMap<String, String>,
     pub headers: HashMap<String, String>,
     pub extensions: Option<HashMap<String, String>>,
@@ -47,7 +48,7 @@ impl FusenRequest {
         Ok(bodys)
     }
 
-    pub fn init_response(
+    pub fn init_request(
         protocol: Protocol,
         method: &str,
         path: &str,
@@ -61,7 +62,7 @@ impl FusenRequest {
         if let Method::POST = method {
             let _ = bodys.insert(request_bodys);
         } else {
-            for (index, field_pat) in field_pats.iter().rev().enumerate() {
+            for field_pat in field_pats.iter().rev() {
                 let field_name = if field_pat.starts_with("r#") {
                     &field_pat[2..]
                 } else {
@@ -71,15 +72,20 @@ impl FusenRequest {
                 if value.is_null() {
                     continue;
                 }
-                querys.insert(field_name.to_owned(), todo!());
+                let mut query_value = value.to_string();
+                if value.is_string() {
+                    query_value = query_value[1..query_value.len() - 1].to_string();
+                }
+                querys.insert(field_name.to_owned(), query_value);
             }
         }
         Ok(Self {
-            protocol: Protocol::Fusen,
+            protocol,
             path: Path {
                 method,
                 path: path.to_owned(),
             },
+            addr: None,
             querys: querys,
             headers: Default::default(),
             extensions: Default::default(),

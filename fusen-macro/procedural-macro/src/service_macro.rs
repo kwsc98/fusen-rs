@@ -75,7 +75,9 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                        #(
                           #req_pat,
                        )*).await;
-                    context.response.init_response(result);
+                    let mut response = fusen_rs::protocol::fusen::response::FusenResponse::default();
+                    response.init_response(result);
+                    context.response = Some(response);
                     return Ok(context);
                }
             })
@@ -86,11 +88,16 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
 
         #org_item
 
-        impl fusen_rs::server::rpc::RpcService for #item_self {
-            fn invoke (&'static self, context : fusen_rs::protocol::fusen::context::FusenContext) -> fusen_rs::fusen_internal_common::BoxFuture<Result<fusen_rs::protocol::fusen::context::FusenContext,fusen_rs::error::FusenError>> {
+        impl fusen_rs::filter::FusenFilter for #item_self {
+            fn call(&'static self, join_point : fusen_rs::filter::ProceedingJoinPoint) -> fusen_rs::fusen_internal_common::BoxFuture<Result<fusen_rs::protocol::fusen::context::FusenContext,fusen_rs::error::FusenError>> {
                 let rpc = self;
-                Box::pin(async move {rpc.prv_invoke(context).await})
+                Box::pin(async move {
+                    rpc.prv_invoke(join_point.context).await
+                })
             }
+        }
+
+        impl fusen_rs::server::rpc::RpcService for #item_self {
             fn get_service_info(&self) -> fusen_rs::protocol::fusen::service::ServiceInfo {
                let service_desc =  fusen_rs::protocol::fusen::service::ServiceDesc::new(#id,#version,#group);
                let mut methods : Vec<fusen_rs::protocol::fusen::service::MethodInfo> = vec![];

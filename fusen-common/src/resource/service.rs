@@ -1,12 +1,12 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct ServiceResource {
-    pub service_name: String,
+    pub service_id: String,
     pub group: Option<String>,
     pub version: Option<String>,
     pub methods: Vec<MethodResource>,
-    pub socket_addr: SocketAddr,
+    pub addr: String,
     pub weight: Option<f64>,
     pub metadata: HashMap<String, String>,
 }
