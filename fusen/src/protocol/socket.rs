@@ -26,6 +26,7 @@ impl Socket {
     pub fn new(protocol: Option<&str>) -> Self {
         let mut connector = HttpConnector::new();
         connector.set_keepalive(Some(Duration::from_secs(90)));
+        connector.enforce_http(false);
         if protocol.is_some_and(|e| e.to_lowercase().contains("http2")) {
             Socket::HTTP2(
                 Client::builder(hyper_util::rt::TokioExecutor::new())
