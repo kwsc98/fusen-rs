@@ -22,7 +22,11 @@ use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use serde_json::Value;
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use std::{
+    collections::{HashMap, LinkedList},
+    convert::Infallible,
+    sync::Arc,
+};
 
 pub struct FusenClientContextBuilder {
     register: Option<Box<dyn Register>>,
@@ -99,7 +103,7 @@ impl FusenClientContext {
         };
         let directory = if let Protocol::Host(host) = &protocol {
             service_resource.addr = host.to_string();
-            let directory = Directory::new();
+            let directory = Directory::default();
             directory
                 .change(vec![service_resource])
                 .await
@@ -140,7 +144,7 @@ impl FusenClient {
         method: &str,
         path: &str,
         field_pats: &[&str],
-        request_bodys: Vec<Value>,
+        request_bodys: LinkedList<Value>,
     ) -> Result<Value, FusenError> {
         let mut fusen_request = FusenRequest::init_request(
             self.protocol.clone(),
@@ -177,7 +181,7 @@ impl FusenClient {
         let response = context.response.ok_or(FusenError::Impossible)?;
         match response.body {
             Some(value) => Ok(value),
-            None => Ok(serde_json::to_value(()).unwrap()),
+            None => Err(FusenError::HttpError(response.http_status)),
         }
     }
 }

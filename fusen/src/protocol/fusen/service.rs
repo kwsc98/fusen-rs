@@ -26,7 +26,7 @@ impl ServiceDesc {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MethodInfo {
     pub service_desc: ServiceDesc,
     pub method_name: String,
@@ -53,7 +53,7 @@ impl MethodInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ServiceInfo {
     pub service_desc: ServiceDesc,
     pub method_infos: Vec<MethodInfo>,

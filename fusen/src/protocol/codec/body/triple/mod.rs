@@ -1,3 +1,5 @@
+use std::collections::LinkedList;
+
 use bytes::Bytes;
 use prost::Message;
 use serde_json::Value;
@@ -18,7 +20,7 @@ pub struct TripleCodec;
 impl RequestBodyCodec for TripleCodec {
     fn encode(
         &self,
-        bodys: Vec<serde_json::Value>,
+        bodys: LinkedList<serde_json::Value>,
     ) -> Result<bytes::Bytes, crate::error::FusenError> {
         let mut values = vec![];
         for body in bodys {
@@ -34,13 +36,13 @@ impl RequestBodyCodec for TripleCodec {
     fn decode(
         &self,
         bytes: bytes::Bytes,
-    ) -> Result<Vec<serde_json::Value>, crate::error::FusenError> {
+    ) -> Result<LinkedList<serde_json::Value>, crate::error::FusenError> {
         let triple_request_wrapper = <TripleRequestWrapper as Message>::decode(&bytes[5..])
             .map_err(|error| FusenError::Error(Box::new(error)))?;
         let values = triple_request_wrapper.decode();
-        let mut body = vec![];
+        let mut body = LinkedList::new();
         for value in values {
-            body.push(
+            body.push_back(
                 serde_json::from_slice(&value)
                     .map_err(|error| FusenError::Error(Box::new(error)))?,
             );

@@ -24,12 +24,13 @@ pub enum Protocol {
     Fusen,
 }
 
+#[derive(Default)]
 pub struct NacosConfig {
     pub application_name: String,
     pub server_addr: String,
-    pub namespace: String,
-    pub username: String,
-    pub password: String,
+    pub namespace: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 impl NacosRegister {
@@ -41,12 +42,12 @@ impl NacosRegister {
         let mut client_props = ClientProps::new();
         client_props = client_props
             .server_addr(config.server_addr.clone())
-            .namespace(config.namespace.clone())
+            .namespace(config.namespace.clone().unwrap_or_default())
             .app_name(config.application_name.clone())
-            .auth_username(config.username.clone())
-            .auth_password(config.password.clone());
+            .auth_username(config.username.clone().unwrap_or_default())
+            .auth_password(config.password.clone().unwrap_or_default());
         let builder = NamingServiceBuilder::new(client_props);
-        let builder = if !config.username.is_empty() {
+        let builder = if !config.username.is_none() {
             builder.enable_auth_plugin_http()
         } else {
             builder
@@ -163,7 +164,7 @@ impl NamingEventListener for ServiceChangeListener {
 fn to_service_resources(service_instances: Vec<ServiceInstance>) -> Vec<ServiceResource> {
     service_instances.into_iter().fold(vec![], |mut vec, e| {
         let resource = ServiceResource {
-            addr: format!("{}:{}", e.ip(), e.port),
+            addr: format!("http://{}:{}", e.ip(), e.port),
             service_id: e.service_name.unwrap_or_default(),
             group: None,
             version: None,

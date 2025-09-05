@@ -1,6 +1,9 @@
-use examples::DemoService;
+use examples::{DemoService, ReqDto, ResDto};
+use fusen_register::support::nacos::{NacosConfig, NacosRegister};
 use fusen_rs::{
-    error::FusenError, fusen_procedural_macro::fusen_service, server::FusenServerContext,
+    error::FusenError,
+    fusen_procedural_macro::{asset, fusen_service},
+    server::FusenServerContext,
 };
 
 #[derive(Debug, Default)]
@@ -9,18 +12,41 @@ struct DemoServiceImpl {
 }
 
 #[fusen_service]
-#[asset(path = "/1122")]
 impl DemoService for DemoServiceImpl {
-    // #[asset(method = GET)]
-    async fn sayHello(&self, req: Option<i64>) -> Result<String, FusenError> {
+    async fn say_hello(&self, _req: Option<i64>) -> Result<(), FusenError> {
+        Ok(())
+    }
+
+    async fn say_hellov2(&self, req: Option<String>) -> Result<String, FusenError> {
         Ok(format!("Hello {req:?}"))
+    }
+
+    async fn say_hellov3(&self, req: Option<String>, ew: i64) -> Result<String, FusenError> {
+        Ok(format!("Hello {req:?}  {ew:?}"))
+    }
+
+    #[asset(path = "/sayHelloV2-http")]
+    async fn sayHelloV2(&self, name: ReqDto) -> Result<ResDto, FusenError> {
+        Ok(ResDto {
+            str: format!("Hello {:?}", name.str),
+        })
     }
 }
 
 #[tokio::main]
 async fn main() {
-    let fusen_server =
-        FusenServerContext::new(8081).service((Box::new(DemoServiceImpl::default()), vec![]));
-    let result = fusen_server.run().await;
-    println!("{result:?}");
+    let nacos = NacosRegister::init(
+        NacosConfig {
+            application_name: "fusen_service".to_string(),
+            server_addr: "127.0.0.1:8848".to_string(),
+            ..Default::default()
+        },
+        fusen_register::support::nacos::Protocol::Fusen,
+        None,
+    )
+    .unwrap();
+    let fusen_server = FusenServerContext::new(8081)
+        .register(Box::new(nacos))
+        .service((Box::new(DemoServiceImpl::default()), vec![]));
+    let _result = fusen_server.run().await;
 }

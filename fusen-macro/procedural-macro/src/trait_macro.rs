@@ -65,39 +65,26 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             }
             ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
-        let (methos_path, methos_type, _) = methods_cache.get(&ident.to_string()).unwrap();
+        let (methos_type, methos_path, _) = methods_cache.get(&ident.to_string()).unwrap();
         fn_quote.push(
             quote! {
                 pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::error::FusenError> {
-                    let mut request_body : Vec<String> = vec![];
+                    let mut request_body : std::collections::LinkedList<fusen_rs::fusen_internal_common::serde_json::Value> = std::collections::LinkedList::new();
                     let fields_pat = [
                     #(
                         #fields,
                     )*];
                     #(
-                        let mut res_poi_str = serde_json::to_value(&#request_pat);
+                        let res_poi_str = fusen_rs::fusen_internal_common::serde_json::to_value(&#request_pat);
                         if let Err(error) = res_poi_str {
-                            return Err(fusen_rs::fusen_common::error::FusenError::Error(Box::new(error)));
+                            return Err(fusen_rs::error::FusenError::Error(Box::new(error)));
                         }
-                        request_body.push(res_poi_str.unwrap());
+                        request_body.push_back(res_poi_str.unwrap());
                     )*
-                    let version : Option<&str> = #version;
-                    let group : Option<&str> = #group;
-                    let mut request = fusen_rs::fusen_common::FusenRequest::new_for_client(#methos_type,fields_ty,request_body);
-                    let mut context = fusen_rs::fusen_common::FusenContext::new(
-                        fusen_rs::fusen_common::logs::get_uuid(),
-                        fusen_rs::fusen_common::ContextInfo::default()
-                            .path(fusen_rs::fusen_common::Path::new(#methos_type,#methos_path.to_string()))
-                            .version(version.map(|e|e.to_string()))
-                            .class_name(#id.to_owned())
-                            .method_name(stringify!(#ident).to_string())
-                            .group(group.map(|e|e.to_string())),
-                        request,
-                        mate_data,
-                    );
-                    context.get_mut_response().insert_return_ty(stringify!(#output_type));
-                    let res : Result<#output_type,fusen_rs::fusen_common::error::FusenError> = self.client.invoke::<#output_type>(context).await;
-                    return res;
+                    let response : fusen_rs::fusen_internal_common::serde_json::Value = self.client.invoke(
+                        stringify!(#ident),#methos_type,#methos_path,&fields_pat,request_body
+                    ).await?;
+                    return fusen_rs::fusen_internal_common::serde_json::from_value(response).map_err(|error| fusen_rs::error::FusenError::Error(Box::new(error)));
                 }
             }
         );
@@ -112,19 +99,22 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             service_info: std::sync::Arc<fusen_rs::protocol::fusen::service::ServiceInfo>,
             client : std::sync::Arc<fusen_rs::client::FusenClient>
         }
+        #[allow(non_snake_case)]
         impl #rpc_client {
         #(
             #fn_quote
         )*
 
-        pub fn new(client : std::sync::Arc<fusen_rs::client::FusenClient>) -> #rpc_client {
-            #rpc_client {
-                service_info : std::sync::Arc::new(Self::get_service_info()),
+        pub async fn init(fusen_client_context : &fusen_rs::client::FusenClientContext,protocol : fusen_rs::protocol::Protocol) -> Result<#rpc_client,fusen_rs::error::FusenError> {
+            let service_info = Self::get_service_info();
+            let client = std::sync::Arc::new(fusen_client_context.init_client(service_info.clone(),protocol).await?);
+            Ok(#rpc_client {
+                service_info : std::sync::Arc::new(service_info),
                 client
-            }
+            })
         }
 
-        fn get_service_info() -> fusen_rs::protocol::fusen::service::ServiceInfo {
+        pub fn get_service_info() -> fusen_rs::protocol::fusen::service::ServiceInfo {
             let service_desc =  fusen_rs::protocol::fusen::service::ServiceDesc::new(#id,#version,#group);
             let mut methods : Vec<fusen_rs::protocol::fusen::service::MethodInfo> = vec![];
             #(
@@ -155,16 +145,16 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
             };
             vec.push(quote! {
                    #(#attrs)*
-                   #asyncable fn #ident (#inputs) -> fusen_rs::fusen_common::FusenResult<#output_type>;
+                   #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::error::FusenError>;
             });
         }
         vec
     });
     quote! {
+        #[allow(async_fn_in_trait)]
+        #[allow(non_snake_case)]
         pub trait #trait_ident {
            #(
-               #[allow(async_fn_in_trait)]
-               #[allow(non_snake_case)]
                #item_fn
             )*
         }

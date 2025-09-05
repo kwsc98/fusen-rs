@@ -1,7 +1,10 @@
 use crate::{error::FusenError, protocol::Protocol};
 use http::Method;
 use serde_json::Value;
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{HashMap, LinkedList},
+    str::FromStr,
+};
 
 #[derive(Debug)]
 pub struct Path {
@@ -17,12 +20,12 @@ pub struct FusenRequest {
     pub querys: HashMap<String, String>,
     pub headers: HashMap<String, String>,
     pub extensions: Option<HashMap<String, String>>,
-    pub bodys: Option<Vec<Value>>,
+    pub bodys: Option<LinkedList<Value>>,
 }
 
 impl FusenRequest {
-    pub fn get_bodys(&mut self, fields: &[(&str, &str)]) -> Result<Vec<Value>, FusenError> {
-        let mut bodys = vec![];
+    pub fn get_bodys(&mut self, fields: &[(&str, &str)]) -> Result<LinkedList<Value>, FusenError> {
+        let mut bodys = LinkedList::new();
         if let Method::POST = self.path.method {
             return Ok(self.bodys.take().unwrap_or_default());
         }
@@ -43,7 +46,7 @@ impl FusenRequest {
                 }
                 None => Value::Null,
             };
-            bodys.push(value);
+            bodys.push_back(value);
         }
         Ok(bodys)
     }
@@ -53,7 +56,7 @@ impl FusenRequest {
         method: &str,
         path: &str,
         field_pats: &[&str],
-        mut request_bodys: Vec<Value>,
+        mut request_bodys: LinkedList<Value>,
     ) -> Result<Self, FusenError> {
         let method =
             Method::from_str(method).map_err(|error| FusenError::Error(Box::new(error)))?;
@@ -68,7 +71,7 @@ impl FusenRequest {
                 } else {
                     &field_pat
                 };
-                let value = request_bodys.pop().unwrap();
+                let value = request_bodys.pop_back().unwrap();
                 if value.is_null() {
                     continue;
                 }

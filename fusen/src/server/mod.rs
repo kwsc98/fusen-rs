@@ -9,7 +9,10 @@ use crate::{
         rpc::{RpcServerHandler, RpcService},
     },
 };
-use fusen_internal_common::resource::service::ServiceResource;
+use fusen_internal_common::{
+    resource::service::{MethodResource, ServiceResource},
+    utils::net::get_network_ip,
+};
 use fusen_register::Register;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{signal, sync::broadcast};
@@ -61,15 +64,43 @@ impl FusenServerContext {
     pub async fn run(mut self) -> Result<(), FusenError> {
         let port = self.port;
         let mut method_infos = vec![];
+        let mut service_resources: Vec<Arc<ServiceResource>> = vec![];
+        let net_addr = format!("{}:{port}", get_network_ip());
         for rpc_service in self.services.values() {
             let service_info = rpc_service.get_service_info();
-            method_infos.append(
-                &mut service_info
+            let temp_method_infos = service_info.method_infos.clone();
+            service_resources.push(Arc::new(ServiceResource {
+                service_id: service_info.service_desc.service_id,
+                group: service_info.service_desc.group,
+                version: service_info.service_desc.version,
+                methods: service_info
                     .method_infos
+                    .into_iter()
+                    .map(|e| MethodResource {
+                        method_name: e.method_name,
+                        path: e.path,
+                        method: e.method.to_string(),
+                    })
+                    .collect(),
+                addr: net_addr.clone(),
+                weight: None,
+                metadata: Default::default(),
+            }));
+            method_infos.append(
+                &mut temp_method_infos
                     .into_iter()
                     .map(|method_info| Arc::new(method_info))
                     .collect(),
             );
+        }
+
+        for register in &self.registers {
+            for service_resource in &service_resources {
+                register
+                    .register(service_resource.clone())
+                    .await
+                    .map_err(|error| FusenError::Error(Box::new(error)))?;
+            }
         }
         for service_handler in self.service_handlers {
             self.handler_context.load_controller(service_handler);
@@ -82,7 +113,6 @@ impl FusenServerContext {
         };
         let notify_shutdown: tokio::sync::broadcast::Sender<()> = broadcast::channel(1).0;
         let shutdown = Shutdown::new(notify_shutdown.subscribe());
-        let service_resources: Vec<Arc<ServiceResource>> = vec![];
         tokio::spawn(async move {
             let _ = signal::ctrl_c().await;
             for register in self.registers {

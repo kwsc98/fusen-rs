@@ -1,3 +1,5 @@
+use std::collections::LinkedList;
+
 use crate::{
     error::FusenError,
     protocol::{
@@ -14,11 +16,11 @@ pub struct JsonCodec;
 impl RequestBodyCodec for JsonCodec {
     fn encode(
         &self,
-        mut body: Vec<serde_json::Value>,
+        mut body: LinkedList<serde_json::Value>,
     ) -> Result<bytes::Bytes, crate::error::FusenError> {
         if !body.is_empty() {
             let bytes = if body.len() == 1 {
-                serde_json::to_vec(&body.remove(0))
+                serde_json::to_vec(&body.pop_front().unwrap())
                     .map_err(|error| FusenError::Error(Box::new(error)))?
             } else {
                 serde_json::to_vec(&body).map_err(|error| FusenError::Error(Box::new(error)))?
@@ -31,21 +33,21 @@ impl RequestBodyCodec for JsonCodec {
     fn decode(
         &self,
         bytes: bytes::Bytes,
-    ) -> Result<Vec<serde_json::Value>, crate::error::FusenError> {
+    ) -> Result<LinkedList<serde_json::Value>, crate::error::FusenError> {
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
             FusenError::HttpError(HttpStatus {
                 status: 400,
                 message: Some(format!("{error:?}")),
             })
         })?;
-        return if value.is_null() {
-            Ok(vec![])
-        } else if value.is_array() {
-            let valus: Vec<Value> = serde_json::from_value(value)
+        return if value.is_array() {
+            let valus: LinkedList<Value> = serde_json::from_value(value)
                 .map_err(|error| FusenError::Error(Box::new(error)))?;
             Ok(valus)
         } else {
-            Ok(vec![value])
+            let mut linked_list = LinkedList::new();
+            linked_list.push_back(value);
+            Ok(linked_list)
         };
     }
 }

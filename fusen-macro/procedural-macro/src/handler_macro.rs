@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemImpl, Type};
+use syn::{ItemImpl, Type, parse_macro_input};
 
 use crate::HandlerAttr;
 
@@ -31,8 +31,8 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                 impl fusen_rs::handler::loadbalance::LoadBalance_ for #item_self {
                     fn select_(
                         &'static self,
-                        invokers: std::sync::Arc<fusen_rs::register::ResourceInfo>,
-                    ) -> fusen_rs::fusen_common::FusenFuture<Result<std::sync::Arc<fusen_rs::protocol::socket::InvokerAssets>, fusen_rs::Error>> {
+                        invokers: std::sync::Arc<Vec<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>>,
+                    ) -> fusen_rs::fusen_internal_common::BoxFuture<Result<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>, fusen_rs::error::FusenError>> {
                         Box::pin(async move {
                            self.select(invokers).await
                         })
@@ -49,7 +49,7 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                     fn call(
                         &'static self,
                         join_point: fusen_rs::filter::ProceedingJoinPoint,
-                    ) -> fusen_rs::fusen_common::FusenFuture<Result<fusen_rs::fusen_common::FusenContext, fusen_rs::Error>> {
+                    ) -> fusen_rs::fusen_internal_common::BoxFuture<Result<fusen_rs::protocol::fusen::context::FusenContext, fusen_rs::error::FusenError>> {
                         Box::pin(async move {
                             self.aroud(join_point).await
                         })
@@ -63,7 +63,7 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                 "handler must impl 'LoadBalance', 'Aspect'",
             )
             .into_compile_error()
-            .into()
+            .into();
         }
     };
     quote!(
@@ -73,7 +73,10 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
 
         impl fusen_rs::handler::HandlerLoad for #item_self {
             fn load(self) -> fusen_rs::handler::Handler {
-                fusen_rs::handler::Handler::new(#id.to_string(),#handler_invoker)
+                fusen_rs::handler::Handler{
+                    id: #id.to_string(),
+                    handler_invoker: #handler_invoker
+                }
             }
         }
     )

@@ -45,9 +45,8 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let request = &input.pat;
                     let request_type = &input.ty;
                     let token = quote! {
-                            let #request : #request_type  = fusen_rs::fusen_internal_common::serde_json::from_value(req_poi_param.remove(idx))
-                                   .map_err(|error| fusen_rs::error::FusenError::HttpError(fusen_rs::protocol::fusen::response::HttpStatus { status : 400,message : Some(format!("{error:?}"))}))?;
-                            idx += 1;
+                        let #request : #request_type  = fusen_rs::fusen_internal_common::serde_json::from_value(req_poi_paramlkj.pop_front().unwrap())
+                            .map_err(|error| fusen_rs::error::FusenError::HttpError(fusen_rs::protocol::fusen::response::HttpStatus { status : 400,message : Some(format!("{error:?}"))}))?;
                     };
                     req_pat.push(request);
                     req_type.push(request_type);
@@ -61,13 +60,12 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let fields = [#(
                         (stringify!(#req_pat),stringify!(#req_type)),
                     )*];
-                    let mut req_poi_param = match context.request.get_bodys(&fields) {
+                    let mut req_poi_paramlkj = match context.request.get_bodys(&fields) {
                         Ok(result) => result,
                         Err(error) => {
                             return Err(fusen_rs::error::FusenError::Error(Box::new(error)));
                         }
                     };
-                    let mut idx = 0;
                     #(
                        #request
                     )*

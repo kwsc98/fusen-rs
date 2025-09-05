@@ -49,15 +49,15 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
             uri.pop();
         }
         let mut body = Bytes::new();
-        if let Some(bodys) = &mut fusen_request.bodys {
+        if let Some(bodys) = fusen_request.bodys.take() {
             match &fusen_request.protocol {
                 super::Protocol::Dubbo => {
                     builder = builder.header(CONTENT_TYPE, "application/grpc");
-                    body = RequestBodyCodec::encode(&self.triple_codec, bodys.drain(..).collect())?;
+                    body = RequestBodyCodec::encode(&self.triple_codec, bodys)?;
                 }
                 _ => {
                     builder = builder.header(CONTENT_TYPE, "application/json");
-                    body = RequestBodyCodec::encode(&self.json_codec, bodys.drain(..).collect())?;
+                    body = RequestBodyCodec::encode(&self.json_codec, bodys)?;
                 }
             };
         }
