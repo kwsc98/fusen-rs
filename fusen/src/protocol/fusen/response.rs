@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FusenResponse {
     pub protocol: Protocol,
     pub http_status: HttpStatus,
@@ -30,18 +30,6 @@ impl Default for HttpStatus {
 impl Display for HttpStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "(status:{}, message:{:?})", self.status, self.message)
-    }
-}
-
-impl Default for FusenResponse {
-    fn default() -> Self {
-        Self {
-            protocol: Protocol::default(),
-            http_status: Default::default(),
-            headers: Default::default(),
-            extensions: Default::default(),
-            body: Default::default(),
-        }
     }
 }
 

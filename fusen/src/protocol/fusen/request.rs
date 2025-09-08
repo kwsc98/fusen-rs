@@ -30,17 +30,17 @@ impl FusenRequest {
             return Ok(self.bodys.take().unwrap_or_default());
         }
         for (field_name, field_type) in fields {
-            let field_name = if field_name.starts_with("r#") {
-                &field_name[2..]
+            let field_name = if let Some(field_name) = field_name.strip_prefix("r#") {
+                field_name
             } else {
-                &field_name
+                field_name
             };
             let value = match self.querys.get(field_name) {
                 Some(value) => {
                     let result = if *field_type == "String" || *field_type == "Option < String >" {
                         serde_json::from_str(&format!("{value:?}"))
                     } else {
-                        serde_json::from_str(&value)
+                        serde_json::from_str(value)
                     };
                     result.map_err(|error| FusenError::Error(Box::new(error)))?
                 }
@@ -66,10 +66,10 @@ impl FusenRequest {
             let _ = bodys.insert(request_bodys);
         } else {
             for field_pat in field_pats.iter().rev() {
-                let field_name = if field_pat.starts_with("r#") {
-                    &field_pat[2..]
+                let field_name = if let Some(field_pat) = field_pat.strip_prefix("r#") {
+                    field_pat
                 } else {
-                    &field_pat
+                    field_pat
                 };
                 let value = request_bodys.pop_back().unwrap();
                 if value.is_null() {
@@ -89,10 +89,10 @@ impl FusenRequest {
                 path: path.to_owned(),
             },
             addr: None,
-            querys: querys,
+            querys,
             headers: Default::default(),
             extensions: Default::default(),
-            bodys: bodys,
+            bodys,
         })
     }
 }

@@ -19,6 +19,12 @@ pub struct HttpClient {
     pub http2_client: HttpSocket,
 }
 
+impl Default for HttpClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HttpClient {
     pub fn new() -> Self {
         let mut connector = HttpConnector::new();

@@ -18,7 +18,7 @@ impl TcpServer {
         builder.http2().max_concurrent_streams(None);
         builder.http1().keep_alive(true);
         let builder = Arc::new(builder);
-        let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+        let tcp_listener = TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         let notify_shutdown: tokio::sync::broadcast::Sender<()> = broadcast::channel(1).0;
         let (sender, mut recv) = mpsc::channel::<()>(1);
         let router = Arc::new(router);

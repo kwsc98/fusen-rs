@@ -42,7 +42,7 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
         };
         let mut uri = format!("{}{}", addr, fusen_request.path.path);
         if !fusen_request.querys.is_empty() {
-            uri.push_str("?");
+            uri.push('?');
             for (key, value) in &fusen_request.querys {
                 uri.push_str(&format!("{}={}&", key, urlencoding::encode(value.as_str())));
             }
@@ -214,7 +214,7 @@ pub trait ResponseCodec<T, E> {
 async fn read_body(body: &mut BoxBody<Bytes, hyper::Error>) -> BytesMut {
     let mut mut_bytes = BytesMut::new();
     while let Some(Ok(frame)) = body.frame().await {
-        if let Some(bytes) = frame.into_data().ok() {
+        if let Ok(bytes) = frame.into_data() {
             mut_bytes.extend_from_slice(&bytes);
         }
     }

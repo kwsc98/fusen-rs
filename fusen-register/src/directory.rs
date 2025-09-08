@@ -35,7 +35,7 @@ impl Default for Directory {
                         let _ = msg.1.send(DirectoryReceiver::GET(cache.clone()));
                     }
                     DirectorySender::CHANGE(resources) => {
-                        cache = Arc::new(resources.into_iter().map(|e| Arc::new(e)).collect());
+                        cache = Arc::new(resources.into_iter().map(Arc::new).collect());
                         let _ = msg.1.send(DirectoryReceiver::CHANGE);
                     }
                 }

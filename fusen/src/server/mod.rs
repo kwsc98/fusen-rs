@@ -50,12 +50,17 @@ impl FusenServerContext {
         self
     }
 
-    pub fn service(mut self, (rpc_service, handlers): (Box<dyn RpcService>, Vec<String>)) -> Self {
+    pub fn service(
+        mut self,
+        (rpc_service, handlers): (Box<dyn RpcService>, Option<Vec<&str>>),
+    ) -> Self {
         let service_info = rpc_service.get_service_info();
-        self.service_handlers.push(HandlerInfo {
-            service_desc: service_info.service_desc.clone(),
-            handlers,
-        });
+        if let Some(handlers) = handlers {
+            self.service_handlers.push(HandlerInfo {
+                service_desc: service_info.service_desc.clone(),
+                handlers: handlers.iter().map(|e| e.to_string()).collect(),
+            });
+        }
         self.services
             .insert(service_info.service_desc.get_tag().to_owned(), rpc_service);
         self
@@ -86,12 +91,7 @@ impl FusenServerContext {
                 weight: None,
                 metadata: Default::default(),
             }));
-            method_infos.append(
-                &mut temp_method_infos
-                    .into_iter()
-                    .map(|method_info| Arc::new(method_info))
-                    .collect(),
-            );
+            method_infos.append(&mut temp_method_infos.into_iter().map(Arc::new).collect());
         }
 
         for register in &self.registers {

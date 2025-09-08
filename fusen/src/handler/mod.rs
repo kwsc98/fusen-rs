@@ -49,7 +49,7 @@ impl Default for HandlerContext {
             "DefaultAspect".to_string(),
             Arc::new(HandlerInvoker::Aspect(Box::leak(Box::new(DefaultAspect)))),
         );
-        let _ = context.load_controller(HandlerInfo {
+        context.load_controller(HandlerInfo {
             service_desc: ServiceDesc::new("DefaultHandlerController", None, None),
             handlers: vec![],
         });

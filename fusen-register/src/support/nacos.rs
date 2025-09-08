@@ -47,7 +47,7 @@ impl NacosRegister {
             .auth_username(config.username.clone().unwrap_or_default())
             .auth_password(config.password.clone().unwrap_or_default());
         let builder = NamingServiceBuilder::new(client_props);
-        let builder = if !config.username.is_none() {
+        let builder = if config.username.is_some() {
             builder.enable_auth_plugin_http()
         } else {
             builder
@@ -145,8 +145,8 @@ impl ServiceChangeListener {
 
 impl NamingEventListener for ServiceChangeListener {
     fn event(&self, event: Arc<NamingChangeEvent>) {
-        info!("service change: {}", event.service_name.clone());
-        info!("nacos event: {:?}", event);
+        info!("service change: {}", event.service_name);
+        info!("nacos event: {event:?}");
         let directory = self.directory.clone();
         let instances = event.instances.to_owned();
         tokio::spawn(async move {

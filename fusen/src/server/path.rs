@@ -17,10 +17,8 @@ impl PathCache {
                 method_info: method_info.clone(),
                 rest_fields: None,
             })
-        } else if let Some(rest_data) = self.rest_trie.search(key.as_str()).await {
-            Some(rest_data)
         } else {
-            None
+            self.rest_trie.search(key.as_str()).await
         }
     }
     pub async fn build(method_infos: Vec<Arc<MethodInfo>>) -> Self {
@@ -86,7 +84,7 @@ impl Trie {
     }
 
     pub async fn search(&self, path: &str) -> Option<QueryResult> {
-        Self::search_by_nodes(&path, self.root.clone()).await
+        Self::search_by_nodes(path, self.root.clone()).await
     }
 
     #[async_recursion]

@@ -12,7 +12,7 @@ pub struct ServiceDesc {
 
 impl ServiceDesc {
     pub fn new(service_id: &str, version: Option<&str>, group: Option<&str>) -> Self {
-        let tag = format!("{}:{:?}:{:?}", service_id, version, group);
+        let tag = format!("{service_id}:{version:?}:{group:?}");
         Self {
             service_id: service_id.to_owned(),
             version: version.map(|e| e.to_owned()),

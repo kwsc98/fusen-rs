@@ -1,9 +1,9 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use examples::{DemoServiceClient, ReqDto};
+use examples::{DemoServiceClient, LogAspect, LogAspectV2, ReqDto};
 use fusen_register::support::nacos::{NacosConfig, NacosRegister};
+use fusen_rs::handler::HandlerLoad;
 use fusen_rs::{client::FusenClientContextBuilder, protocol::Protocol};
-use tokio::sync::mpsc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::{sync::mpsc, time};
 
 #[tokio::main]
 async fn main() {
@@ -17,30 +17,38 @@ async fn main() {
         None,
     )
     .unwrap();
-    let fusen_contet = FusenClientContextBuilder::new()
+    let mut fusen_contet = FusenClientContextBuilder::new()
+        .handler(LogAspect.load())
+        .handler(LogAspectV2.load())
         .register(Box::new(nacos))
         .builder();
-    let client = DemoServiceClient::init(&fusen_contet, Protocol::Fusen)
-        .await
-        .unwrap();
+    let client = DemoServiceClient::init(
+        &mut fusen_contet,
+        Protocol::Fusen,
+        Some(vec!["LogAspectV2", "LogAspect"]),
+    )
+    .await
+    .unwrap();
     let (s, mut r) = mpsc::channel::<()>(1);
     let start_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    for _ in 0..1000 {
+    for _ in 0..1 {
         let client = client.clone();
         let temps = s.clone();
         tokio::spawn(async move {
             for _ in 0..10000 {
-                if let Err(error) = client
+                match client
                     .sayHelloV2(ReqDto {
                         str: "world".to_string(),
                     })
                     .await
                 {
-                    println!("{error:?}");
+                    Ok(result) => println!("{result:?}"),
+                    Err(error) => println!("{error:?}"),
                 }
+                time::sleep(Duration::from_secs(1)).await;
             }
             drop(temps);
         });

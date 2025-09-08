@@ -131,6 +131,7 @@ fn get_service_item(item: ItemImpl) -> proc_macro2::TokenStream {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn get_resource_by_service(
     item: ItemImpl,
 ) -> Result<Vec<(String, String, String, Vec<(String, String)>)>, syn::Error> {

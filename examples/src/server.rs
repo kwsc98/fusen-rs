@@ -1,8 +1,9 @@
-use examples::{DemoService, ReqDto, ResDto};
+use examples::{DemoService, LogAspect, LogAspectV2, ReqDto, ResDto};
 use fusen_register::support::nacos::{NacosConfig, NacosRegister};
 use fusen_rs::{
     error::FusenError,
     fusen_procedural_macro::{asset, fusen_service},
+    handler::HandlerLoad,
     server::FusenServerContext,
 };
 
@@ -47,6 +48,8 @@ async fn main() {
     .unwrap();
     let fusen_server = FusenServerContext::new(8081)
         .register(Box::new(nacos))
-        .service((Box::new(DemoServiceImpl::default()), vec![]));
+        .handler(LogAspect.load())
+        .handler(LogAspectV2.load())
+        .service((Box::new(DemoServiceImpl::default()), None));
     let _result = fusen_server.run().await;
 }

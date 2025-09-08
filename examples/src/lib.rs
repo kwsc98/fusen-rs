@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use fusen_rs::{
     error::FusenError,
     filter::ProceedingJoinPoint,
@@ -42,10 +44,38 @@ pub trait DemoService {
 
 pub struct LogAspect;
 
-#[handler(id = "LogAspect1")]
+#[handler(id = "LogAspect")]
 impl Aspect for LogAspect {
     async fn aroud(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError> {
+        println!("开始处理 : {:?}", join_point.context.request.bodys);
         let context = join_point.proceed().await;
+        println!(
+            "结束处理 : {:?}",
+            context.as_ref().unwrap().response.as_ref().unwrap().body
+        );
+        context
+    }
+}
+
+pub struct LogAspectV2;
+
+#[handler(id = "LogAspectV2")]
+impl Aspect for LogAspectV2 {
+    async fn aroud(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError> {
+        let start_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        println!("开始处理时间 : {start_time:?}");
+        let context = join_point.proceed().await;
+        println!(
+            "结束处理时间 : {:?}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                - start_time
+        );
         context
     }
 }

@@ -89,7 +89,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             }
         );
     }
-    let rpc_client = syn::Ident::new(&format!("{}Client", trait_ident), trait_ident.span());
+    let rpc_client = syn::Ident::new(&format!("{trait_ident}Client"), trait_ident.span());
 
     let expanded = quote! {
         #item_trait
@@ -105,9 +105,9 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             #fn_quote
         )*
 
-        pub async fn init(fusen_client_context : &fusen_rs::client::FusenClientContext,protocol : fusen_rs::protocol::Protocol) -> Result<#rpc_client,fusen_rs::error::FusenError> {
+        pub async fn init(fusen_client_context : &mut fusen_rs::client::FusenClientContext,protocol : fusen_rs::protocol::Protocol,handlers: Option<Vec<&str>>,) -> Result<#rpc_client,fusen_rs::error::FusenError> {
             let service_info = Self::get_service_info();
-            let client = std::sync::Arc::new(fusen_client_context.init_client(service_info.clone(),protocol).await?);
+            let client = std::sync::Arc::new(fusen_client_context.init_client(service_info.clone(),protocol,handlers).await?);
             Ok(#rpc_client {
                 service_info : std::sync::Arc::new(service_info),
                 client
@@ -161,6 +161,8 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
     }
 }
 
+
+#[allow(clippy::type_complexity)]
 fn get_resource_by_trait(
     item: ItemTrait,
 ) -> Result<Vec<(String, String, String, Vec<(String, String)>)>, syn::Error> {

@@ -8,6 +8,7 @@ use crate::{
         fusen::{
             context::FusenContext,
             request::FusenRequest,
+            response::HttpStatus,
             service::{MethodInfo, ServiceInfo},
         },
     },
@@ -31,7 +32,12 @@ use std::{
 pub struct FusenClientContextBuilder {
     register: Option<Box<dyn Register>>,
     handler_context: HandlerContext,
-    service_handlers: Vec<HandlerInfo>,
+}
+
+impl Default for FusenClientContextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FusenClientContextBuilder {
@@ -39,18 +45,13 @@ impl FusenClientContextBuilder {
         Self {
             register: Default::default(),
             handler_context: HandlerContext::default(),
-            service_handlers: Default::default(),
         }
     }
 
     pub fn builder(self) -> FusenClientContext {
-        let mut handler_context = self.handler_context;
-        for handler_info in self.service_handlers {
-            handler_context.load_controller(handler_info)
-        }
         FusenClientContext {
-            register: self.register.map(|e| Arc::new(e)),
-            handler_context: Arc::new(handler_context),
+            register: self.register.map(Arc::new),
+            handler_context: self.handler_context,
             http_client: Box::leak(Box::new(HttpClient::default())),
         }
     }
@@ -68,19 +69,26 @@ impl FusenClientContextBuilder {
 
 pub struct FusenClientContext {
     register: Option<Arc<Box<dyn Register>>>,
-    handler_context: Arc<HandlerContext>,
+    handler_context: HandlerContext,
     http_client: &'static dyn FusenFilter,
 }
 
 impl FusenClientContext {
     pub async fn init_client(
-        &self,
+        &mut self,
         service_info: ServiceInfo,
         protocol: Protocol,
+        handlers: Option<Vec<&str>>,
     ) -> Result<FusenClient, FusenError> {
         let mut methods = HashMap::new();
         for method_info in service_info.method_infos {
             methods.insert(method_info.method_name.to_string(), Arc::new(method_info));
+        }
+        if let Some(handlers) = handlers {
+            self.handler_context.load_controller(HandlerInfo {
+                service_desc: service_info.service_desc.clone(),
+                handlers: handlers.iter().map(|e| e.to_string()).collect(),
+            });
         }
         let handler_controller = self
             .handler_context
@@ -158,11 +166,17 @@ impl FusenClient {
             .get()
             .await
             .map_err(|error| FusenError::Error(Box::new(error)))?;
-        let resource = self
+        let Some(resource) = self
             .handler_controller
             .load_balance
             .select_(resources)
-            .await?;
+            .await?
+        else {
+            return Err(FusenError::HttpError(HttpStatus {
+                status: 503,
+                message: Some("Service Unavailable".to_string()),
+            }));
+        };
         fusen_request.addr = Some(resource.addr.to_owned());
         let method_info = self.methods.get(method_name).unwrap();
         let fusen_context = FusenContext {
