@@ -1,4 +1,5 @@
-use crate::{error::FusenError, protocol::Protocol};
+use crate::error::FusenError;
+use fusen_internal_common::protocol::Protocol;
 use http::Method;
 use serde_json::Value;
 use std::{

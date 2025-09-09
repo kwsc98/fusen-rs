@@ -1,5 +1,5 @@
 use crate::{Register, directory::Directory, error::RegisterError};
-use fusen_internal_common::{BoxFuture, resource::service::ServiceResource};
+use fusen_internal_common::{BoxFuture, protocol::Protocol, resource::service::ServiceResource};
 use nacos_sdk::api::{
     naming::{
         NamingChangeEvent, NamingEventListener, NamingService, NamingServiceBuilder,
@@ -14,14 +14,7 @@ use tracing::{error, info};
 pub struct NacosRegister {
     naming_service: Arc<NamingService>,
     _config: Arc<NacosConfig>,
-    protocol: Arc<Protocol>,
     group: Option<String>,
-}
-
-pub enum Protocol {
-    SpringCloud(String),
-    Dubbo,
-    Fusen,
 }
 
 #[derive(Default)]
@@ -34,11 +27,7 @@ pub struct NacosConfig {
 }
 
 impl NacosRegister {
-    pub fn init(
-        config: NacosConfig,
-        protocol: Protocol,
-        group: Option<String>,
-    ) -> Result<Self, RegisterError> {
+    pub fn init(config: NacosConfig, group: Option<String>) -> Result<Self, RegisterError> {
         let mut client_props = ClientProps::new();
         client_props = client_props
             .server_addr(config.server_addr.clone())
@@ -60,7 +49,6 @@ impl NacosRegister {
         let nacos = Self {
             naming_service: naming_service.clone(),
             _config: Arc::new(config),
-            protocol: Arc::new(protocol),
             group,
         };
         Ok(nacos)
@@ -68,11 +56,15 @@ impl NacosRegister {
 }
 
 impl Register for NacosRegister {
-    fn register(&self, resource: Arc<ServiceResource>) -> BoxFuture<Result<(), RegisterError>> {
+    fn register(
+        &self,
+        resource: Arc<ServiceResource>,
+        protocol: Protocol,
+    ) -> BoxFuture<Result<(), RegisterError>> {
         let nacos = self.clone();
         Box::pin(async move {
             let group = nacos.group.clone();
-            let service_name = get_service_name(&nacos, resource.as_ref());
+            let service_name = get_service_name(resource.as_ref(), &protocol);
             let instance = build_instance(resource.as_ref());
             info!("nacos register service: {service_name} - group: {group:?}");
             let ret = nacos
@@ -87,11 +79,15 @@ impl Register for NacosRegister {
         })
     }
 
-    fn deregister(&self, resource: Arc<ServiceResource>) -> BoxFuture<Result<(), RegisterError>> {
+    fn deregister(
+        &self,
+        resource: Arc<ServiceResource>,
+        protocol: Protocol,
+    ) -> BoxFuture<Result<(), RegisterError>> {
         let nacos = self.clone();
         Box::pin(async move {
             let group = nacos.group.clone();
-            let service_name = get_service_name(&nacos, resource.as_ref());
+            let service_name = get_service_name(&resource.as_ref(), &protocol);
             let instance = build_instance(resource.as_ref());
             info!("nacos deregister service: {service_name} - group: {group:?}");
             let ret = nacos
@@ -106,11 +102,15 @@ impl Register for NacosRegister {
         })
     }
 
-    fn subscribe(&self, resource: ServiceResource) -> BoxFuture<Result<Directory, RegisterError>> {
+    fn subscribe(
+        &self,
+        resource: ServiceResource,
+        protocol: Protocol,
+    ) -> BoxFuture<Result<Directory, RegisterError>> {
         let nacos = self.clone();
         Box::pin(async move {
             let group = nacos.group.clone();
-            let service_name = get_service_name(&nacos, &resource);
+            let service_name = get_service_name(&resource, &protocol);
             info!("subscribe service: {service_name} - grep: {group:?}");
             let directory = Directory::default();
             let directory_clone = directory.clone();
@@ -177,8 +177,8 @@ fn to_service_resources(service_instances: Vec<ServiceInstance>) -> Vec<ServiceR
     })
 }
 
-pub fn get_service_name(nacos_register: &NacosRegister, resource: &ServiceResource) -> String {
-    match &nacos_register.protocol.as_ref() {
+pub fn get_service_name(resource: &ServiceResource, protocol: &Protocol) -> String {
+    match &protocol {
         &Protocol::SpringCloud(app_name) => app_name.clone(),
         &Protocol::Dubbo | Protocol::Fusen => format!(
             "providers:{}:{}:{}",
@@ -186,6 +186,7 @@ pub fn get_service_name(nacos_register: &NacosRegister, resource: &ServiceResour
             resource.version.as_ref().map_or("", |e| e),
             resource.group.as_ref().map_or("", |e| e),
         ),
+        _ => unimplemented!(),
     }
 }
 

@@ -52,7 +52,6 @@ async fn main() {
             server_addr: "127.0.0.1:8848".to_string(),
             ..Default::default()
         },
-        fusen_register::support::nacos::Protocol::Fusen,
         None,
     )
     .unwrap();

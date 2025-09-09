@@ -3,7 +3,6 @@ use crate::{
     filter::{FusenFilter, ProceedingJoinPoint},
     handler::{Handler, HandlerContext, HandlerController, HandlerInfo},
     protocol::{
-        Protocol,
         codec::{FusenHttpCodec, RequestCodec, ResponseCodec},
         fusen::{
             context::FusenContext,
@@ -15,6 +14,7 @@ use crate::{
 };
 use bytes::Bytes;
 use fusen_internal_common::{
+    protocol::Protocol,
     resource::service::{MethodResource, ServiceResource},
     utils::uuid::uuid,
 };
@@ -122,7 +122,7 @@ impl FusenClientContext {
                 return Err(FusenError::ErrorMessage("not find register"));
             };
             register
-                .subscribe(service_resource)
+                .subscribe(service_resource, protocol.clone())
                 .await
                 .map_err(|error| FusenError::Error(Box::new(error)))?
         };

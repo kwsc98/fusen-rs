@@ -1,7 +1,7 @@
 use examples::{DemoServiceClient, LogAspect, LogAspectV2, ReqDto};
 use fusen_register::support::nacos::{NacosConfig, NacosRegister};
 use fusen_rs::handler::HandlerLoad;
-use fusen_rs::{client::FusenClientContextBuilder, protocol::Protocol};
+use fusen_rs::{client::FusenClientContextBuilder, fusen_internal_common::protocol::Protocol};
 use jemallocator::Jemalloc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -17,7 +17,6 @@ async fn main() {
             server_addr: "127.0.0.1:8848".to_string(),
             ..Default::default()
         },
-        fusen_register::support::nacos::Protocol::Fusen,
         None,
     )
     .unwrap();

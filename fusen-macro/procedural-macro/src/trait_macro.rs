@@ -105,7 +105,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             #fn_quote
         )*
 
-        pub async fn init(fusen_client_context : &mut fusen_rs::client::FusenClientContext,protocol : fusen_rs::protocol::Protocol,handlers: Option<Vec<&str>>,) -> Result<#rpc_client,fusen_rs::error::FusenError> {
+        pub async fn init(fusen_client_context : &mut fusen_rs::client::FusenClientContext,protocol : fusen_rs::fusen_internal_common::protocol::Protocol,handlers: Option<Vec<&str>>,) -> Result<#rpc_client,fusen_rs::error::FusenError> {
             let service_info = Self::get_service_info();
             let client = std::sync::Arc::new(fusen_client_context.init_client(service_info.clone(),protocol,handlers).await?);
             Ok(#rpc_client {

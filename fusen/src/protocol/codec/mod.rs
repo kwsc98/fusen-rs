@@ -1,7 +1,6 @@
 use crate::{
     error::FusenError,
     protocol::{
-        Protocol,
         codec::body::{RequestBodyCodec, ResponseBodyCodec, json::JsonCodec, triple::TripleCodec},
         fusen::{
             request::{FusenRequest, Path},
@@ -10,6 +9,7 @@ use crate::{
     },
 };
 use bytes::{Bytes, BytesMut};
+use fusen_internal_common::protocol::Protocol;
 use http::{
     Request, Response,
     header::{CONNECTION, CONTENT_TYPE},
@@ -59,7 +59,7 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
         let mut body = Bytes::new();
         if let Some(bodys) = fusen_request.bodys.take() {
             match &fusen_request.protocol {
-                super::Protocol::Dubbo => {
+                Protocol::Dubbo => {
                     builder = builder.header(CONTENT_TYPE, "application/grpc");
                     body = RequestBodyCodec::encode(&self.triple_codec, bodys)?;
                 }
@@ -145,7 +145,7 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
         let mut body = Bytes::new();
         if let Some(bodys) = fusen_response.body.take() {
             match &fusen_response.protocol {
-                super::Protocol::Dubbo => {
+                Protocol::Dubbo => {
                     builder = builder.header(CONTENT_TYPE, "application/grpc");
                     body = ResponseBodyCodec::encode(&self.triple_codec, bodys)?;
                 }

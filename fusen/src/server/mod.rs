@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use fusen_internal_common::{
+    protocol::Protocol,
     resource::service::{MethodResource, ServiceResource},
     utils::net::get_network_ip,
 };
@@ -23,6 +24,7 @@ pub mod rpc;
 
 pub struct FusenServerContext {
     port: u16,
+    protocol: Protocol,
     registers: Vec<Box<dyn Register>>,
     handler_context: HandlerContext,
     service_handlers: Vec<HandlerInfo>,
@@ -33,6 +35,7 @@ impl FusenServerContext {
     pub fn new(port: u16) -> Self {
         Self {
             port,
+            protocol: Default::default(),
             registers: Default::default(),
             handler_context: HandlerContext::default(),
             service_handlers: Default::default(),
@@ -97,7 +100,7 @@ impl FusenServerContext {
         for register in &self.registers {
             for service_resource in &service_resources {
                 register
-                    .register(service_resource.clone())
+                    .register(service_resource.clone(), self.protocol.clone())
                     .await
                     .map_err(|error| FusenError::Error(Box::new(error)))?;
             }
@@ -117,7 +120,9 @@ impl FusenServerContext {
             let _ = signal::ctrl_c().await;
             for register in self.registers {
                 for service_resource in &service_resources {
-                    let _ = register.deregister(service_resource.clone()).await;
+                    let _ = register
+                        .deregister(service_resource.clone(), self.protocol.clone())
+                        .await;
                 }
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
