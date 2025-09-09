@@ -38,6 +38,9 @@ pub trait DemoService {
 
     async fn say_hellov3(&self, name: Option<String>, name22: i64) -> String;
 
+    #[asset(path = "/name/{name}/age/{age}",method = GET)]
+    async fn say_hellov4(&self, name: String, age: String) -> String;
+
     #[asset(path = "/sayHelloV2-http")]
     async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
 }
@@ -47,7 +50,7 @@ pub struct LogAspect;
 #[handler(id = "LogAspect")]
 impl Aspect for LogAspect {
     async fn aroud(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError> {
-        println!("开始处理 : {:?}", join_point.context.request.bodys);
+        println!("开始处理 : {:?}", join_point.context.request);
         let context = join_point.proceed().await;
         println!(
             "结束处理 : {:?}",

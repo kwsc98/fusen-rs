@@ -26,6 +26,11 @@ impl DemoService for DemoServiceImpl {
         Ok(format!("Hello {req:?}  {ew:?}"))
     }
 
+    #[asset(path = "/name/{name}/age/{age}",method = GET)]
+    async fn say_hellov4(&self, name: String, age: String) -> Result<String, FusenError> {
+        Ok(format!("Hello {name:?} age {age:?}"))
+    }
+
     #[asset(path = "/sayHelloV2-http")]
     async fn sayHelloV2(&self, name: ReqDto) -> Result<ResDto, FusenError> {
         Ok(ResDto {
@@ -33,6 +38,11 @@ impl DemoService for DemoServiceImpl {
         })
     }
 }
+
+use jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() {
@@ -50,6 +60,9 @@ async fn main() {
         .register(Box::new(nacos))
         .handler(LogAspect.load())
         .handler(LogAspectV2.load())
-        .service((Box::new(DemoServiceImpl::default()), None));
+        .service((
+            Box::new(DemoServiceImpl::default()),
+            Some(vec!["LogAspectV2", "LogAspect"]),
+        ));
     let _result = fusen_server.run().await;
 }

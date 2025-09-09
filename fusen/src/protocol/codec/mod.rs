@@ -42,11 +42,19 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
         };
         let mut uri = format!("{}{}", addr, fusen_request.path.path);
         if !fusen_request.querys.is_empty() {
-            uri.push('?');
-            for (key, value) in &fusen_request.querys {
-                uri.push_str(&format!("{}={}&", key, urlencoding::encode(value.as_str())));
+            if fusen_request.path.path.contains('{') {
+                let mut path = fusen_request.path.path.to_string();
+                for (key, value) in &fusen_request.querys {
+                    path = path.replace(&format!("{{{key}}}"), &value);
+                }
+                uri = format!("{addr}{path}");
+            } else {
+                uri.push('?');
+                for (key, value) in &fusen_request.querys {
+                    uri.push_str(&format!("{}={}&", key, urlencoding::encode(value.as_str())));
+                }
+                uri.pop();
             }
-            uri.pop();
         }
         let mut body = Bytes::new();
         if let Some(bodys) = fusen_request.bodys.take() {

@@ -2,8 +2,12 @@ use examples::{DemoServiceClient, LogAspect, LogAspectV2, ReqDto};
 use fusen_register::support::nacos::{NacosConfig, NacosRegister};
 use fusen_rs::handler::HandlerLoad;
 use fusen_rs::{client::FusenClientContextBuilder, protocol::Protocol};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::{sync::mpsc, time};
+use jemallocator::Jemalloc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() {
@@ -34,7 +38,7 @@ async fn main() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    for _ in 0..1 {
+    for _ in 0..1000 {
         let client = client.clone();
         let temps = s.clone();
         tokio::spawn(async move {
@@ -45,10 +49,9 @@ async fn main() {
                     })
                     .await
                 {
-                    Ok(result) => println!("{result:?}"),
+                    Ok(result) => (),
                     Err(error) => println!("{error:?}"),
                 }
-                time::sleep(Duration::from_secs(1)).await;
             }
             drop(temps);
         });
@@ -66,4 +69,11 @@ async fn main() {
     println!("{:?}", client.say_hello(None).await);
     println!("{:?}", client.say_hellov2(Some("dsd".to_string())).await);
     println!("{:?}", client.say_hellov3(Some("dsd".to_string()), 1).await);
+    println!(
+        "{:?}",
+        client
+            .say_hellov4("kwsc98".to_string(), "1".to_string())
+            .await
+    );
+    tokio::signal::ctrl_c().await;
 }
