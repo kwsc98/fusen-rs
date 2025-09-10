@@ -1,7 +1,7 @@
 
-# `fusen-rs` A most like an RPC framework
+# `fusen-rs` High-performance RPC Framework
 
-fusen-rs is a high-performance, lightweight microservice framework that uses Rust macros to solve the current problems of complex use and low performance of mainstream rpc frameworks. It does not need to generate RPC calling code through scripts and scaffolding, and compiles it through macros. It uses "reflection" to achieve high-performance calls and meet the simplicity of RPC calls. It also supports Dubbo3. The SpringCloud microservice ecosystem can perform service registration discovery and mutual calls with Java projects, and supports user-defined components and other functions.
+fusen-rs is a high-performance, lightweight microservice framework that uses Rust macros to solve the current problems of complex use and low performance of mainstream rpc frameworks. It does not need to generate RPC calling code through scripts and scaffolding, and compiles it through macros. It uses "reflection" to achieve high-performance calls and meet the simplicity of RPC calls. It also supports user-defined components and other functions.
 
 [ [中文](./README_CN.md) ]
 
@@ -12,9 +12,7 @@ fusen-rs is a high-performance, lightweight microservice framework that uses Rus
 - :white_check_mark: Service registration and discovery (Nacos)
 - :white_check_mark: Microservice ecological compatibility (Dubbo3, SpringCloud)
 - :white_check_mark: Custom components (custom load balancer, Aspect surround notification component)
-- :white_check_mark: Configuration center (local file configuration, Nacos)
 - :white_check_mark: Graceful shutdown
-- :white_check_mark: Microservice link tracking (opentelemetry)
 - :construction: HTTP3 protocol support
 
 ## Quick Start

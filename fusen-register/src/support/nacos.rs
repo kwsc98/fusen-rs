@@ -87,7 +87,7 @@ impl Register for NacosRegister {
         let nacos = self.clone();
         Box::pin(async move {
             let group = nacos.group.clone();
-            let service_name = get_service_name(&resource.as_ref(), &protocol);
+            let service_name = get_service_name(resource.as_ref(), &protocol);
             let instance = build_instance(resource.as_ref());
             info!("nacos deregister service: {service_name} - group: {group:?}");
             let ret = nacos

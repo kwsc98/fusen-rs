@@ -8,41 +8,33 @@ use fusen_rs::{
     protocol::fusen::context::FusenContext,
 };
 use serde::{Deserialize, Serialize};
-// use serde::{Deserialize, Serialize};
-
-// #[derive(Serialize, Deserialize, Default, Debug)]
-// pub struct ReqDto {
-//     str: String,
-// }
-
-// #[derive(Serialize, Deserialize, Default, Debug)]
-// pub struct ResDto {
-//     str: String,
-// }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
-pub struct ReqDto {
+pub struct RequestDto {
     pub str: String,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
-pub struct ResDto {
+pub struct ResponseDto {
     pub str: String,
 }
 
 #[fusen_trait]
 pub trait DemoService {
-    async fn say_hello(&self, name: Option<i64>) -> ();
-
-    async fn say_hellov2(&self, name: Option<String>) -> String;
-
-    async fn say_hellov3(&self, name: Option<String>, name22: i64) -> String;
-
-    #[asset(path = "/name/{name}/age/{age}",method = GET)]
-    async fn say_hellov4(&self, name: String, age: String) -> String;
+    async fn sayHello(&self, name: String) -> String;
 
     #[asset(path = "/sayHelloV2-http")]
-    async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
+    async fn sayHelloV2(&self, name: RequestDto) -> ResponseDto;
+
+    #[asset(path = "/divide", method = GET)]
+    async fn divideV2(&self, a: i32, b: i32) -> String;
+}
+
+#[fusen_trait]
+#[asset(path = "/dome")]
+pub trait DemoServiceV2 {
+    #[asset(path = "/sayHelloV3-http")]
+    async fn sayHelloV3(&self, name: RequestDto) -> ResponseDto;
 }
 
 pub struct LogAspect;
@@ -60,10 +52,10 @@ impl Aspect for LogAspect {
     }
 }
 
-pub struct LogAspectV2;
+pub struct TimeAspect;
 
-#[handler(id = "LogAspectV2")]
-impl Aspect for LogAspectV2 {
+#[handler(id = "TimeAspect")]
+impl Aspect for TimeAspect {
     async fn aroud(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError> {
         let start_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)

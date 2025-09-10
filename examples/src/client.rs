@@ -1,13 +1,8 @@
-use examples::{DemoServiceClient, LogAspect, LogAspectV2, ReqDto};
+use examples::{DemoServiceClient, DemoServiceV2Client, LogAspect, RequestDto, TimeAspect};
 use fusen_register::support::nacos::{NacosConfig, NacosRegister};
 use fusen_rs::handler::HandlerLoad;
 use fusen_rs::{client::FusenClientContextBuilder, fusen_internal_common::protocol::Protocol};
-use jemallocator::Jemalloc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
 
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
 
 #[tokio::main]
 async fn main() {
@@ -22,57 +17,42 @@ async fn main() {
     .unwrap();
     let mut fusen_contet = FusenClientContextBuilder::new()
         .handler(LogAspect.load())
-        .handler(LogAspectV2.load())
+        .handler(TimeAspect.load())
         .register(Box::new(nacos))
         .builder();
+
+    println!("-------------------------使用 Host 直接调用-------------------------");
     let client = DemoServiceClient::init(
         &mut fusen_contet,
-        Protocol::Fusen,
-        Some(vec!["LogAspectV2", "LogAspect"]),
+        Protocol::Host("http://127.0.0.1:8081".to_string()),
+        Some(vec!["LogAspect", "TimeAspect"]),
     )
     .await
     .unwrap();
-    let (s, mut r) = mpsc::channel::<()>(1);
-    let start_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    for _ in 0..1000 {
-        let client = client.clone();
-        let temps = s.clone();
-        tokio::spawn(async move {
-            for _ in 0..10000 {
-                match client
-                    .sayHelloV2(ReqDto {
-                        str: "world".to_string(),
-                    })
-                    .await
-                {
-                    Ok(result) => (),
-                    Err(error) => println!("{error:?}"),
-                }
-            }
-            drop(temps);
-        });
-    }
-    drop(s);
-    r.recv().await;
-    println!(
-        "{:?}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            - start_time
-    );
-    println!("{:?}", client.say_hello(None).await);
-    println!("{:?}", client.say_hellov2(Some("dsd".to_string())).await);
-    println!("{:?}", client.say_hellov3(Some("dsd".to_string()), 1).await);
-    println!(
-        "{:?}",
-        client
-            .say_hellov4("kwsc98".to_string(), "1".to_string())
+    let client_v2 =
+        DemoServiceV2Client::init(&mut fusen_contet,Protocol::Host("http://127.0.0.1:8081".to_string()),
+        Some(vec!["LogAspect"]))
             .await
-    );
-    tokio::signal::ctrl_c().await;
+            .unwrap();
+    println!("{:?}", client.divideV2(1, 2).await);
+    println!("{:?}", client.sayHello("test1".to_owned()).await);
+    println!("{:?}",client.sayHelloV2(RequestDto {str: "test2".to_string()}).await);
+    println!("{:?}",client_v2.sayHelloV3(RequestDto {str: "test3".to_string()}).await);
+    println!("-------------------------使用 Nacos 作为注册中心-------------------------");
+    //使用 nacos 为注册中心
+    let fusen_client = DemoServiceClient::init(
+        &mut fusen_contet,
+        Protocol::Fusen,
+        Some(vec!["LogAspect", "TimeAspect"]),
+    )
+    .await
+    .unwrap();
+    let fusen_client_v2 =
+        DemoServiceV2Client::init(&mut fusen_contet, Protocol::Fusen, Some(vec!["LogAspect"]))
+            .await
+            .unwrap();
+    println!("{:?}", fusen_client.divideV2(1, 2).await);
+    println!("{:?}", fusen_client.sayHello("test1".to_owned()).await);
+    println!("{:?}",fusen_client.sayHelloV2(RequestDto {str: "test2".to_string()}).await);
+    println!("{:?}",fusen_client_v2.sayHelloV3(RequestDto {str: "test3".to_string()}).await);
 }

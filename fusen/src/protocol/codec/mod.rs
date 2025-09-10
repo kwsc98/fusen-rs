@@ -45,7 +45,7 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
             if fusen_request.path.path.contains('{') {
                 let mut path = fusen_request.path.path.to_string();
                 for (key, value) in &fusen_request.querys {
-                    path = path.replace(&format!("{{{key}}}"), &value);
+                    path = path.replace(&format!("{{{key}}}"), value);
                 }
                 uri = format!("{addr}{path}");
             } else {

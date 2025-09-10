@@ -1,4 +1,4 @@
-use examples::{DemoService, LogAspect, LogAspectV2, ReqDto, ResDto};
+use examples::{DemoService, DemoServiceV2, LogAspect, RequestDto, ResponseDto, TimeAspect};
 use fusen_register::support::nacos::{NacosConfig, NacosRegister};
 use fusen_rs::{
     error::FusenError,
@@ -14,35 +14,38 @@ struct DemoServiceImpl {
 
 #[fusen_service]
 impl DemoService for DemoServiceImpl {
-    async fn say_hello(&self, _req: Option<i64>) -> Result<(), FusenError> {
-        Ok(())
-    }
-
-    async fn say_hellov2(&self, req: Option<String>) -> Result<String, FusenError> {
-        Ok(format!("Hello {req:?}"))
-    }
-
-    async fn say_hellov3(&self, req: Option<String>, ew: i64) -> Result<String, FusenError> {
-        Ok(format!("Hello {req:?}  {ew:?}"))
-    }
-
-    #[asset(path = "/name/{name}/age/{age}",method = GET)]
-    async fn say_hellov4(&self, name: String, age: String) -> Result<String, FusenError> {
-        Ok(format!("Hello {name:?} age {age:?}"))
+    async fn sayHello(&self, name: String) -> Result<String, FusenError> {
+        Ok(format!("Hello {name}"))
     }
 
     #[asset(path = "/sayHelloV2-http")]
-    async fn sayHelloV2(&self, name: ReqDto) -> Result<ResDto, FusenError> {
-        Ok(ResDto {
-            str: format!("Hello {:?}", name.str),
+    async fn sayHelloV2(&self, name: RequestDto) -> Result<ResponseDto, FusenError> {
+        Ok(ResponseDto {
+            str: format!("HelloV2 {}", name.str),
         })
+    }
+
+    #[asset(path = "/divide", method = GET)]
+    async fn divideV2(&self, a: i32, b: i32) -> Result<String, FusenError> {
+        Ok(format!("a + b = {}", a + b))
     }
 }
 
-use jemallocator::Jemalloc;
+#[derive(Debug, Default)]
+struct DemoServiceImplV2 {
+    _db: String,
+}
 
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+#[fusen_service]
+#[asset(path = "/dome")]
+impl DemoServiceV2 for DemoServiceImplV2 {
+    #[asset(path = "/sayHelloV3-http")]
+    async fn sayHelloV3(&self, name: RequestDto) -> Result<ResponseDto, FusenError> {
+        Ok(ResponseDto {
+            str: format!("HelloV3 {}", name.str),
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -58,10 +61,14 @@ async fn main() {
     let fusen_server = FusenServerContext::new(8081)
         .register(Box::new(nacos))
         .handler(LogAspect.load())
-        .handler(LogAspectV2.load())
+        .handler(TimeAspect.load())
         .service((
             Box::new(DemoServiceImpl::default()),
-            Some(vec!["LogAspectV2", "LogAspect"]),
+            Some(vec!["LogAspect", "TimeAspect"]),
+        ))
+        .service((
+            Box::new(DemoServiceImplV2::default()),
+            Some(vec!["LogAspect"]),
         ));
     let _result = fusen_server.run().await;
 }
