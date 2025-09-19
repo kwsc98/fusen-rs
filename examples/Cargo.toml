@@ -20,3 +20,15 @@ fusen-register.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+
+fusen-common = "0.8.2"
+tracing = "0.1.41"
+tracing-opentelemetry = "0.31.0"
+opentelemetry = "0.30.0"
+opentelemetry_sdk = { version = "0.30.0", features = [
+    "rt-tokio",
+    "rt-tokio-current-thread",
+    "experimental_trace_batch_span_processor_with_async_runtime",
+] }
+opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic"] }

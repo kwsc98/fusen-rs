@@ -1,4 +1,7 @@
-use examples::{DemoService, DemoServiceV2, LogAspect, RequestDto, ResponseDto, TimeAspect};
+use examples::{
+    DemoService, DemoServiceV2, RequestDto, ResponseDto,
+    handler::{time::TimeAspect, log::LogAspect},
+};
 use fusen_register::support::nacos::{NacosConfig, NacosRegister};
 use fusen_rs::{
     error::FusenError,
@@ -49,7 +52,7 @@ impl DemoServiceV2 for DemoServiceImplV2 {
 
 #[tokio::main]
 async fn main() {
-    let nacos = NacosRegister::init(
+    let _nacos = NacosRegister::init(
         NacosConfig {
             application_name: "fusen_service".to_string(),
             server_addr: "127.0.0.1:8848".to_string(),
@@ -59,7 +62,8 @@ async fn main() {
     )
     .unwrap();
     let fusen_server = FusenServerContext::new(8081)
-        .register(Box::new(nacos))
+        //开启注册中心
+        // .register(Box::new(_nacos))
         .handler(LogAspect.load())
         .handler(TimeAspect.load())
         .service((
