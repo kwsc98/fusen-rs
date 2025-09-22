@@ -5,6 +5,7 @@ use crate::{directory::Directory, error::RegisterError};
 
 pub mod directory;
 pub mod error;
+pub use fusen_internal_common;
 
 pub trait Register: Send + Sync {
     fn register(
