@@ -39,10 +39,7 @@ impl Aspect for LogAspect {
             self.trace_context_propagator
                 .inject_context(&span.context(), &mut context.request.headers);
         };
-        let future = async move {
-            let context = join_point.proceed().await;
-            context
-        };
+        let future = async move { join_point.proceed().await };
         let result = tokio::spawn(future.instrument(span)).await;
         match result {
             Ok(context) => context,

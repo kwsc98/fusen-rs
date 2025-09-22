@@ -86,14 +86,15 @@ impl HandlerContext {
                 };
             }
         }
-        if load_balance.is_none() {
-            if let Some(handler_invoker) = self.get_handler("DefaultLoadBalance") {
-                match handler_invoker.as_ref() {
-                    HandlerInvoker::LoadBalance(handler) => load_balance.insert(*handler),
-                    _ => panic!("{}", FusenError::Impossible),
-                };
-            }
+        if load_balance.is_none()
+            && let Some(handler_invoker) = self.get_handler("DefaultLoadBalance")
+        {
+            match handler_invoker.as_ref() {
+                HandlerInvoker::LoadBalance(handler) => load_balance.insert(*handler),
+                _ => panic!("{}", FusenError::Impossible),
+            };
         }
+
         let handler_controller = HandlerController {
             load_balance: load_balance.unwrap(),
             aspect: Arc::new(aspect),

@@ -40,12 +40,11 @@ pub fn asset(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn get_asset_by_attrs(attrs: &Vec<Attribute>) -> Result<ResourceAttr, syn::Error> {
     for attr in attrs {
-        if let Meta::List(list) = &attr.meta {
-            if let Some(segment) = list.path.segments.first() {
-                if segment.ident == "asset" {
-                    return ResourceAttr::from_attr(list.tokens.clone().into());
-                }
-            }
+        if let Meta::List(list) = &attr.meta
+            && let Some(segment) = list.path.segments.first()
+            && segment.ident == "asset"
+        {
+            return ResourceAttr::from_attr(list.tokens.clone().into());
         }
     }
     Ok(ResourceAttr::default())

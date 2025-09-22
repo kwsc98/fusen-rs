@@ -5,7 +5,6 @@ use crate::{directory::Directory, error::RegisterError};
 
 pub mod directory;
 pub mod error;
-pub mod support;
 
 pub trait Register: Send + Sync {
     fn register(
