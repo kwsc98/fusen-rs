@@ -1,6 +1,6 @@
 [package]
 name = "fusen-internal-common"
-version = "0.8.2"
+version = "0.8.5"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true

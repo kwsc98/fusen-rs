@@ -41,7 +41,7 @@ struct DemoServiceImplV2 {
     _db: String,
 }
 
-#[fusen_service]
+#[fusen_service(group = "v1")]
 #[asset(path = "/dome")]
 impl DemoServiceV2 for DemoServiceImplV2 {
     #[asset(path = "/sayHelloV3-http")]
@@ -55,12 +55,13 @@ impl DemoServiceV2 for DemoServiceImplV2 {
 #[tokio::main]
 async fn main() {
     let nacos_register = NacosRegister::init_nacos_register(
-        "fusen_service",
+        "fusen_server",
         Arc::new(NacosConfig {
             server_addr: "127.0.0.1:8848".to_string(),
             ..Default::default()
         }),
-    ).unwrap();
+    )
+    .unwrap();
     let fusen_server = FusenServerContext::new(8081)
         //开启注册中心
         .register(Box::new(nacos_register))

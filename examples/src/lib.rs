@@ -23,7 +23,7 @@ pub trait DemoService {
     async fn divideV2(&self, a: i32, b: i32) -> String;
 }
 
-#[fusen_trait]
+#[fusen_trait(group = "v1")]
 #[asset(path = "/dome")]
 pub trait DemoServiceV2 {
     #[asset(path = "/sayHelloV3-http")]

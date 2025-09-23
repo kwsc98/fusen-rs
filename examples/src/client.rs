@@ -1,27 +1,27 @@
 use examples::handler::log::LogAspect;
 use examples::handler::time::TimeAspect;
 use examples::{DemoServiceClient, DemoServiceV2Client, RequestDto};
-use fusen_register::support::nacos::{NacosConfig, NacosRegister};
+use fusen_common::nacos::NacosConfig;
+use fusen_common::nacos::register::NacosRegister;
 use fusen_rs::handler::HandlerLoad;
 use fusen_rs::{client::FusenClientContextBuilder, fusen_internal_common::protocol::Protocol};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
-    let nacos = NacosRegister::init(
-        NacosConfig {
-            application_name: "fusen_client".to_string(),
+    let nacos_register = NacosRegister::init_nacos_register(
+        "fusen_client",
+        Arc::new(NacosConfig {
             server_addr: "127.0.0.1:8848".to_string(),
             ..Default::default()
-        },
-        None,
+        }),
     )
     .unwrap();
     let mut fusen_contet = FusenClientContextBuilder::new()
         .handler(LogAspect.load())
         .handler(TimeAspect.load())
-        .register(Box::new(nacos))
+        .register(Box::new(nacos_register))
         .builder();
-
     println!("-------------------------使用 Host 直接调用-------------------------");
     let client = DemoServiceClient::init(
         &mut fusen_contet,
