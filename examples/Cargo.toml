@@ -15,14 +15,12 @@ description.workspace = true
 
 
 [dependencies]
-fusen-rs.workspace = true
-fusen-register.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-
-fusen-common = "0.8.2"
+fusen-rs.workspace = true
+fusen-common = "0.8.4"
 tracing = "0.1.41"
 tracing-opentelemetry = "0.31.0"
 opentelemetry = "0.30.0"

@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use examples::{
     DemoService, DemoServiceV2, RequestDto, ResponseDto,
-    handler::{time::TimeAspect, log::LogAspect},
+    handler::{log::LogAspect, time::TimeAspect},
 };
-use fusen_register::support::nacos::{NacosConfig, NacosRegister};
+use fusen_common::nacos::{NacosConfig, register::NacosRegister};
 use fusen_rs::{
     error::FusenError,
     fusen_procedural_macro::{asset, fusen_service},
@@ -52,18 +54,16 @@ impl DemoServiceV2 for DemoServiceImplV2 {
 
 #[tokio::main]
 async fn main() {
-    let _nacos = NacosRegister::init(
-        NacosConfig {
-            application_name: "fusen_service".to_string(),
+    let nacos_register = NacosRegister::init_nacos_register(
+        "fusen_service",
+        Arc::new(NacosConfig {
             server_addr: "127.0.0.1:8848".to_string(),
             ..Default::default()
-        },
-        None,
-    )
-    .unwrap();
+        }),
+    ).unwrap();
     let fusen_server = FusenServerContext::new(8081)
         //开启注册中心
-        // .register(Box::new(_nacos))
+        .register(Box::new(nacos_register))
         .handler(LogAspect.load())
         .handler(TimeAspect.load())
         .service((
