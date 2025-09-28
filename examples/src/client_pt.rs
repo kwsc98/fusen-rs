@@ -24,9 +24,13 @@ async fn main() {
         .handler(TimeAspect.load())
         .register(Box::new(nacos_register))
         .builder();
-    let fusen_client = DemoServiceClient::init(&mut fusen_contet, Protocol::Fusen, None)
-        .await
-        .unwrap();
+    let fusen_client = DemoServiceClient::init(
+        &mut fusen_contet,
+        Protocol::Host("http://127.0.0.1:8081".to_string()),
+        None,
+    )
+    .await
+    .unwrap();
     let (s, mut r) = mpsc::channel::<i32>(1);
     let start_time = get_now_date_time_as_millis();
     for _ in 0..100 {
