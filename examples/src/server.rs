@@ -70,7 +70,7 @@ async fn main() {
             ),
         },
     );
-    let nacos_register = NacosRegister::init_nacos_register(
+    let _nacos_register = NacosRegister::init_nacos_register(
         "fusen_server",
         Arc::new(NacosConfig {
             server_addr: "127.0.0.1:8848".to_string(),

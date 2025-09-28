@@ -49,9 +49,5 @@ async fn main() {
     drop(s);
     let _result = r.recv().await;
     let time = get_now_date_time_as_millis() - start_time;
-    println!(
-        "1000000 次请求 耗时 {} 秒 -- {} 毫秒",
-        time / 1000,
-        time
-    );
+    println!("1000000 次请求 耗时 {} 秒 -- {} 毫秒", time / 1000, time);
 }

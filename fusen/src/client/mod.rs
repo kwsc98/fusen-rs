@@ -3,6 +3,7 @@ use crate::{
     filter::{FusenFilter, ProceedingJoinPoint},
     handler::{Handler, HandlerContext, HandlerController, HandlerInfo},
     protocol::{
+        self,
         codec::{FusenHttpCodec, RequestCodec, ResponseCodec},
         fusen::{
             context::FusenContext,
@@ -12,20 +13,16 @@ use crate::{
         },
     },
 };
-use bytes::Bytes;
 use fusen_internal_common::{
     protocol::Protocol,
     resource::service::{MethodResource, ServiceResource},
     utils::uuid::uuid,
 };
 use fusen_register::{Register, directory::Directory};
-use http_body_util::{BodyExt, combinators::BoxBody};
-use hyper_tls::HttpsConnector;
-use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use http_body_util::BodyExt;
 use serde_json::Value;
 use std::{
     collections::{HashMap, LinkedList},
-    convert::Infallible,
     sync::Arc,
 };
 
@@ -200,19 +197,10 @@ impl FusenClient {
     }
 }
 
+#[derive(Default)]
 struct HttpClient {
     pub http_codec: FusenHttpCodec,
-    pub http_client: Client<HttpsConnector<HttpConnector>, BoxBody<Bytes, Infallible>>,
-}
-
-impl Default for HttpClient {
-    fn default() -> Self {
-        Self {
-            http_codec: FusenHttpCodec::default(),
-            http_client: Client::builder(hyper_util::rt::TokioExecutor::new())
-                .build(HttpsConnector::new()),
-        }
-    }
+    pub http_client: protocol::http::client::HttpClient,
 }
 
 impl FusenFilter for HttpClient {
@@ -225,7 +213,7 @@ impl FusenFilter for HttpClient {
             let http_request = RequestCodec::encode(&self.http_codec, &mut fusen_context.request)?;
             let response = self
                 .http_client
-                .request(http_request)
+                .send_http_request(http_request)
                 .await
                 .map_err(|error| FusenError::Error(Box::new(error)))?;
             let fusen_response =

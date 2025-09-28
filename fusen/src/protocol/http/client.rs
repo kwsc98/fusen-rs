@@ -1,4 +1,4 @@
-use http::{Request, Response};
+use http::{Request, Response, Version};
 use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
 use hyper_tls::HttpsConnector;
@@ -29,6 +29,7 @@ impl HttpClient {
     pub fn new() -> Self {
         let mut connector = HttpConnector::new();
         connector.set_keepalive(Some(Duration::from_secs(1800)));
+        connector.enforce_http(false);
         Self {
             http1_client: Client::builder(hyper_util::rt::TokioExecutor::new())
                 .build(HttpsConnector::new_with_connector(connector.clone())),
@@ -39,12 +40,11 @@ impl HttpClient {
     }
     pub async fn send_http_request(
         &self,
-        http_version: HttpVersion,
         request: Request<BoxBody<bytes::Bytes, Infallible>>,
     ) -> Result<Response<Incoming>, FusenError> {
-        let http_client = match http_version {
-            HttpVersion::H1 => &self.http1_client,
-            HttpVersion::H2 => &self.http2_client,
+        let http_client = match request.version() {
+            Version::HTTP_2 => &self.http2_client,
+            _ => &self.http1_client,
         };
         send_http_request(http_client, request).await
     }

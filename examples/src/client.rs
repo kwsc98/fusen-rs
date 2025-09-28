@@ -1,6 +1,7 @@
 use examples::handler::aspect::log::LogAspect;
 use examples::handler::aspect::time::TimeAspect;
 use examples::handler::aspect::tracing::TraceAspect;
+use examples::handler::loadbalance::custom::CustomLoadBalance;
 use examples::{DemoServiceClient, DemoServiceV2Client, RequestDto};
 use fusen_common::log::LogConfig;
 use fusen_common::nacos::NacosConfig;
@@ -36,13 +37,19 @@ async fn main() {
         .handler(LogAspect.load())
         .handler(TimeAspect.load())
         .handler(TraceAspect::default().load())
+        .handler(CustomLoadBalance.load())
         .register(Box::new(nacos_register))
         .builder();
     debug!("-------------------------使用 Host 直接调用-------------------------");
     let client = DemoServiceClient::init(
         &mut fusen_contet,
         Protocol::Host("http://127.0.0.1:8081".to_string()),
-        Some(vec!["TraceAspect", "LogAspect", "TimeAspect"]),
+        Some(vec![
+            "CustomLoadBalance",
+            "TraceAspect",
+            "LogAspect",
+            "TimeAspect",
+        ]),
     )
     .await
     .unwrap();

@@ -11,7 +11,7 @@ use crate::{
 use bytes::{Bytes, BytesMut};
 use fusen_internal_common::protocol::Protocol;
 use http::{
-    Request, Response,
+    Request, Response, Version,
     header::{CONNECTION, CONTENT_TYPE},
 };
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -57,6 +57,7 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
             }
         }
         let mut body = Bytes::new();
+        let mut version = Version::HTTP_2;
         if let Some(bodys) = fusen_request.bodys.take() {
             match &fusen_request.protocol {
                 Protocol::Dubbo => {
@@ -64,12 +65,16 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
                     body = RequestBodyCodec::encode(&self.triple_codec, bodys)?;
                 }
                 _ => {
+                    if let Protocol::Host(_) | Protocol::SpringCloud(_) = fusen_request.protocol {
+                        version = Version::HTTP_11;
+                    }
                     builder = builder.header(CONTENT_TYPE, "application/json");
                     body = RequestBodyCodec::encode(&self.json_codec, bodys)?;
                 }
             };
         }
         builder
+            .version(version)
             .method(fusen_request.path.method.clone())
             .uri(uri)
             .body(Full::new(body).boxed())

@@ -5,6 +5,7 @@ use fusen_rs::{
     fusen_procedural_macro::handler, handler::loadbalance::LoadBalance,
 };
 use rand::Rng;
+use tracing::debug;
 
 pub struct CustomLoadBalance;
 
@@ -14,6 +15,7 @@ impl LoadBalance for CustomLoadBalance {
         &self,
         invokers: Arc<Vec<Arc<ServiceResource>>>,
     ) -> Result<Option<Arc<ServiceResource>>, FusenError> {
+        debug!("Start CustomLoadBalance");
         if invokers.is_empty() {
             return Ok(None);
         }
