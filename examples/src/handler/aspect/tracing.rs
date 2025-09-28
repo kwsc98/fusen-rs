@@ -9,12 +9,12 @@ use tracing::{Instrument, Span, info_span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Default)]
-pub struct LogAspect {
+pub struct TraceAspect {
     trace_context_propagator: TraceContextPropagator,
 }
 
-#[handler(id = "LogAspect")]
-impl Aspect for LogAspect {
+#[handler(id = "TraceAspect")]
+impl Aspect for TraceAspect {
     async fn aroud(&self, mut join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError> {
         let context = &mut join_point.context;
         let mut span_context = self

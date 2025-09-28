@@ -4,6 +4,7 @@ use fusen_rs::{
     error::FusenError, filter::ProceedingJoinPoint, fusen_procedural_macro::handler,
     handler::aspect::Aspect, protocol::fusen::context::FusenContext,
 };
+use tracing::debug;
 
 pub struct TimeAspect;
 
@@ -14,9 +15,9 @@ impl Aspect for TimeAspect {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        println!("开始处理时间 : {start_time:?}");
+        debug!("开始处理时间 : {start_time:?}");
         let context = join_point.proceed().await;
-        println!(
+        debug!(
             "结束处理时间 : {:?}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

@@ -20,22 +20,12 @@ fusen-rs is a high-performance, lightweight microservice framework that uses Rus
 ### Common Interface
 
 ```rust
-#[derive(Serialize, Deserialize, Default, Debug)]
-pub struct ReqDto {
-    pub str: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-pub struct ResDto {
-    pub str: String,
-}
-
-#[fusen_trait(id = "org.apache.dubbo.springboot.demo.DemoService")]
+#[fusen_trait]
 pub trait DemoService {
     async fn sayHello(&self, name: String) -> String;
 
-    #[asset(path = "/sayHelloV2-http", method = POST)]
-    async fn sayHelloV2(&self, name: ReqDto) -> ResDto;
+    #[asset(path = "/sayHelloV2-http")]
+    async fn sayHelloV2(&self, name: RequestDto) -> ResponseDto;
 
     #[asset(path = "/divide", method = GET)]
     async fn divideV2(&self, a: i32, b: i32) -> String;
@@ -45,85 +35,36 @@ pub trait DemoService {
 ### Server
 
 ```rust
-#[derive(Debug)]
-struct DemoServiceImpl {
-    _db: String,
-}
-
-#[fusen_server(id = "org.apache.dubbo.springboot.demo.DemoService")]
+#[fusen_service]
 impl DemoService for DemoServiceImpl {
-    async fn sayHello(&self, req: String) -> FusenResult<String> {
-        info!("res : {:?}", req);
-        Ok("Hello ".to_owned() + &req)
+    async fn sayHello(&self, name: String) -> Result<String, FusenError> {
+        Ok(format!("Hello {name}"))
     }
-    #[asset(path="/sayHelloV2-http",method = POST)]
-    async fn sayHelloV2(&self, req: ReqDto) -> FusenResult<ResDto> {
-        info!("res : {:?}", req);
-        Ok(ResDto::default().str("Hello ".to_owned() + req.get_str() + " V2"))
-    }
-    #[asset(path="/divide",method = GET)]
-    async fn divideV2(&self, a: i32, b: i32) -> FusenResult<String> {
-        info!("res : a={:?},b={:?}", a, b);
-        Ok((a + b).to_string())
-    }
-}
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
-async fn main() {
-    fusen_common::logs::init_log();
-    let server = DemoServiceImpl {
-        _db: "我是一个DB数据库".to_string(),
-    };
-    FusenApplicationContext::builder()
-        //使用配置文件进行初始化
-        .init(get_config_by_file("examples/server-config.yaml").unwrap())
-        .add_fusen_server(Box::new(server))
-        .add_handler(ServerLogAspect.load())
-        .build()
-        .run()
-        .await;
+    #[asset(path = "/sayHelloV2-http")]
+    async fn sayHelloV2(&self, name: RequestDto) -> Result<ResponseDto, FusenError> {
+        Ok(ResponseDto {
+            str: format!("HelloV2 {}", name.str),
+        })
+    }
+
+    #[asset(path = "/divide", method = GET)]
+    async fn divideV2(&self, a: i32, b: i32) -> Result<String, FusenError> {
+        Ok(format!("a + b = {}", a + b))
+    }
 }
 ```
 
 ### Client
 
 ```rust
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
-async fn main() {
-    fusen_common::logs::init_log();
-    let context = FusenApplicationContext::builder()
-        //使用配置文件进行初始化
-        .init(get_config_by_file("examples/client-config.yaml").unwrap())
-        .add_handler(CustomLoadBalance.load())
-        .add_handler(ClientLogAspect.load())
-        .build();
-    //直接当HttpClient调用HTTP1 + JSON
-    let client = DemoServiceClient::new(Arc::new(
-        context.client(Type::Host("127.0.0.1:8081".to_string())),
-    ));
-    let res = client
-        .sayHelloV2(ReqDto::default().str("world".to_string()))
-        .await;
-    info!("rev host msg : {:?}", res);
-    //通过Fusen进行服务注册与发现，并且进行HTTP2+JSON进行调用
-    let client = DemoServiceClient::new(Arc::new(context.client(Type::Fusen)));
-    let res = client
-        .sayHelloV2(ReqDto::default().str("world".to_string()))
-        .await;
-    info!("rev fusen msg : {:?}", res);
-    // //通过Dubbo进行服务注册与发现，并且进行HTTP2+Grpc进行调用
-    let client = DemoServiceClient::new(Arc::new(context.client(Type::Dubbo)));
-    let res = client
-        .sayHelloV2(ReqDto::default().str("world".to_string()))
-        .await;
-    info!("rev dubbo msg : {:?}", res);
-    //通过SpringCloud进行服务注册与发现，并且进行HTTP1+JSON进行调用
-    let client = DemoServiceClient::new(Arc::new(context.client(Type::SpringCloud)));
-    let res = client
-        .sayHelloV2(ReqDto::default().str("world".to_string()))
-        .await;
-    info!("rev springcloud msg : {:?}", res);
-}
+let fusen_client = DemoServiceClient::init(
+    &mut fusen_contet,
+    Protocol::Fusen,
+    Some(vec!["LogAspect", "TimeAspect"]),
+).await.unwrap();
+println!("{:?}", fusen_client.divideV2(1, 2).await);
+println!("{:?}", fusen_client.sayHello("test1".to_owned()).await);
 ```
 
 ## Custom component
@@ -139,11 +80,15 @@ Load balancing component, LoadBalance provides a select interface to implement u
 impl LoadBalance for CustomLoadBalance {
     async fn select(
         &self,
-        invokers: Arc<ResourceInfo>,
-    ) -> Result<Arc<InvokerAssets>, fusen_rs::Error> {
-        invokers
-            .select()
-            .ok_or("not find server : CustomLoadBalance".into())
+        invokers: Arc<Vec<Arc<ServiceResource>>>,
+    ) -> Result<Option<Arc<ServiceResource>>, FusenError> {
+        if invokers.is_empty() {
+            return Ok(None);
+        }
+        let mut thread_rng = rand::rng();
+        Ok(Some(
+            invokers[thread_rng.random_range(0..invokers.len())].clone(),
+        ))
     }
 }
 ```
@@ -153,198 +98,24 @@ impl LoadBalance for CustomLoadBalance {
 I believe everyone is familiar with the concept of dynamic proxy. This is a technology used by Java to enhance classes, and the Spring framework uses this feature to encapsulate a more advanced model, which is the AOP aspect-first programming model. This component is a reference This model implements the wraparound notification model. Users can implement various component requirements based on this component, such as service circuit breaker/current limiting, request pre- and post-processing, link tracking, request response time monitoring and other requirements, and Aspect Components support multi-level nested calls and provide flexible definition methods to meet users' complex needs.
 
 ```rust
-#[handler(id = "ServerLogAspect")]
-impl Aspect for ServerLogAspect {
-    async fn aroud(
-        &self,
-        join_point: ProceedingJoinPoint,
-    ) -> Result<fusen_common::FusenContext, fusen_rs::Error> {
-        let start_time = get_now_date_time_as_millis();
-        info!("server receive request : {:?}", join_point.get_context());
+#[handler(id = "TimeAspect")]
+impl Aspect for TimeAspect {
+    async fn aroud(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError> {
+        let start_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        debug!("开始处理时间 : {start_time:?}");
         let context = join_point.proceed().await;
-        info!(
-            "server dispose done RT : {:?}ms : {:?}",
-            get_now_date_time_as_millis() - start_time,
-            context
+        debug!(
+            "结束处理时间 : {:?}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                - start_time
         );
         context
     }
 }
-```
-
-## Dubbo3
-
-This project is also compatible with the dubbo3 protocol, and can easily perform service registration discovery and intermodulation with the Java version of the Dubbo3 project through interface exposure.
-
-Rust's Server and Client don't need to be modified at all, just like the above example.
-
-The Java version of the Dubbo3 project does not need to be modified at the code level. It only needs to add some dependencies and configurations (because the way Dubbo3 uses interface exposure does not support the json serialization protocol by default, it uses the binary serialization format of fastjson2, so here we need to manually Add support for fastjson1)
-
-Here we use duboo3’s official sample dubbo-samples-spring-boot project for demonstration.
-<https://github.com/apache/dubbo-samples>
-
-First, we need to add the maven dependencies of fastjson and nacos to the pom.xml of the Server and Client services.
-
-```java
-<dependency>
-    <groupId>org.apache.dubbo</groupId>
-    <artifactId>dubbo-serialization-fastjson</artifactId>
-    <version>2.7.23</version>
-</dependency>
-<!-- registry dependency -->
-<dependency>
-    <groupId>com.alibaba.nacos</groupId>
-    <artifactId>nacos-client</artifactId>
-    <version>2.2.0</version>
-</dependency>
-```
-
-### Java-Server
-
-```java
-@DubboService
-public class DemoServiceImpl implements DemoService {
-
-    @Override
-    public String sayHello(String name) {
-        return "Hello " + name;
-    }
-}
-```
-
-### Server-application.yml
-
-```java
-dubbo:
-  application:
-    name: dubbo-springboot-demo-provider
-  protocol:
-    name: tri
-    port: 50052
-    //添加fastjson的支持
-    prefer-serialization: fastjson
-  registry:
-    address: nacos://${nacos.address:127.0.0.1}:8848
-```
-
-### Java-Client
-
-```java
-@Component
-public class Task implements CommandLineRunner {
-    @DubboReference
-    private DemoService demoService;
-
-    @Override
-    public void run(String... args) throws Exception {
-        String result = demoService.sayHello("world");
-        System.out.println("Receive result ======> " + result);
-
-        new Thread(()-> {
-            while (true) {
-                try {
-                    Thread.sleep(1000);
-                    System.out.println(new Date() + " Receive result ======> " + demoService.sayHello("world"));
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }).start();
-    }
-}
-```
-
-### Client-application.yml
-
-```java
-dubbo:
-  application:
-    name: dubbo-springboot-demo-consumer
-  registry:
-    address: nacos://${nacos.address:127.0.0.1}:8848
-```
-
-## SpringCloud
-
-At the same time, this project has also expanded the HTTP interface to be used as a WebServer framework, and also supports Spring Cloud service registration and discovery. Users can flexibly select and switch the protocols that need to be exposed, and support simultaneous exposure.
-
-Here we use the spring-cloud-alibaba project for demonstration
-<https://github.com/alibaba/spring-cloud-alibaba>
-
-When calling SpringCloud on RustClient, you need to change fusen_trait_id to the target service id (application_name)
-
-```rust
-#[fusen_trait(id = "service-provider")]
-```
-
-There is no need to modify the Java server and client code. Just start it.
-
-### SpringCloud-Server
-
-Provider startup class
-package com.alibaba.cloud.examples.ProviderApplication
-
-```java
-//EchoController
-@RestController
-public class EchoController {
-...
-    @GetMapping("/divide")
-    public String divide(@RequestParam Integer a, @RequestParam Integer b) {
-        if (b == 0) {
-          return String.valueOf(0);
-        } else {
-          return String.valueOf(a / b);
-        }
-    }
-...
-}
-```
-
-### SpringCloud-Client
-
-Consumer startup class
-package com.alibaba.cloud.examples.ConsumerApplication
-
-```java
-//TestController
-@RestController
-public class TestController {
-...
-    @GetMapping("/divide-feign")
-    public String divide(@RequestParam Integer a, @RequestParam Integer b) {
-        return echoClient.divide(a, b);
-    }
-...
-}
-
-```
-
-Test curl (curl => SpringCloud => fusen-rust)
-<http://127.0.0.1:18083/divide-feign?a=1&b=2>
-
-```rust
-2024-04-10T06:52:32.737307Z  INFO ThreadId(07) server: 33: res : a=1,b=2
-```
-
-Test curl ( curl => fusen-rust )
-
-<http://127.0.0.1:8081/divide?a=2&b=3>
-
-```rust
-2024-04-10T06:54:26.436416Z  INFO ThreadId(512) server: 33: res : a=2,b=3
-```
-
-Test curl ( curl => fusen-rust )
-
-curl --location --request POST '<http://127.0.0.1:8081/sayHelloV2-http>' \
---header 'Content-Type: application/json' \
---header 'Connection: keep-alive' \
---data-raw '{
-"str" ​​: "World"
-}'
-
-```rust
-2024-04-10T07:02:50.138057Z  INFO ThreadId(03) server: 26: res : ReqDto { str: "World" }
 ```

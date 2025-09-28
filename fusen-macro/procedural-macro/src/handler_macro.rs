@@ -32,7 +32,7 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                     fn select_(
                         &'static self,
                         invokers: std::sync::Arc<Vec<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>>,
-                    ) -> fusen_rs::fusen_internal_common::BoxFuture<Result<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>, fusen_rs::error::FusenError>> {
+                    ) -> fusen_rs::fusen_internal_common::BoxFuture<Result<std::option::Option<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>, fusen_rs::error::FusenError>> {
                         Box::pin(async move {
                            self.select(invokers).await
                         })
