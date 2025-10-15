@@ -18,12 +18,12 @@ description = "RPC framework for service registration and discovery through API 
 [workspace.dependencies]
 fusen-internal-common = { path = "fusen-internal-common", version = "0.8.5" }
 fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.8.5" }
-fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.8.6" }
+fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.8.8" }
 fusen-register = { path = "fusen-register", version = "0.8.5" }
-fusen-rs = { path = "fusen", version = "0.8.7" }
+fusen-rs = { path = "fusen", version = "0.8.8" }
 
 serde = "1.0.226"
 serde_json = "1.0.145"
-tokio = { version = "1.47.1", features = ["full"] }
+tokio = { version = "1.48.0", features = ["full"] }
 thiserror = "2.0.16"
 tracing = "0.1.41"

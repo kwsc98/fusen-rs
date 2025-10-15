@@ -56,11 +56,11 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
             },
             );
             vec.push(quote! {
-                if &context.method_info.method_name == stringify!(#method) {
+                if &context_poiw1.method_info.method_name == stringify!(#method) {
                     let fields = [#(
                         (stringify!(#req_pat),stringify!(#req_type)),
                     )*];
-                    let mut req_poi_paramlkj = match context.request.get_bodys(&fields) {
+                    let mut req_poi_paramlkj = match context_poiw1.request.get_bodys(&fields) {
                         Ok(result) => result,
                         Err(error) => {
                             return Err(fusen_rs::error::FusenError::Error(Box::new(error)));
@@ -75,8 +75,8 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                        )*).await;
                     let mut response = fusen_rs::protocol::fusen::response::FusenResponse::default();
                     response.init_response(result);
-                    context.response = Some(response);
-                    return Ok(context);
+                    context_poiw1.response = Some(response);
+                    return Ok(context_poiw1);
                }
             })
         }
@@ -108,7 +108,7 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
         }
 
         impl #item_self {
-            async fn prv_invoke (&self, mut context : fusen_rs::protocol::fusen::context::FusenContext) -> Result<fusen_rs::protocol::fusen::context::FusenContext,fusen_rs::error::FusenError> {
+            async fn prv_invoke (&self, mut context_poiw1 : fusen_rs::protocol::fusen::context::FusenContext) -> Result<fusen_rs::protocol::fusen::context::FusenContext,fusen_rs::error::FusenError> {
                 #(#items_fn)*
                 return Err(fusen_rs::error::FusenError::Impossible);
             }
