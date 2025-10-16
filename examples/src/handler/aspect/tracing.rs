@@ -32,7 +32,7 @@ impl Aspect for TraceAspect {
             trace_id = span_context.span().span_context().trace_id().to_string(),
             path = path
         );
-        span.set_parent(span_context);
+        let _ = span.set_parent(span_context);
         let trace_id = span.context().span().span_context().trace_id().to_string();
         span.set_attribute("trace_id", trace_id.to_owned());
         if !context.request.headers.contains_key("traceparent") {
