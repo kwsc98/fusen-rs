@@ -34,6 +34,9 @@ impl RequestBodyCodec for JsonCodec {
         &self,
         bytes: bytes::Bytes,
     ) -> Result<LinkedList<serde_json::Value>, crate::error::FusenError> {
+        if bytes.is_empty() {
+            return Ok(LinkedList::new());
+        }
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
             FusenError::HttpError(HttpStatus {
                 status: 400,

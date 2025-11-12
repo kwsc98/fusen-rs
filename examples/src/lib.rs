@@ -14,6 +14,8 @@ pub struct ResponseDto {
 
 #[fusen_trait]
 pub trait DemoService {
+    async fn sayHelloV4(&self) -> String;
+
     async fn sayHello(&self, name: String) -> String;
 
     #[asset(path = "/sayHelloV2-http")]

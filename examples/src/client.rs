@@ -60,6 +60,7 @@ async fn main() {
     )
     .await
     .unwrap();
+    debug!("{:?}", client.sayHelloV4().await);
     debug!("{:?}", client.divideV2(1, 2).await);
     debug!("{:?}", client.sayHello("test1".to_owned()).await);
     debug!(

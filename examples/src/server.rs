@@ -22,6 +22,10 @@ struct DemoServiceImpl {
 
 #[fusen_service]
 impl DemoService for DemoServiceImpl {
+    async fn sayHelloV4(&self) -> Result<String, FusenError> {
+        Ok("Hello V4".to_string())
+    }
+
     async fn sayHello(&self, name: String) -> Result<String, FusenError> {
         Ok(format!("Hello {name}"))
     }
