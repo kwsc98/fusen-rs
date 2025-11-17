@@ -1,6 +1,6 @@
 [package]
 name = "fusen-register"
-version = "0.8.5"
+version = "0.8.10"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
