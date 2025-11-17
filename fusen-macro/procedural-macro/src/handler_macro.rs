@@ -24,32 +24,33 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
     let (handler_invoker, handler_trait) = match trait_ident.segments[0].ident.to_string().as_str()
     {
         "LoadBalance" => (
-            quote!(fusen_rs::handler::HandlerInvoker::LoadBalance(Box::leak(
+            quote!(fusen_rs::handler::HandlerInvoker::LoadBalance(std::sync::Arc::new(
                 Box::new(self)
             )),),
             quote! {
                 impl fusen_rs::handler::loadbalance::LoadBalance_ for #item_self {
-                    fn select_(
-                        &'static self,
+                    fn select_<'a>(
+                        &'a self,
+                        context: &'a fusen_rs::protocol::fusen::context::FusenContext,
                         invokers: std::sync::Arc<Vec<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>>,
-                    ) -> fusen_rs::fusen_internal_common::BoxFuture<Result<std::option::Option<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>, fusen_rs::error::FusenError>> {
+                    ) -> fusen_rs::fusen_internal_common::BoxFutureV2<'a,Result<std::option::Option<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>, fusen_rs::error::FusenError>> {
                         Box::pin(async move {
-                           self.select(invokers).await
+                           self.select(context,invokers).await
                         })
                     }
                 }
             },
         ),
         "Aspect" => (
-            quote!(fusen_rs::handler::HandlerInvoker::Aspect(Box::leak(
+            quote!(fusen_rs::handler::HandlerInvoker::Aspect(std::sync::Arc::new(
                 Box::new(self)
             )),),
             quote! {
                 impl fusen_rs::filter::FusenFilter for #item_self {
-                    fn call(
-                        &'static self,
+                    fn call<'a>(
+                        &'a self,
                         join_point: fusen_rs::filter::ProceedingJoinPoint,
-                    ) -> fusen_rs::fusen_internal_common::BoxFuture<Result<fusen_rs::protocol::fusen::context::FusenContext, fusen_rs::error::FusenError>> {
+                    ) -> fusen_rs::fusen_internal_common::BoxFutureV2<'a,Result<fusen_rs::protocol::fusen::context::FusenContext, fusen_rs::error::FusenError>> {
                         Box::pin(async move {
                             self.aroud(join_point).await
                         })

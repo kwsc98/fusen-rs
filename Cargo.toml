@@ -16,11 +16,11 @@ license = "Apache-2.0"
 description = "RPC framework for service registration and discovery through API exposure, compatible with Dubbo3 protocol, intertunable with Java projects"
 
 [workspace.dependencies]
-fusen-internal-common = { path = "fusen-internal-common", version = "0.8.5" }
+fusen-internal-common = { path = "fusen-internal-common", version = "0.8.10" }
 fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.8.5" }
-fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.8.8" }
+fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.8.10" }
 fusen-register = { path = "fusen-register", version = "0.8.5" }
-fusen-rs = { path = "fusen", version = "0.8.8" }
+fusen-rs = { path = "fusen", version = "0.8.10" }
 
 serde = "1.0.226"
 serde_json = "1.0.145"

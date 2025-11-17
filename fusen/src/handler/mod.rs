@@ -14,13 +14,13 @@ pub mod loadbalance;
 
 #[derive(Clone)]
 pub struct HandlerController {
-    pub load_balance: &'static dyn LoadBalance_,
-    pub aspect: Arc<Vec<&'static dyn FusenFilter>>,
+    pub load_balance: Arc<Box<dyn LoadBalance_>>,
+    pub aspect: Arc<Vec<Arc<Box<dyn FusenFilter>>>>,
 }
 
 pub enum HandlerInvoker {
-    LoadBalance(&'static dyn LoadBalance_),
-    Aspect(&'static dyn FusenFilter),
+    LoadBalance(Arc<Box<dyn LoadBalance_>>),
+    Aspect(Arc<Box<dyn FusenFilter>>),
 }
 
 pub struct HandlerContext {
@@ -41,13 +41,13 @@ impl Default for HandlerContext {
         };
         context.handlers.insert(
             "DefaultLoadBalance".to_string(),
-            Arc::new(HandlerInvoker::LoadBalance(Box::leak(Box::new(
+            Arc::new(HandlerInvoker::LoadBalance(Arc::new(Box::new(
                 DefaultLoadBalance,
             )))),
         );
         context.handlers.insert(
             "DefaultAspect".to_string(),
-            Arc::new(HandlerInvoker::Aspect(Box::leak(Box::new(DefaultAspect)))),
+            Arc::new(HandlerInvoker::Aspect(Arc::new(Box::new(DefaultAspect)))),
         );
         context.load_controller(HandlerInfo {
             service_desc: ServiceDesc::new("DefaultHandlerController", None, None),
@@ -72,16 +72,16 @@ impl HandlerContext {
     }
 
     pub fn load_controller(&mut self, handler_info: HandlerInfo) {
-        let mut load_balance: Option<&'static dyn LoadBalance_> = None;
-        let mut aspect: Vec<&'static dyn FusenFilter> = Vec::new();
+        let mut load_balance: Option<Arc<Box<dyn LoadBalance_>>> = None;
+        let mut aspect: Vec<Arc<Box<dyn FusenFilter>>> = Vec::new();
         for handler_id in &handler_info.handlers {
             if let Some(handler_invoker) = self.get_handler(handler_id) {
                 match handler_invoker.as_ref() {
                     HandlerInvoker::LoadBalance(handler) => {
-                        let _ = load_balance.insert(*handler);
+                        let _ = load_balance.insert(handler.clone());
                     }
                     HandlerInvoker::Aspect(handler) => {
-                        aspect.push(*handler);
+                        aspect.push(handler.clone());
                     }
                 };
             }
@@ -90,7 +90,7 @@ impl HandlerContext {
             && let Some(handler_invoker) = self.get_handler("DefaultLoadBalance")
         {
             match handler_invoker.as_ref() {
-                HandlerInvoker::LoadBalance(handler) => load_balance.insert(*handler),
+                HandlerInvoker::LoadBalance(handler) => load_balance.insert(handler.clone()),
                 _ => panic!("{}", FusenError::Impossible),
             };
         }

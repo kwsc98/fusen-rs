@@ -11,21 +11,21 @@ pub trait RpcService: Send + Sync + FusenFilter {
 
 #[derive(Clone, Default)]
 pub struct RpcServerHandler {
-    cache: HashMap<String, &'static dyn RpcService>,
+    cache: HashMap<String, Arc<Box<dyn FusenFilter>>>,
 }
 
 impl RpcServerHandler {
     pub fn new(cache: HashMap<String, Box<dyn RpcService>>) -> Self {
-        let mut leak_cache: HashMap<String, &'static dyn RpcService> = HashMap::default();
+        let mut leak_cache: HashMap<String, Arc<Box<dyn FusenFilter>>> = HashMap::default();
         for (key, value) in cache {
-            let _ = leak_cache.insert(key, Box::leak(value));
+            let _ = leak_cache.insert(key, Arc::new(value));
         }
         Self { cache: leak_cache }
     }
 
     pub async fn call(
         &self,
-        link: Arc<Vec<&'static dyn FusenFilter>>,
+        link: Arc<Vec<Arc<Box<dyn FusenFilter>>>>,
         context: FusenContext,
     ) -> Result<FusenContext, FusenError> {
         let service = self

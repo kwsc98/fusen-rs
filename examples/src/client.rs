@@ -38,7 +38,7 @@ async fn main() {
         .handler(TimeAspect.load())
         .handler(TraceAspect::default().load())
         .handler(CustomLoadBalance.load())
-        .register(Box::new(nacos_register))
+        // .register(Box::new(nacos_register))
         .builder();
     debug!("-------------------------使用 Host 直接调用-------------------------");
     let client = DemoServiceClient::init(

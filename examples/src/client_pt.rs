@@ -22,7 +22,7 @@ async fn main() {
     let mut fusen_contet = FusenClientContextBuilder::new()
         .handler(LogAspect.load())
         .handler(TimeAspect.load())
-        .register(Box::new(nacos_register))
+        // .register(Box::new(nacos_register))
         .builder();
     let fusen_client = DemoServiceClient::init(
         &mut fusen_contet,

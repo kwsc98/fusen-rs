@@ -14,10 +14,7 @@ pub trait Aspect {
 pub struct DefaultAspect;
 
 impl FusenFilter for DefaultAspect {
-    fn call(
-        &'static self,
-        join_point: ProceedingJoinPoint,
-    ) -> BoxFuture<Result<FusenContext, FusenError>> {
+    fn call(&self, join_point: ProceedingJoinPoint) -> BoxFuture<Result<FusenContext, FusenError>> {
         Box::pin(async move { join_point.proceed().await })
     }
 }
