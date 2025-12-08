@@ -20,7 +20,7 @@ impl RequestBodyCodec for JsonCodec {
     ) -> Result<bytes::Bytes, crate::error::FusenError> {
         if !body.is_empty() {
             let bytes = if body.len() == 1 {
-                serde_json::to_vec(&body.pop_front().unwrap())
+                serde_json::to_vec(&body.pop_front().ok_or(FusenError::Impossible)?)
                     .map_err(|error| FusenError::Error(Box::new(error)))?
             } else {
                 serde_json::to_vec(&body).map_err(|error| FusenError::Error(Box::new(error)))?

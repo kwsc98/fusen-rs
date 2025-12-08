@@ -75,11 +75,10 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         #fields,
                     )*];
                     #(
-                        let res_poi_str = fusen_rs::fusen_internal_common::serde_json::to_value(&#request_pat);
-                        if let Err(error) = res_poi_str {
-                            return Err(fusen_rs::error::FusenError::Error(Box::new(error)));
+                        match fusen_rs::fusen_internal_common::serde_json::to_value(&#request_pat) {
+                            Ok(res_poi_str) => request_body.push_back(res_poi_str),
+                            Err(error) => return Err(fusen_rs::error::FusenError::Error(Box::new(error))),
                         }
-                        request_body.push_back(res_poi_str.unwrap());
                     )*
                     let response : fusen_rs::fusen_internal_common::serde_json::Value = self.client.invoke(
                         stringify!(#ident),#methos_type,#methos_path,&fields_pat,request_body
@@ -160,7 +159,6 @@ fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
         }
     }
 }
-
 
 #[allow(clippy::type_complexity)]
 fn get_resource_by_trait(

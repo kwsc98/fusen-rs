@@ -45,7 +45,7 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let request = &input.pat;
                     let request_type = &input.ty;
                     let token = quote! {
-                        let #request : #request_type  = fusen_rs::fusen_internal_common::serde_json::from_value(req_poi_paramlkj.pop_front().unwrap())
+                        let #request : #request_type  = fusen_rs::fusen_internal_common::serde_json::from_value(req_poi_paramlkj.pop_front().ok_or(fusen_rs::error::FusenError::ErrorMessage("get request error"))?)
                             .map_err(|error| fusen_rs::error::FusenError::HttpError(fusen_rs::protocol::fusen::response::HttpStatus { status : 400,message : Some(format!("{error:?}"))}))?;
                     };
                     req_pat.push(request);

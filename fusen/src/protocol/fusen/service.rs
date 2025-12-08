@@ -1,5 +1,4 @@
 use std::str::FromStr;
-
 use http::Method;
 
 #[derive(Debug, Clone)]
@@ -46,7 +45,7 @@ impl MethodInfo {
         Self {
             service_desc,
             method_name,
-            method: Method::from_str(&method).unwrap(),
+            method: Method::from_str(&method).unwrap_or(Method::default()),
             path,
             fields,
         }

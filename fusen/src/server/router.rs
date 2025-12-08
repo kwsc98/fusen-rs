@@ -81,13 +81,18 @@ async fn call(
     //通过service获取handler
     let handler_controller = router
         .handler_context
-        .get_controller(&context.method_info.service_desc);
+        .get_controller(&context.method_info.service_desc)?;
     let aspect_handers = handler_controller.aspect.clone();
     let context = router
         .fusen_service_handler
         .call(aspect_handers, context)
         .await?;
-    let response = ResponseCodec::encode(&router.http_codec, &mut context.response.unwrap())?;
+    let response = ResponseCodec::encode(
+        &router.http_codec,
+        &mut context
+            .response
+            .ok_or(FusenError::ErrorMessage("fusen_service_handler call error"))?,
+    )?;
     Ok(response)
 }
 
@@ -106,6 +111,9 @@ impl From<FusenError> for Response<BoxBody<Bytes, Infallible>> {
                 builder = builder.status(500);
             }
         }
-        builder.body(Full::new(body).boxed()).unwrap()
+        builder
+            .body(Full::new(body).boxed())
+            //
+            .unwrap_or(Response::new(Full::new(Bytes::new()).boxed()))
     }
 }

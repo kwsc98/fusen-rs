@@ -20,13 +20,17 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
         }
     };
     let item = org_item.clone();
-    let trait_ident = item.trait_.unwrap().1;
+    let Some(trait_ident) = item.trait_.map(|e| e.1) else {
+        return syn::Error::new_spanned(org_item, "handler must exist impl")
+            .into_compile_error()
+            .into();
+    };
     let (handler_invoker, handler_trait) = match trait_ident.segments[0].ident.to_string().as_str()
     {
         "LoadBalance" => (
-            quote!(fusen_rs::handler::HandlerInvoker::LoadBalance(std::sync::Arc::new(
-                Box::new(self)
-            )),),
+            quote!(fusen_rs::handler::HandlerInvoker::LoadBalance(
+                std::sync::Arc::new(Box::new(self))
+            ),),
             quote! {
                 impl fusen_rs::handler::loadbalance::LoadBalance_ for #item_self {
                     fn select_<'a>(
@@ -42,9 +46,9 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
             },
         ),
         "Aspect" => (
-            quote!(fusen_rs::handler::HandlerInvoker::Aspect(std::sync::Arc::new(
-                Box::new(self)
-            )),),
+            quote!(fusen_rs::handler::HandlerInvoker::Aspect(
+                std::sync::Arc::new(Box::new(self))
+            ),),
             quote! {
                 impl fusen_rs::filter::FusenFilter for #item_self {
                     fn call<'a>(

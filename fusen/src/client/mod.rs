@@ -89,7 +89,8 @@ impl FusenClientContext {
         }
         let handler_controller = self
             .handler_context
-            .get_controller(&service_info.service_desc);
+            .get_controller(&service_info.service_desc)?
+            .clone();
         let mut service_resource = ServiceResource {
             service_id: service_info.service_desc.service_id,
             group: service_info.service_desc.group,
@@ -128,7 +129,7 @@ impl FusenClientContext {
             http_client: self.http_client.clone(),
             protocol,
             directory,
-            handler_controller: handler_controller.clone(),
+            handler_controller,
             methods,
         })
     }
@@ -158,7 +159,10 @@ impl FusenClient {
             field_pats,
             request_bodys,
         )?;
-        let method_info = self.methods.get(method_name).unwrap();
+        let method_info = self
+            .methods
+            .get(method_name)
+            .ok_or(FusenError::ErrorMessage("invoke get method_info error"))?;
         let mut fusen_context = FusenContext {
             unique_identifier: uuid(),
             metadata: Default::default(),
@@ -171,12 +175,10 @@ impl FusenClient {
             .get()
             .await
             .map_err(|error| FusenError::Error(Box::new(error)))?;
-        let Some(resource) = self
-            .handler_controller
-            .load_balance
-            .select_(&fusen_context, resources)
-            .await?
-        else {
+        let Some(load_balance) = self.handler_controller.load_balance.as_ref() else {
+            return Err(FusenError::ErrorMessage("not find load_balance"));
+        };
+        let Some(resource) = load_balance.select_(&fusen_context, resources).await? else {
             return Err(FusenError::HttpError(HttpStatus {
                 status: 503,
                 message: Some("Service Unavailable".to_string()),

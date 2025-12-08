@@ -73,7 +73,10 @@ impl FusenServerContext {
         let port = self.port;
         let mut method_infos = vec![];
         let mut service_resources: Vec<Arc<ServiceResource>> = vec![];
-        let net_addr = format!("{}:{port}", get_network_ip());
+        let net_addr = format!(
+            "{}:{port}",
+            get_network_ip().map_err(|error| FusenError::Error(Box::new(error)))?
+        );
         for rpc_service in self.services.values() {
             let service_info = rpc_service.get_service_info();
             let temp_method_infos = service_info.method_infos.clone();

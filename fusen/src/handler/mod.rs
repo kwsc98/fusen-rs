@@ -14,7 +14,7 @@ pub mod loadbalance;
 
 #[derive(Clone)]
 pub struct HandlerController {
-    pub load_balance: Arc<Box<dyn LoadBalance_>>,
+    pub load_balance: Option<Arc<Box<dyn LoadBalance_>>>,
     pub aspect: Arc<Vec<Arc<Box<dyn FusenFilter>>>>,
 }
 
@@ -63,12 +63,15 @@ impl HandlerContext {
             .insert(handler.id, Arc::new(handler.handler_invoker));
     }
 
-    pub fn get_controller(&self, service_desc: &ServiceDesc) -> &HandlerController {
-        self.cache.get(service_desc.get_tag()).unwrap_or(
-            self.cache
-                .get("DefaultHandlerController:None:None")
-                .unwrap(),
-        )
+    pub fn get_controller(
+        &self,
+        service_desc: &ServiceDesc,
+    ) -> Result<&HandlerController, FusenError> {
+        Ok(self.cache.get(service_desc.get_tag()).unwrap_or(
+            self.cache.get("DefaultHandlerController:None:None").ok_or(
+                FusenError::ErrorMessage("get DefaultHandlerController error"),
+            )?,
+        ))
     }
 
     pub fn load_controller(&mut self, handler_info: HandlerInfo) {
@@ -96,7 +99,7 @@ impl HandlerContext {
         }
 
         let handler_controller = HandlerController {
-            load_balance: load_balance.unwrap(),
+            load_balance,
             aspect: Arc::new(aspect),
         };
         self.cache.insert(

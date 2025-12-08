@@ -72,7 +72,7 @@ impl FusenRequest {
                 } else {
                     field_pat
                 };
-                let value = request_bodys.pop_back().unwrap();
+                let value = request_bodys.pop_back().ok_or(FusenError::Impossible)?;
                 if value.is_null() {
                     continue;
                 }

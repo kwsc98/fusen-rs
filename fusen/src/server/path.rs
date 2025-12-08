@@ -106,20 +106,15 @@ impl Trie {
                                     entry.0[1..entry.0.len() - 1].to_string(),
                                     item.to_string(),
                                 ));
-                                return Some(QueryResult {
-                                    method_info: entry
-                                        .1
-                                        .read()
-                                        .await
-                                        .value
-                                        .as_ref()
-                                        .unwrap()
-                                        .clone(),
-                                    rest_fields: if rest_fields.is_empty() {
-                                        None
-                                    } else {
-                                        Some(rest_fields)
-                                    },
+                                return entry.1.read().await.value.as_ref().map(|method_info| {
+                                    QueryResult {
+                                        method_info: method_info.clone(),
+                                        rest_fields: if rest_fields.is_empty() {
+                                            None
+                                        } else {
+                                            Some(rest_fields)
+                                        },
+                                    }
                                 });
                             }
                             if let Some(query_result) =
