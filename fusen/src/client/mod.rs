@@ -1,5 +1,5 @@
 use crate::{
-    error::FusenError,
+    error::{FusenError, ProblemDetails},
     filter::{FusenFilter, ProceedingJoinPoint},
     handler::{Handler, HandlerContext, HandlerController, HandlerInfo},
     protocol::{
@@ -8,27 +8,97 @@ use crate::{
         fusen::{
             context::FusenContext,
             request::FusenRequest,
-            response::HttpStatus,
             service::{MethodInfo, ServiceInfo},
         },
     },
 };
 use fusen_internal_common::{
-    protocol::Protocol,
+    protocol::WireProtocol,
     resource::service::{MethodResource, ServiceResource},
     utils::uuid::uuid,
 };
 use fusen_register::{Register, directory::Directory};
+use http::Uri;
 use http_body_util::BodyExt;
 use serde_json::Value;
 use std::{
     collections::{HashMap, LinkedList},
     sync::Arc,
+    time::Duration,
 };
 
+#[derive(Clone, Debug)]
+/// Selects whether a client calls one absolute URI or uses service discovery.
+pub enum ClientEndpoint {
+    /// Calls the supplied absolute HTTP URI.
+    Direct(Uri),
+    /// Selects instances from the configured [`Register`] implementation.
+    Discovery,
+}
+
+#[derive(Clone, Debug)]
+/// Resource limits and deadlines applied by the HTTP client.
+pub struct ClientConfig {
+    /// Maximum time allowed to establish a connection.
+    pub connect_timeout: Duration,
+    /// End-to-end deadline for one HTTP request.
+    pub request_timeout: Duration,
+    /// Maximum number of response body bytes accepted from a peer.
+    pub max_response_body_bytes: usize,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(3),
+            request_timeout: Duration::from_secs(10),
+            max_response_body_bytes: 2 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Per-service endpoint, protocol, and middleware selection.
+pub struct ClientOptions {
+    /// Addressing strategy for this service.
+    pub endpoint: ClientEndpoint,
+    /// HTTP wire behavior used for the service.
+    pub protocol: WireProtocol,
+    /// Ordered handler identifiers applied to each invocation.
+    pub handlers: Vec<String>,
+}
+
+impl ClientOptions {
+    /// Builds options for a directly addressed Fusen HTTP/2 service.
+    pub fn direct(uri: Uri) -> Self {
+        Self {
+            endpoint: ClientEndpoint::Direct(uri),
+            protocol: WireProtocol::Fusen,
+            handlers: Vec::new(),
+        }
+    }
+
+    /// Builds discovery options for the requested wire protocol.
+    pub fn discovery(protocol: WireProtocol) -> Self {
+        Self {
+            endpoint: ClientEndpoint::Discovery,
+            protocol,
+            handlers: Vec::new(),
+        }
+    }
+
+    /// Replaces the ordered handler list.
+    pub fn handlers(mut self, handlers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.handlers = handlers.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
+/// Builder for shared client transport, discovery, and handlers.
 pub struct FusenClientContextBuilder {
-    register: Option<Box<dyn Register>>,
+    register: Option<Arc<dyn Register>>,
     handler_context: HandlerContext,
+    config: ClientConfig,
 }
 
 impl Default for FusenClientContextBuilder {
@@ -38,96 +108,121 @@ impl Default for FusenClientContextBuilder {
 }
 
 impl FusenClientContextBuilder {
+    /// Creates a builder with conservative production defaults.
     pub fn new() -> Self {
         Self {
-            register: Default::default(),
+            register: None,
             handler_context: HandlerContext::default(),
+            config: ClientConfig::default(),
         }
     }
 
-    pub fn builder(self) -> FusenClientContext {
+    /// Replaces the client resource and deadline configuration.
+    pub fn config(mut self, config: ClientConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Installs the service registry used by discovery endpoints.
+    pub fn register(mut self, register: impl Register + 'static) -> Self {
+        self.register = Some(Arc::new(register));
+        self
+    }
+
+    /// Installs one uniquely identified middleware handler.
+    pub fn handler(mut self, handler: Handler) -> Result<Self, FusenError> {
+        self.handler_context.load_handler(handler)?;
+        Ok(self)
+    }
+
+    /// Builds a reusable client context and Hyper connection pools.
+    pub fn build(self) -> FusenClientContext {
+        let transport = HttpTransport {
+            http_codec: FusenHttpCodec::new(self.config.max_response_body_bytes),
+            http_client: protocol::http::client::HttpClient::new(
+                self.config.connect_timeout,
+                self.config.request_timeout,
+            ),
+        };
         FusenClientContext {
-            register: self.register.map(Arc::new),
+            register: self.register,
             handler_context: self.handler_context,
-            http_client: Arc::new(Box::new(HttpClient::default())),
+            http_client: Arc::new(Box::new(transport)),
         }
-    }
-
-    pub fn register(mut self, register: Box<dyn Register>) -> Self {
-        let _ = self.register.insert(register);
-        self
-    }
-
-    pub fn handler(mut self, handler: Handler) -> Self {
-        self.handler_context.load_handler(handler);
-        self
     }
 }
 
+/// Shared factory used by generated service clients.
 pub struct FusenClientContext {
-    register: Option<Arc<Box<dyn Register>>>,
+    register: Option<Arc<dyn Register>>,
     handler_context: HandlerContext,
     http_client: Arc<Box<dyn FusenFilter>>,
 }
 
 impl FusenClientContext {
+    /// Resolves a service and creates its invocation runtime.
     pub async fn init_client(
         &mut self,
         service_info: ServiceInfo,
-        protocol: Protocol,
-        handlers: Option<Vec<&str>>,
+        options: ClientOptions,
     ) -> Result<FusenClient, FusenError> {
-        let mut methods = HashMap::new();
-        for method_info in service_info.method_infos {
-            methods.insert(method_info.method_name.to_string(), Arc::new(method_info));
-        }
-        if let Some(handlers) = handlers {
-            self.handler_context.load_controller(HandlerInfo {
-                service_desc: service_info.service_desc.clone(),
-                handlers: handlers.iter().map(|e| e.to_string()).collect(),
-            });
-        }
+        let methods = service_info
+            .method_infos
+            .iter()
+            .cloned()
+            .map(|method| (method.method_name.clone(), Arc::new(method)))
+            .collect::<HashMap<_, _>>();
+        self.handler_context.load_controller(HandlerInfo {
+            service_desc: service_info.service_desc.clone(),
+            handlers: options.handlers,
+        })?;
         let handler_controller = self
             .handler_context
             .get_controller(&service_info.service_desc)?
             .clone();
-        let mut service_resource = ServiceResource {
+        let mut resource = ServiceResource {
             service_id: service_info.service_desc.service_id,
             group: service_info.service_desc.group,
             version: service_info.service_desc.version,
             methods: methods
                 .values()
-                .map(|e| MethodResource {
-                    method_name: e.method_name.to_string(),
-                    path: e.path.to_string(),
-                    method: e.method.to_string(),
+                .map(|method| MethodResource {
+                    method_name: method.method_name.clone(),
+                    path: method.path.clone(),
+                    method: method.method.to_string(),
                 })
                 .collect(),
-            addr: Default::default(),
+            addr: String::new(),
             weight: Some(1.0),
             metadata: Default::default(),
         };
-        let directory = if let Protocol::Host(host) = &protocol {
-            service_resource.addr = host.to_string();
-            let directory = Directory::default();
-            directory
-                .change(vec![service_resource])
+        let directory = match options.endpoint {
+            ClientEndpoint::Direct(uri) => {
+                if uri.scheme().is_none() || uri.authority().is_none() {
+                    return Err(FusenError::InvalidRequest(
+                        "direct endpoint must be an absolute URI".into(),
+                    ));
+                }
+                resource.addr = uri.to_string().trim_end_matches('/').to_owned();
+                let directory = Directory::default();
+                directory.replace(vec![resource]).map_err(|error| {
+                    FusenError::internal("failed to initialize directory", error)
+                })?;
+                directory
+            }
+            ClientEndpoint::Discovery => self
+                .register
+                .as_ref()
+                .ok_or_else(|| {
+                    FusenError::ServiceUnavailable("discovery endpoint requires a register".into())
+                })?
+                .subscribe(resource, options.protocol)
                 .await
-                .map_err(|error| FusenError::Error(Box::new(error)))?;
-            directory
-        } else {
-            let Some(register) = &self.register else {
-                return Err(FusenError::ErrorMessage("not find register"));
-            };
-            register
-                .subscribe(service_resource, protocol.clone())
-                .await
-                .map_err(|error| FusenError::Error(Box::new(error)))?
+                .map_err(|error| FusenError::internal("service subscription failed", error))?,
         };
-
         Ok(FusenClient {
             http_client: self.http_client.clone(),
-            protocol,
+            protocol: options.protocol,
             directory,
             handler_controller,
             methods,
@@ -135,93 +230,95 @@ impl FusenClientContext {
     }
 }
 
+/// Runtime owned by one generated service client.
 pub struct FusenClient {
-    pub http_client: Arc<Box<dyn FusenFilter>>,
-    pub protocol: Protocol,
-    pub directory: Directory,
-    pub handler_controller: HandlerController,
-    pub methods: HashMap<String, Arc<MethodInfo>>,
+    http_client: Arc<Box<dyn FusenFilter>>,
+    protocol: WireProtocol,
+    directory: Directory,
+    handler_controller: HandlerController,
+    methods: HashMap<String, Arc<MethodInfo>>,
 }
 
 impl FusenClient {
+    /// Serializes and invokes one generated service method.
     pub async fn invoke(
         &self,
         method_name: &str,
         method: &str,
         path: &str,
         field_pats: &[&str],
-        request_bodys: LinkedList<Value>,
+        request_bodies: LinkedList<Value>,
     ) -> Result<Value, FusenError> {
-        let fusen_request = FusenRequest::init_request(
-            self.protocol.clone(),
-            method,
-            path,
-            field_pats,
-            request_bodys,
-        )?;
+        let request =
+            FusenRequest::init_request(self.protocol, method, path, field_pats, request_bodies)?;
         let method_info = self
             .methods
             .get(method_name)
-            .ok_or(FusenError::ErrorMessage("invoke get method_info error"))?;
-        let mut fusen_context = FusenContext {
+            .ok_or_else(|| FusenError::InvalidRequest(format!("unknown method {method_name}")))?;
+        let mut context = FusenContext {
             unique_identifier: uuid(),
             metadata: Default::default(),
             method_info: method_info.clone(),
-            request: fusen_request,
-            response: Default::default(),
+            request,
+            response: None,
         };
-        let resources = self
-            .directory
-            .get()
-            .await
-            .map_err(|error| FusenError::Error(Box::new(error)))?;
-        let Some(load_balance) = self.handler_controller.load_balance.as_ref() else {
-            return Err(FusenError::ErrorMessage("not find load_balance"));
-        };
-        let Some(resource) = load_balance.select_(&fusen_context, resources).await? else {
-            return Err(FusenError::HttpError(HttpStatus {
-                status: 503,
-                message: Some("Service Unavailable".to_string()),
-            }));
-        };
-        fusen_context.request.addr = Some(resource.addr.to_owned());
-        let proceeding_join_point = ProceedingJoinPoint::new(
+        let resources = self.directory.snapshot();
+        let load_balance = self
+            .handler_controller
+            .load_balance
+            .as_ref()
+            .ok_or_else(|| FusenError::ServiceUnavailable("load balancer is missing".into()))?;
+        let resource = load_balance
+            .select_(&context, resources)
+            .await?
+            .ok_or_else(|| FusenError::ServiceUnavailable("no healthy service instances".into()))?;
+        context.request.addr = Some(resource.addr.clone());
+        let context = ProceedingJoinPoint::new(
             self.handler_controller.aspect.clone(),
             self.http_client.clone(),
-            fusen_context,
-        );
-        let context = proceeding_join_point.proceed().await?;
-        let response = context.response.ok_or(FusenError::Impossible)?;
-        match response.body {
-            Some(value) => Ok(value),
-            None => Err(FusenError::HttpError(response.http_status)),
+            context,
+        )
+        .proceed()
+        .await?;
+        let response = context.response.ok_or_else(|| {
+            FusenError::ServiceUnavailable("transport returned no response".into())
+        })?;
+        if !(200..300).contains(&response.http_status.status) {
+            if let Some(body) = response.body
+                && let Ok(problem) = serde_json::from_value::<ProblemDetails>(body)
+            {
+                return Err(FusenError::Remote(Box::new(problem)));
+            }
+            return Err(FusenError::Application {
+                status: response.http_status.status,
+                code: "remote_error".into(),
+                message: "remote service returned an error".into(),
+            });
         }
+        response
+            .body
+            .ok_or_else(|| FusenError::InvalidRequest("successful response body is empty".into()))
     }
 }
 
-#[derive(Default)]
-struct HttpClient {
-    pub http_codec: FusenHttpCodec,
-    pub http_client: protocol::http::client::HttpClient,
+struct HttpTransport {
+    http_codec: FusenHttpCodec,
+    http_client: protocol::http::client::HttpClient,
 }
 
-impl FusenFilter for HttpClient {
+impl FusenFilter for HttpTransport {
     fn call<'a>(
         &'a self,
         join_point: ProceedingJoinPoint,
     ) -> fusen_internal_common::BoxFutureV2<'a, Result<FusenContext, FusenError>> {
         Box::pin(async move {
-            let mut fusen_context = join_point.context;
-            let http_request = RequestCodec::encode(&self.http_codec, &mut fusen_context.request)?;
-            let response = self
-                .http_client
-                .send_http_request(http_request)
-                .await
-                .map_err(|error| FusenError::Error(Box::new(error)))?;
-            let fusen_response =
-                ResponseCodec::decode(&self.http_codec, response.map(|e| e.boxed())).await?;
-            let _ = fusen_context.response.insert(fusen_response);
-            Ok(fusen_context)
+            let mut context = join_point.context;
+            let request = RequestCodec::encode(&self.http_codec, &mut context.request)?;
+            let response = self.http_client.send_http_request(request).await?;
+            context.response = Some(
+                ResponseCodec::decode(&self.http_codec, response.map(|body| body.boxed())).await?,
+            );
+            Ok(context)
         })
     }
 }

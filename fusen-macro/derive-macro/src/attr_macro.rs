@@ -47,7 +47,7 @@ macro_rules! fusen_attr {
                             match ident.as_str() {
                                 $(
                                     stringify!($req) => {
-                                        let _ = $req.insert(lit);
+                                        $req = Some(lit);
                                     }
                                 )*
                                 name => {
@@ -68,7 +68,7 @@ macro_rules! fusen_attr {
                             match ident.as_str() {
                                 $(
                                     stringify!($req) => {
-                                        let _ = $req.insert(String::new());
+                                        $req = Some(String::new());
                                     }
                                 )*
                                 name => {

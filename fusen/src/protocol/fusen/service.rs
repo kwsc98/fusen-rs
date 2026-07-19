@@ -1,5 +1,5 @@
-use std::str::FromStr;
 use http::Method;
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct ServiceDesc {

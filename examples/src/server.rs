@@ -10,7 +10,7 @@ use fusen_rs::{
     error::FusenError,
     fusen_procedural_macro::{asset, fusen_service},
     handler::HandlerLoad,
-    server::FusenServerContext,
+    server::{FusenServerBuilder, ServerConfig},
 };
 use std::sync::Arc;
 use tracing::instrument;
@@ -61,7 +61,7 @@ impl DemoServiceV2 for DemoServiceImplV2 {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _log_work = fusen_common::log::init_log(
         "fusen-server",
         LogConfig {
@@ -82,19 +82,24 @@ async fn main() {
         }),
     )
     .unwrap();
-    let fusen_server = FusenServerContext::new(8081)
+    let bind_addr = "0.0.0.0:8081".parse()?;
+    let mut server_config = ServerConfig::new(bind_addr);
+    server_config.advertised_base_url = Some("http://127.0.0.1:8081".to_owned());
+    let fusen_server = FusenServerBuilder::new(bind_addr)
+        .config(server_config)
         //开启注册中心
         // .register(Box::new(nacos_register))
-        .handler(LogAspect.load())
-        .handler(TimeAspect.load())
-        .handler(TraceAspect::default().load())
+        .handler(LogAspect.load())?
+        .handler(TimeAspect.load())?
+        .handler(TraceAspect::default().load())?
         .service((
             Box::new(DemoServiceImpl::default()),
             Some(vec!["TraceAspect", "LogAspect", "TimeAspect"]),
-        ))
+        ))?
         .service((
             Box::new(DemoServiceImplV2::default()),
             Some(vec!["TraceAspect", "LogAspect"]),
-        ));
-    let _result = fusen_server.run().await;
+        ))?;
+    fusen_server.run().await?;
+    Ok(())
 }

@@ -1,3 +1,6 @@
+#![warn(missing_docs)]
+//! Procedural macros for declaring fusen-rs services and handlers.
+
 use fusen_derive_macro::fusen_attr;
 use proc_macro::TokenStream;
 use syn::{Attribute, Meta};
@@ -7,6 +10,7 @@ mod service_macro;
 mod trait_macro;
 
 #[proc_macro_attribute]
+/// Generates an internal adapter for an Aspect or LoadBalance implementation.
 pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = HandlerAttr::from_attr(attr);
     match attr {
@@ -16,6 +20,7 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+/// Generates an RPC trait and strongly typed client.
 pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = FusenAttr::from_attr(attr);
     match attr {
@@ -25,6 +30,7 @@ pub fn fusen_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+/// Generates the server dispatch adapter for a trait implementation.
 pub fn fusen_service(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = FusenAttr::from_attr(attr);
     match attr {
@@ -34,6 +40,7 @@ pub fn fusen_service(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+/// Declares an HTTP path and method consumed by the surrounding RPC macro.
 pub fn asset(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }

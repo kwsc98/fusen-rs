@@ -1,120 +1,50 @@
+# fusen-rs 0.9
 
-# `fusen-rs` 一个最像RPC框架的Rust-RPC框架
+`fusen-rs` 是面向 Rust 微服务的异步 RPC 框架，通过过程宏生成客户端和服务端适配代码，支持 JSON over HTTP/1.1、HTTP/2、Direct 寻址、Nacos 注册发现、中间件与优雅停机。
 
-fusen-rs是一个高性能，轻量级的微服务框架，通过使用Rust宏来解决目前主流rpc框架使用复杂，性能低等问题，不需要通过脚本和脚手架生成RPC调用代码，通过宏来进行编译期"反射"来实现高性能的调用，满足RPC调用的简易性，并且支持用户自定义组件等功能.
+0.9 的重点是可靠性契约：有界请求体、客户端和服务端 deadline、并发限制、启动注册回滚、RFC 9457 错误、确定性路由以及可等待的连接排空。Dubbo Triple 在本版本明确禁用，不再声明不完整的兼容能力。
 
-## 功能列表
+## 文档导航
 
-- :white_check_mark: RPC调用抽象层(Rust宏)
-- :white_check_mark: 多协议支持(HTTP1, HTTP2)
-- :white_check_mark: 服务注册与发现(Nacos)
-- :white_check_mark: 微服务生态兼容(Dubbo3, SpringCloud)
-- :white_check_mark: 自定义组件(自定义负载均衡器,Aspect环绕通知组件)
-- :white_check_mark: 配置中心(本地文件配置, Nacos)
-- :white_check_mark: 优雅停机
-- :construction: HTTP3协议支持
+- [架构与调用链](docs/architecture.md)
+- [模块行为索引](docs/modules/README.md)
+- [0.8 到 0.9 迁移指南](docs/migration-0.9.md)
+- [兼容性策略](docs/compatibility.md)
+- [贡献指南](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
+- [发布流程](docs/releasing.md)
 
-## 快速开始
+## 客户端
 
-### Common Interface
+```rust,no_run
+use fusen_rs::client::{ClientOptions, FusenClientContextBuilder};
 
-```rust
-#[fusen_trait]
-pub trait DemoService {
-    async fn sayHello(&self, name: String) -> String;
-
-    #[asset(path = "/sayHelloV2-http")]
-    async fn sayHelloV2(&self, name: RequestDto) -> ResponseDto;
-
-    #[asset(path = "/divide", method = GET)]
-    async fn divideV2(&self, a: i32, b: i32) -> String;
-}
+# async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+let mut context = FusenClientContextBuilder::new().build();
+let options = ClientOptions::direct("http://127.0.0.1:8081".parse()?);
+// let client = DemoServiceClient::init(&mut context, options).await?;
+# let _ = (context, options);
+# Ok(())
+# }
 ```
 
-### Server
+注册发现使用 `ClientOptions::discovery(WireProtocol::Fusen)`，并在 `FusenClientContextBuilder` 上配置 workspace 内的 `NacosRegister`。
 
-```rust
-#[fusen_service]
-impl DemoService for DemoServiceImpl {
-    async fn sayHello(&self, name: String) -> Result<String, FusenError> {
-        Ok(format!("Hello {name}"))
-    }
+## 服务端
 
-    #[asset(path = "/sayHelloV2-http")]
-    async fn sayHelloV2(&self, name: RequestDto) -> Result<ResponseDto, FusenError> {
-        Ok(ResponseDto {
-            str: format!("HelloV2 {}", name.str),
-        })
-    }
+```rust,no_run
+use fusen_rs::server::{FusenServerBuilder, ServerConfig};
 
-    #[asset(path = "/divide", method = GET)]
-    async fn divideV2(&self, a: i32, b: i32) -> Result<String, FusenError> {
-        Ok(format!("a + b = {}", a + b))
-    }
-}
+# async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+let bind = "0.0.0.0:8081".parse()?;
+let mut config = ServerConfig::new(bind);
+config.advertised_base_url = Some("http://10.0.0.8:8081".into());
+let server = FusenServerBuilder::new(bind).config(config);
+// let server = server.service((Box::new(DemoServiceImpl), None))?;
+// server.run().await?;
+# let _ = server;
+# Ok(())
+# }
 ```
 
-### Client
-
-```rust
-let fusen_client = DemoServiceClient::init(
-    &mut fusen_contet,
-    Protocol::Fusen,
-    Some(vec!["LogAspect", "TimeAspect"]),
-).await.unwrap();
-println!("{:?}", fusen_client.divideV2(1, 2).await);
-println!("{:?}", fusen_client.sayHello("test1".to_owned()).await);
-```
-
-## 自定义组件
-
-微服务自定义组件包括, 负载均衡器, 服务熔断/限流组件, 前置后置请求处理器, 服务链路追踪等组件. 由于组件的定制化程度较高, 所以本项目参考AOP的概念提供了两种自定义组件,来提供灵活的请求处理。
-
-### LoadBalance
-
-负载均衡组件, LoadBalance提供一个select接口来实现用户自定义服务均衡配置。
-
-```rust
-#[handler(id = "CustomLoadBalance")]
-impl LoadBalance for CustomLoadBalance {
-    async fn select(
-        &self,
-        invokers: Arc<Vec<Arc<ServiceResource>>>,
-    ) -> Result<Option<Arc<ServiceResource>>, FusenError> {
-        if invokers.is_empty() {
-            return Ok(None);
-        }
-        let mut thread_rng = rand::rng();
-        Ok(Some(
-            invokers[thread_rng.random_range(0..invokers.len())].clone(),
-        ))
-    }
-}
-```
-
-### Aspect
-
-动态代理的概念相信大家都不陌生,这是Java对类进行增强的一种技术,而Spring框架利用此特性封装出了更高级的模型, 那就是AOP面先切面编程模型. 本组件就是参考了此模型,实现了环绕式通知模型, 用户可以基于此组件实现各种组件需求，比如说服务熔断/限流,请求的前置后置处理,链路追踪,请求响应时间监控等需求,并且Aspect组件支持多层嵌套调用,提供灵活的定义方式满足用户复杂需求.
-
-```rust
-#[handler(id = "TimeAspect")]
-impl Aspect for TimeAspect {
-    async fn aroud(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError> {
-        let start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        debug!("开始处理时间 : {start_time:?}");
-        let context = join_point.proceed().await;
-        debug!(
-            "结束处理时间 : {:?}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-                - start_time
-        );
-        context
-    }
-}
-```
+启用注册中心时必须提供外部可访问的 `advertised_base_url`。框架先完成路由校验和端口绑定，再注册服务；任何注册失败都会逆序回滚。

@@ -1,8 +1,9 @@
 [package]
 name = "fusen-derive-macro"
-version = "0.8.10"
+version = "0.9.0"
 authors.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description.workspace = true
 

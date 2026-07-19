@@ -1,12 +1,12 @@
 use crate::error::FusenError;
-use fusen_internal_common::protocol::Protocol;
+use fusen_internal_common::protocol::WireProtocol;
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display};
 
 #[derive(Debug, Default)]
 pub struct FusenResponse {
-    pub protocol: Protocol,
+    pub protocol: WireProtocol,
     pub http_status: HttpStatus,
     pub headers: HashMap<String, String>,
     pub extensions: Option<HashMap<String, String>>,
@@ -35,26 +35,16 @@ impl Display for HttpStatus {
 }
 
 impl FusenResponse {
-    pub fn init_response<T: Serialize>(&mut self, result: Result<T, FusenError>) {
-        let mut http_status = HttpStatus::default();
-        match result {
-            Ok(value) => match serde_json::to_value(value) {
-                Ok(value) => {
-                    let _ = self.body.insert(value);
-                }
-                Err(error) => {
-                    http_status = HttpStatus {
-                        status: 500,
-                        message: Some(format!("Failed to serialize response : {error:?}")),
-                    };
-                }
-            },
-            Err(error) => {
-                if let FusenError::HttpError(status) = error {
-                    http_status = status;
-                }
-            }
-        };
-        self.http_status = http_status;
+    pub fn init_response<T: Serialize>(
+        &mut self,
+        result: Result<T, FusenError>,
+    ) -> Result<(), FusenError> {
+        let value = result?;
+        self.body = Some(
+            serde_json::to_value(value)
+                .map_err(|error| FusenError::internal("failed to serialize response", error))?,
+        );
+        self.http_status = HttpStatus::default();
+        Ok(())
     }
 }

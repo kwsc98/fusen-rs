@@ -2,10 +2,7 @@ use std::collections::LinkedList;
 
 use crate::{
     error::FusenError,
-    protocol::{
-        codec::body::{RequestBodyCodec, ResponseBodyCodec},
-        fusen::response::HttpStatus,
-    },
+    protocol::codec::body::{RequestBodyCodec, ResponseBodyCodec},
 };
 use bytes::Bytes;
 use serde_json::Value;
@@ -20,10 +17,15 @@ impl RequestBodyCodec for JsonCodec {
     ) -> Result<bytes::Bytes, crate::error::FusenError> {
         if !body.is_empty() {
             let bytes = if body.len() == 1 {
-                serde_json::to_vec(&body.pop_front().ok_or(FusenError::Impossible)?)
-                    .map_err(|error| FusenError::Error(Box::new(error)))?
+                serde_json::to_vec(
+                    &body.pop_front().ok_or_else(|| {
+                        FusenError::InvalidRequest("request body is empty".into())
+                    })?,
+                )
+                .map_err(|error| FusenError::internal("failed to encode JSON request", error))?
             } else {
-                serde_json::to_vec(&body).map_err(|error| FusenError::Error(Box::new(error)))?
+                serde_json::to_vec(&body)
+                    .map_err(|error| FusenError::internal("failed to encode JSON request", error))?
             };
             return Ok(Bytes::from(bytes));
         }
@@ -37,15 +39,11 @@ impl RequestBodyCodec for JsonCodec {
         if bytes.is_empty() {
             return Ok(LinkedList::new());
         }
-        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
-            FusenError::HttpError(HttpStatus {
-                status: 400,
-                message: Some(format!("{error:?}")),
-            })
-        })?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
         if value.is_array() {
             let valus: LinkedList<Value> = serde_json::from_value(value)
-                .map_err(|error| FusenError::Error(Box::new(error)))?;
+                .map_err(|error| FusenError::internal("failed to decode JSON arguments", error))?;
             Ok(valus)
         } else {
             let mut linked_list = LinkedList::new();
@@ -57,12 +55,13 @@ impl RequestBodyCodec for JsonCodec {
 
 impl ResponseBodyCodec for JsonCodec {
     fn encode(&self, value: Value) -> Result<bytes::Bytes, crate::error::FusenError> {
-        Ok(Bytes::from(
-            serde_json::to_vec(&value).map_err(|error| FusenError::Error(Box::new(error)))?,
-        ))
+        Ok(Bytes::from(serde_json::to_vec(&value).map_err(
+            |error| FusenError::internal("failed to encode JSON response", error),
+        )?))
     }
 
     fn decode(&self, bytes: bytes::Bytes) -> Result<Value, crate::error::FusenError> {
-        serde_json::from_slice(&bytes).map_err(|error| FusenError::Error(Box::new(error)))
+        serde_json::from_slice(&bytes)
+            .map_err(|error| FusenError::InvalidRequest(error.to_string()))
     }
 }

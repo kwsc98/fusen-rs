@@ -15,17 +15,20 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
     };
     let input = parse_macro_input!(item as ItemTrait);
     let mut methods_cache = HashMap::new();
-    let methods_info = match get_resource_by_trait(input.clone()) {
-        Ok(methods_info) => methods_info.into_iter().fold(vec![], |mut vec, e| {
-            vec.push(serde_json::to_string(&e).unwrap());
+    let method_resources = match get_resource_by_trait(input.clone()) {
+        Ok(methods_info) => methods_info,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let methods_info = method_resources
+        .iter()
+        .map(|e| {
             methods_cache.insert(
                 e.0.to_owned(),
                 (e.1.to_owned(), e.2.to_owned(), e.3.to_owned()),
             );
-            vec
-        }),
-        Err(error) => return error.into_compile_error().into(),
-    };
+            method_builder(e)
+        })
+        .collect::<Vec<_>>();
     let id = match attr.id {
         Some(trait_id) => {
             quote!(#trait_id)
@@ -65,7 +68,11 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             }
             ReturnType::Type(_, res_type) => res_type.to_token_stream(),
         };
-        let (methos_type, methos_path, _) = methods_cache.get(&ident.to_string()).unwrap();
+        let Some((methos_type, methos_path, _)) = methods_cache.get(&ident.to_string()) else {
+            return syn::Error::new_spanned(&ident, "RPC method metadata is missing")
+                .into_compile_error()
+                .into();
+        };
         fn_quote.push(
             quote! {
                 pub #asyncable fn #ident (#inputs) -> Result<#output_type,fusen_rs::error::FusenError> {
@@ -77,13 +84,13 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     #(
                         match fusen_rs::fusen_internal_common::serde_json::to_value(&#request_pat) {
                             Ok(res_poi_str) => request_body.push_back(res_poi_str),
-                            Err(error) => return Err(fusen_rs::error::FusenError::Error(Box::new(error))),
+                            Err(error) => return Err(fusen_rs::error::FusenError::internal("failed to serialize request argument", error)),
                         }
                     )*
                     let response : fusen_rs::fusen_internal_common::serde_json::Value = self.client.invoke(
                         stringify!(#ident),#methos_type,#methos_path,&fields_pat,request_body
                     ).await?;
-                    return fusen_rs::fusen_internal_common::serde_json::from_value(response).map_err(|error| fusen_rs::error::FusenError::Error(Box::new(error)));
+                    return fusen_rs::fusen_internal_common::serde_json::from_value(response).map_err(|error| fusen_rs::error::FusenError::InvalidRequest(error.to_string()));
                 }
             }
         );
@@ -104,9 +111,9 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
             #fn_quote
         )*
 
-        pub async fn init(fusen_client_context : &mut fusen_rs::client::FusenClientContext,protocol : fusen_rs::fusen_internal_common::protocol::Protocol,handlers: Option<Vec<&str>>,) -> Result<#rpc_client,fusen_rs::error::FusenError> {
+        pub async fn init(fusen_client_context : &mut fusen_rs::client::FusenClientContext, options: fusen_rs::client::ClientOptions) -> Result<#rpc_client,fusen_rs::error::FusenError> {
             let service_info = Self::get_service_info();
-            let client = std::sync::Arc::new(fusen_client_context.init_client(service_info.clone(),protocol,handlers).await?);
+            let client = std::sync::Arc::new(fusen_client_context.init_client(service_info.clone(), options).await?);
             Ok(#rpc_client {
                 service_info : std::sync::Arc::new(service_info),
                 client
@@ -116,16 +123,26 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
         pub fn get_service_info() -> fusen_rs::protocol::fusen::service::ServiceInfo {
             let service_desc =  fusen_rs::protocol::fusen::service::ServiceDesc::new(#id,#version,#group);
             let mut methods : Vec<fusen_rs::protocol::fusen::service::MethodInfo> = vec![];
-            #(
-                let (method_name,method,path,fields) : (String,String,String,Vec<(String,String)>) = fusen_rs::fusen_internal_common::serde_json::from_str(#methods_info).unwrap();
-                methods.push(fusen_rs::protocol::fusen::service::MethodInfo::new(service_desc.clone(),method_name,method,path,fields));
-            )*
+            #(#methods_info)*
             fusen_rs::protocol::fusen::service::ServiceInfo::new(service_desc,methods)
          }
        }
 
     };
     TokenStream::from(expanded)
+}
+
+fn method_builder(
+    (name, method, path, fields): &(String, String, String, Vec<(String, String)>),
+) -> proc_macro2::TokenStream {
+    let fields = fields
+        .iter()
+        .map(|(name, kind)| quote!((#name.to_owned(), #kind.to_owned())));
+    quote! {
+        methods.push(fusen_rs::protocol::fusen::service::MethodInfo::new(
+            service_desc.clone(), #name.to_owned(), #method.to_owned(), #path.to_owned(), vec![#(#fields),*]
+        ));
+    }
 }
 
 fn get_item_trait(item: ItemTrait) -> proc_macro2::TokenStream {
@@ -177,6 +194,12 @@ fn get_resource_by_trait(
     };
     for fn_item in item.items.iter() {
         if let TraitItem::Fn(item_fn) = fn_item {
+            if item_fn.sig.asyncness.is_none() {
+                return Err(syn::Error::new_spanned(
+                    item_fn,
+                    "RPC methods must be async",
+                ));
+            }
             let resource = get_asset_by_attrs(&item_fn.attrs)?;
             let path = match resource.path {
                 Some(path) => path,
@@ -186,11 +209,18 @@ fn get_resource_by_trait(
                 Some(method) => method,
                 None => parent_method.clone(),
             };
+            validate_method(&method, item_fn.sig.ident.span())?;
             let mut parent_path = parent_path.clone();
             parent_path.push_str(&path);
             let mut fields = vec![];
             for item in &item_fn.sig.inputs {
                 if let FnArg::Typed(input) = item {
+                    if !matches!(input.pat.as_ref(), syn::Pat::Ident(_)) {
+                        return Err(syn::Error::new_spanned(
+                            &input.pat,
+                            "RPC parameters must use identifier patterns",
+                        ));
+                    }
                     let request = &input.pat;
                     let request_type = &input.ty;
                     fields.push((
@@ -203,4 +233,18 @@ fn get_resource_by_trait(
         }
     }
     Ok(method_infos)
+}
+
+fn validate_method(method: &str, span: proc_macro2::Span) -> Result<(), syn::Error> {
+    if matches!(
+        method,
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+    ) {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            span,
+            format!("unsupported HTTP method {method}"),
+        ))
+    }
 }

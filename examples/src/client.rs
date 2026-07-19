@@ -7,12 +7,15 @@ use fusen_common::log::LogConfig;
 use fusen_common::nacos::NacosConfig;
 use fusen_common::nacos::register::NacosRegister;
 use fusen_rs::handler::HandlerLoad;
-use fusen_rs::{client::FusenClientContextBuilder, fusen_internal_common::protocol::Protocol};
+use fusen_rs::{
+    client::{ClientOptions, FusenClientContextBuilder},
+    fusen_internal_common::protocol::WireProtocol,
+};
 use std::sync::Arc;
 use tracing::debug;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _log_work = fusen_common::log::init_log(
         "fusen-client",
         LogConfig {
@@ -34,17 +37,16 @@ async fn main() {
     )
     .unwrap();
     let mut fusen_contet = FusenClientContextBuilder::new()
-        .handler(LogAspect.load())
-        .handler(TimeAspect.load())
-        .handler(TraceAspect::default().load())
-        .handler(CustomLoadBalance.load())
-        .register(Box::new(nacos_register))
-        .builder();
+        .handler(LogAspect.load())?
+        .handler(TimeAspect.load())?
+        .handler(TraceAspect::default().load())?
+        .handler(CustomLoadBalance.load())?
+        .register(nacos_register)
+        .build();
     debug!("-------------------------使用 Host 直接调用-------------------------");
     let client = DemoServiceClient::init(
         &mut fusen_contet,
-        Protocol::Host("http://127.0.0.1:8081".to_string()),
-        Some(vec![
+        ClientOptions::direct("http://127.0.0.1:8081".parse()?).handlers([
             "CustomLoadBalance",
             "TraceAspect",
             "LogAspect",
@@ -55,8 +57,8 @@ async fn main() {
     .unwrap();
     let client_v2 = DemoServiceV2Client::init(
         &mut fusen_contet,
-        Protocol::Host("http://127.0.0.1:8081".to_string()),
-        Some(vec!["TraceAspect", "LogAspect"]),
+        ClientOptions::direct("http://127.0.0.1:8081".parse()?)
+            .handlers(["TraceAspect", "LogAspect"]),
     )
     .await
     .unwrap();
@@ -83,15 +85,17 @@ async fn main() {
     //使用 nacos 为注册中心
     let fusen_client = DemoServiceClient::init(
         &mut fusen_contet,
-        Protocol::Fusen,
-        Some(vec!["TraceAspect", "LogAspect", "TimeAspect"]),
+        ClientOptions::discovery(WireProtocol::Fusen).handlers([
+            "TraceAspect",
+            "LogAspect",
+            "TimeAspect",
+        ]),
     )
     .await
     .unwrap();
     let fusen_client_v2 = DemoServiceV2Client::init(
         &mut fusen_contet,
-        Protocol::Fusen,
-        Some(vec!["TraceAspect", "LogAspect"]),
+        ClientOptions::discovery(WireProtocol::Fusen).handlers(["TraceAspect", "LogAspect"]),
     )
     .await
     .unwrap();
@@ -113,4 +117,5 @@ async fn main() {
             })
             .await
     );
+    Ok(())
 }

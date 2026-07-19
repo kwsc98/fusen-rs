@@ -4,13 +4,13 @@ use examples::{DemoServiceClient, RequestDto};
 use fusen_common::date::get_now_date_time_as_millis;
 use fusen_common::nacos::NacosConfig;
 use fusen_common::nacos::register::NacosRegister;
+use fusen_rs::client::{ClientOptions, FusenClientContextBuilder};
 use fusen_rs::handler::HandlerLoad;
-use fusen_rs::{client::FusenClientContextBuilder, fusen_internal_common::protocol::Protocol};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nacos_register = NacosRegister::init_nacos_register(
         "fusen_client",
         Arc::new(NacosConfig {
@@ -20,14 +20,13 @@ async fn main() {
     )
     .unwrap();
     let mut fusen_contet = FusenClientContextBuilder::new()
-        .handler(LogAspect.load())
-        .handler(TimeAspect.load())
-        .register(Box::new(nacos_register))
-        .builder();
+        .handler(LogAspect.load())?
+        .handler(TimeAspect.load())?
+        .register(nacos_register)
+        .build();
     let fusen_client = DemoServiceClient::init(
         &mut fusen_contet,
-        Protocol::Host("http://127.0.0.1:8081".to_string()),
-        None,
+        ClientOptions::direct("http://127.0.0.1:8081".parse()?),
     )
     .await
     .unwrap();
@@ -54,4 +53,5 @@ async fn main() {
     let _result = r.recv().await;
     let time = get_now_date_time_as_millis() - start_time;
     println!("1000000 次请求 耗时 {} 秒 -- {} 毫秒", time / 1000, time);
+    Ok(())
 }

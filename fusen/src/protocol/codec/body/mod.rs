@@ -5,7 +5,6 @@ use bytes::Bytes;
 use serde_json::Value;
 
 pub mod json;
-pub mod triple;
 
 pub trait RequestBodyCodec {
     fn encode(&self, bodys: LinkedList<Value>) -> Result<Bytes, FusenError>;

@@ -1,5 +1,5 @@
 use crate::error::FusenError;
-use fusen_internal_common::protocol::Protocol;
+use fusen_internal_common::protocol::WireProtocol;
 use http::Method;
 use serde_json::Value;
 use std::{
@@ -15,7 +15,7 @@ pub struct Path {
 
 #[derive(Debug)]
 pub struct FusenRequest {
-    pub protocol: Protocol,
+    pub protocol: WireProtocol,
     pub path: Path,
     pub addr: Option<String>,
     pub querys: HashMap<String, String>,
@@ -27,7 +27,10 @@ pub struct FusenRequest {
 impl FusenRequest {
     pub fn get_bodys(&mut self, fields: &[(&str, &str)]) -> Result<LinkedList<Value>, FusenError> {
         let mut bodys = LinkedList::new();
-        if let Method::POST = self.path.method {
+        if !matches!(
+            self.path.method,
+            Method::GET | Method::DELETE | Method::HEAD
+        ) {
             return Ok(self.bodys.take().unwrap_or_default());
         }
         for (field_name, field_type) in fields {
@@ -43,7 +46,7 @@ impl FusenRequest {
                     } else {
                         serde_json::from_str(value)
                     };
-                    result.map_err(|error| FusenError::Error(Box::new(error)))?
+                    result.map_err(|error| FusenError::InvalidRequest(error.to_string()))?
                 }
                 None => Value::Null,
             };
@@ -53,18 +56,18 @@ impl FusenRequest {
     }
 
     pub fn init_request(
-        protocol: Protocol,
+        protocol: WireProtocol,
         method: &str,
         path: &str,
         field_pats: &[&str],
         mut request_bodys: LinkedList<Value>,
     ) -> Result<Self, FusenError> {
-        let method =
-            Method::from_str(method).map_err(|error| FusenError::Error(Box::new(error)))?;
+        let method = Method::from_str(method)
+            .map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
         let mut bodys = None;
         let mut querys = HashMap::new();
-        if let Method::POST = method {
-            let _ = bodys.insert(request_bodys);
+        if !matches!(method, Method::GET | Method::DELETE | Method::HEAD) {
+            bodys = Some(request_bodys);
         } else {
             for field_pat in field_pats.iter().rev() {
                 let field_name = if let Some(field_pat) = field_pat.strip_prefix("r#") {
@@ -72,7 +75,9 @@ impl FusenRequest {
                 } else {
                     field_pat
                 };
-                let value = request_bodys.pop_back().ok_or(FusenError::Impossible)?;
+                let value = request_bodys.pop_back().ok_or_else(|| {
+                    FusenError::InvalidRequest("request argument count mismatch".into())
+                })?;
                 if value.is_null() {
                     continue;
                 }

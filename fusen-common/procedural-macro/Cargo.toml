@@ -1,0 +1,17 @@
+[package]
+name = "fusen-common-procedural-macro"
+version = "0.9.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+fusen-common-derive-macro.workspace = true
+quote = "1.0.40"
+syn = { version = "2.0.104", features = ["full"] }
+proc-macro2 = "1.0.95"

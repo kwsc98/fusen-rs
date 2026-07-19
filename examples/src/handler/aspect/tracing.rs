@@ -43,7 +43,10 @@ impl Aspect for TraceAspect {
         let result = tokio::spawn(future.instrument(span)).await;
         match result {
             Ok(context) => context,
-            Err(error) => Err(FusenError::Error(Box::new(error))),
+            Err(error) => Err(FusenError::internal(
+                "trace context injection failed",
+                error,
+            )),
         }
     }
 }

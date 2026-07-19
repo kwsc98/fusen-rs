@@ -1,0 +1,5 @@
+error: fusen_service requires a trait implementation
+ --> tests/ui/fusen_service_inherent.rs:6:1
+  |
+6 | impl Demo {}
+  | ^^^^^^^^^^^^
