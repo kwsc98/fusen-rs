@@ -5,7 +5,7 @@
 
 ## 客户端
 
-将 `Protocol::Host(url)` 替换为 `ClientOptions::direct(url.parse()?)`；注册发现使用 `ClientOptions::discovery(WireProtocol::Fusen)`。`FusenClientContextBuilder::build()` 现在返回 `Result`，发现客户端应在结束时调用生成的 `close().await`。
+将 `Protocol::Host(url)` 替换为 `ClientOptions::direct(url.parse()?)`；注册发现使用 `ClientOptions::discovery(WireProtocol::Fusen)`。`FusenClientContextBuilder::build()` 现在返回 `Result`，发现客户端应在结束时调用生成的 `close().await`。`ClientConfig::subscription_close_timeout` 控制调用方等待清理的最长时间，关闭开始后客户端不再接受新调用。
 
 ## 服务端
 
@@ -19,7 +19,9 @@ Dubbo/Triple、`Protocol::Dubbo` 和 Prost codec 已删除。调用方必须使�
 
 ## 注册中心
 
-`Register` 接受 `WireProtocol`，错误源要求 `Send + Sync` 并通过 `Arc` 支持 `Clone`；register/deregister 实现必须幂等。`subscribe` 改为返回 `ServiceSubscription`。调用方通过 `directory()` 读取快照并通过 `close()` 取消远端监听；并发 close 会共享同一清理结果。
+`Register` 接受 `WireProtocol`，错误源要求 `Send + Sync` 并通过 `Arc` 支持 `Clone`；register/deregister 实现必须幂等。`subscribe` 改为返回 `ServiceSubscription`。
+
+注册 provider 使用 `directory_channel(initial)` 获得 `DirectoryWriter` 和只读 `Directory`，listener 只持有 writer。旧的 `Directory::default/get/change/replace` 已删除。订阅 cleanup 使用 `subscription_cleanup()` 获得 closer/cleanup；provider 必须在自己的 executor 上运行 `cleanup.run(unsubscribe_future)`，然后把 closer 交给 `ServiceSubscription::new`。`SubscriptionLifecycle` trait 已删除。
 
 ## 宏与参数
 

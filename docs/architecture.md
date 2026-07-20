@@ -9,7 +9,7 @@ workspace 分为核心 RPC、注册契约、内部共享类型、通用基础设
 
 ## 客户端数据流
 
-生成客户端按 `ParameterInfo` 将参数分到 path/query/body，`ClientEndpoint` 决定 Direct 或 Discovery 寻址，负载均衡器选择快照中的实例，Aspect 链处理上下文。完整调用 timeout 包围负载均衡、中间件、transport 和响应体。非 2xx 响应解析为 `ProblemDetails`。
+生成客户端按 `ParameterInfo` 将参数分到 path/query/body，`ClientEndpoint` 决定 Direct 或 Discovery 寻址，负载均衡器选择快照中的实例，Aspect 链处理上下文。完整调用 timeout 包围负载均衡、中间件、transport 和响应体。Directory 使用独立 reader/writer 保证消费者不能篡改发现快照。非 2xx 响应解析为 `ProblemDetails`。
 
 ## 服务端数据流
 
@@ -17,6 +17,6 @@ workspace 分为核心 RPC、注册契约、内部共享类型、通用基础设
 
 ## 生命周期
 
-启动失败会限时回滚已经注册的实例。停机先停止 accept，再在同一个绝对 deadline 内从注册中心摘除并排空 Hyper 连接。发现与配置订阅支持显式 close 和 Drop 清理。高级重试、熔断和主动健康检查不属于 0.9。
+启动失败会限时回滚已经注册的实例。停机先停止 accept，再在同一个绝对 deadline 内从注册中心摘除并排空 Hyper 连接。发现与配置订阅支持显式 close 和 Drop 清理；cleanup task 由 provider executor 持有，调用方取消等待不会取消清理。高级重试、熔断和主动健康检查不属于 0.9。
 
 关键测试位于路由、codec、Directory 和 server 模块的 `tests` 子模块。

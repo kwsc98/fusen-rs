@@ -1,11 +1,12 @@
 use crate::{error::Error, nacos::NacosConfig};
 use fusen_register::{
-    Register, ServiceSubscription, SubscriptionLifecycle,
-    directory::Directory,
+    Register, ServiceSubscription, SubscriptionCloser,
+    directory::{DirectoryWriter, directory_channel},
     error::RegisterError,
     fusen_internal_common::{
         BoxFuture, protocol::WireProtocol, resource::service::ServiceResource,
     },
+    subscription_cleanup,
 };
 use nacos_sdk::api::{
     naming::{
@@ -18,7 +19,7 @@ use std::{
     future::Future,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 
 const META_SCHEME: &str = "fusen.scheme";
 const META_BASE_PATH: &str = "fusen.base_path";
@@ -109,8 +110,8 @@ impl Register for NacosRegister {
         Box::pin(async move {
             let service_name = get_service_name(&resource, protocol);
             let clusters = Vec::new();
-            let directory = Directory::default();
-            let snapshot_gate = Arc::new(SnapshotGate::new(directory.clone()));
+            let (directory_writer, directory) = directory_channel(Vec::new());
+            let snapshot_gate = Arc::new(SnapshotGate::new(directory_writer));
             let listener: Arc<dyn NamingEventListener> = Arc::new(ServiceChangeListener {
                 snapshot_gate: snapshot_gate.clone(),
             });
@@ -123,24 +124,25 @@ impl Register for NacosRegister {
                 )
                 .await
                 .map_err(RegisterError::provider)?;
-            let lifecycle = Arc::new(NacosSubscriptionLifecycle::new(
-                naming,
-                service_name,
-                resource.group.clone(),
-                clusters,
-                listener,
-            ));
-            let setup_guard = NamingSetupGuard::new(lifecycle);
-            let instances = setup_guard
-                .lifecycle()
-                .naming
-                .select_instances(
-                    setup_guard.lifecycle().service_name.clone(),
-                    resource.group,
-                    setup_guard.lifecycle().clusters.clone(),
-                    false,
-                    true,
-                )
+            let (closer, cleanup) = subscription_cleanup();
+            let cleanup_naming = naming.clone();
+            let cleanup_service_name = service_name.clone();
+            let cleanup_group = resource.group.clone();
+            let cleanup_clusters = clusters.clone();
+            tokio::spawn(cleanup.run(async move {
+                cleanup_naming
+                    .unsubscribe(
+                        cleanup_service_name,
+                        cleanup_group,
+                        cleanup_clusters,
+                        listener,
+                    )
+                    .await
+                    .map_err(RegisterError::provider)
+            }));
+            let setup_guard = NamingSetupGuard::new(closer);
+            let instances = naming
+                .select_instances(service_name, resource.group, clusters, false, true)
                 .await
                 .map_err(RegisterError::provider)?;
             snapshot_gate.initialize(to_service_resources(instances))?;
@@ -187,98 +189,28 @@ where
     result
 }
 
-struct NacosSubscriptionLifecycle {
-    naming: Arc<NamingService>,
-    service_name: String,
-    clusters: Vec<String>,
-    cancel: watch::Sender<bool>,
-    result: watch::Receiver<Option<Result<(), RegisterError>>>,
-}
-
-impl NacosSubscriptionLifecycle {
-    fn new(
-        naming: Arc<NamingService>,
-        service_name: String,
-        group: Option<String>,
-        clusters: Vec<String>,
-        listener: Arc<dyn NamingEventListener>,
-    ) -> Self {
-        let (cancel, mut receiver) = watch::channel(false);
-        let (result_sender, result) = watch::channel(None);
-        let cleanup_naming = naming.clone();
-        let cleanup_service_name = service_name.clone();
-        let cleanup_clusters = clusters.clone();
-        tokio::spawn(async move {
-            if !*receiver.borrow() {
-                let _ = receiver.changed().await;
-            }
-            let result = cleanup_naming
-                .unsubscribe(cleanup_service_name, group, cleanup_clusters, listener)
-                .await
-                .map_err(RegisterError::provider);
-            result_sender.send_replace(Some(result));
-        });
-        Self {
-            naming,
-            service_name,
-            clusters,
-            cancel,
-            result,
-        }
-    }
-}
-
-impl SubscriptionLifecycle for NacosSubscriptionLifecycle {
-    fn request_close(&self) {
-        self.cancel.send_replace(true);
-    }
-
-    fn close(&self) -> BoxFuture<Result<(), RegisterError>> {
-        self.request_close();
-        let mut result = self.result.clone();
-        Box::pin(async move {
-            loop {
-                if let Some(result) = result.borrow().clone() {
-                    return result;
-                }
-                result.changed().await.map_err(|_| {
-                    RegisterError::provider(std::io::Error::other(
-                        "Nacos unsubscribe task ended without a result",
-                    ))
-                })?;
-            }
-        })
-    }
-}
-
 struct NamingSetupGuard {
-    lifecycle: Option<Arc<NacosSubscriptionLifecycle>>,
+    closer: Option<SubscriptionCloser>,
 }
 
 impl NamingSetupGuard {
-    fn new(lifecycle: Arc<NacosSubscriptionLifecycle>) -> Self {
+    fn new(closer: SubscriptionCloser) -> Self {
         Self {
-            lifecycle: Some(lifecycle),
+            closer: Some(closer),
         }
     }
 
-    fn lifecycle(&self) -> &NacosSubscriptionLifecycle {
-        self.lifecycle
-            .as_deref()
-            .expect("setup lifecycle is present until disarmed")
-    }
-
-    fn disarm(mut self) -> Arc<NacosSubscriptionLifecycle> {
-        self.lifecycle
+    fn disarm(mut self) -> SubscriptionCloser {
+        self.closer
             .take()
-            .expect("setup lifecycle is present until disarmed")
+            .expect("setup closer is present until disarmed")
     }
 }
 
 impl Drop for NamingSetupGuard {
     fn drop(&mut self) {
-        if let Some(lifecycle) = &self.lifecycle {
-            lifecycle.request_close();
+        if let Some(closer) = &self.closer {
+            closer.request_close();
         }
     }
 }
@@ -290,14 +222,14 @@ struct SnapshotGateState {
 }
 
 struct SnapshotGate {
-    directory: Directory,
+    writer: DirectoryWriter,
     state: Mutex<SnapshotGateState>,
 }
 
 impl SnapshotGate {
-    fn new(directory: Directory) -> Self {
+    fn new(writer: DirectoryWriter) -> Self {
         Self {
-            directory,
+            writer,
             state: Mutex::new(SnapshotGateState::default()),
         }
     }
@@ -307,7 +239,7 @@ impl SnapshotGate {
             RegisterError::provider(std::io::Error::other("Nacos snapshot gate was poisoned"))
         })?;
         let snapshot = state.pending.take().unwrap_or(initial);
-        self.directory.replace(snapshot)?;
+        self.writer.replace(snapshot);
         state.initialized = true;
         Ok(())
     }
@@ -317,7 +249,8 @@ impl SnapshotGate {
             RegisterError::provider(std::io::Error::other("Nacos snapshot gate was poisoned"))
         })?;
         if state.initialized {
-            self.directory.replace(resources)
+            self.writer.replace(resources);
+            Ok(())
         } else {
             state.pending = Some(resources);
             Ok(())
@@ -556,8 +489,8 @@ mod tests {
 
     #[test]
     fn initialization_event_overrides_stale_snapshot() {
-        let directory = Directory::default();
-        let gate = SnapshotGate::new(directory.clone());
+        let (writer, directory) = directory_channel(Vec::new());
+        let gate = SnapshotGate::new(writer);
         gate.update(vec![resource("http://127.0.0.1:9002")])
             .unwrap();
         gate.initialize(vec![resource("http://127.0.0.1:9001")])
@@ -567,8 +500,8 @@ mod tests {
 
     #[test]
     fn snapshot_gate_keeps_latest_initialization_event_and_live_updates() {
-        let directory = Directory::default();
-        let gate = SnapshotGate::new(directory.clone());
+        let (writer, directory) = directory_channel(Vec::new());
+        let gate = SnapshotGate::new(writer);
         gate.update(vec![resource("http://127.0.0.1:9001")])
             .unwrap();
         gate.update(vec![resource("http://127.0.0.1:9002")])

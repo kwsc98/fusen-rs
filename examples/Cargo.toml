@@ -26,7 +26,13 @@ path = "src/hot_config.rs"
 
 
 [dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
 serde.workspace = true
 serde_json.workspace = true
 

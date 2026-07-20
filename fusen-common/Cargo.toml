@@ -17,7 +17,6 @@ async-utils = ["dep:tokio"]
 config = ["dep:tokio", "dep:toml", "dep:tracing"]
 logging = [
     "dep:chrono",
-    "dep:tokio",
     "dep:tracing",
     "dep:tracing-subscriber",
     "dep:tracing-appender",
@@ -42,7 +41,7 @@ otel = [
 fusen-common-procedural-macro.workspace = true
 fusen-common-derive-macro.workspace = true
 fusen-register = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 chrono = { workspace = true, optional = true }
 serde.workspace = true
 serde_yaml_ng = { workspace = true, optional = true }
@@ -58,3 +57,6 @@ opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

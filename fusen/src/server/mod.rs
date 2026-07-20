@@ -360,7 +360,7 @@ mod tests {
         },
     };
     use fusen_internal_common::BoxFuture;
-    use fusen_register::{ServiceSubscription, directory::Directory, error::RegisterError};
+    use fusen_register::{ServiceSubscription, error::RegisterError};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -418,7 +418,7 @@ mod tests {
             _resource: ServiceResource,
             _protocol: WireProtocol,
         ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
-            Box::pin(async { Ok(ServiceSubscription::local(Directory::default())) })
+            Box::pin(async { Ok(ServiceSubscription::local(Vec::new())) })
         }
     }
 

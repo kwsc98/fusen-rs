@@ -12,6 +12,7 @@
    RUSTDOCFLAGS="-D warnings" cargo +1.97.0 doc --locked --workspace --all-features --no-deps
    cargo +stable check --locked --workspace --all-targets --all-features
    cargo +stable test --locked --workspace --all-features
+   cargo +1.97.0 tree -p fusen-register -e normal,build -e features
    cargo deny check
    cargo audit
    ```

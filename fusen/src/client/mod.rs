@@ -17,11 +17,18 @@ use fusen_internal_common::{
     resource::service::{MethodResource, ParameterResource, ServiceResource},
     utils::uuid::uuid,
 };
-use fusen_register::{Register, ServiceSubscription, directory::Directory};
+use fusen_register::{Register, ServiceSubscription};
 use http::{HeaderValue, Uri, header::HeaderName};
 use http_body_util::BodyExt;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 #[derive(Clone, Debug)]
 /// Selects whether a client calls one absolute URI or uses service discovery.
@@ -41,6 +48,8 @@ pub struct ClientConfig {
     pub request_timeout: Duration,
     /// Maximum time allowed for an initial discovery subscription.
     pub discovery_timeout: Duration,
+    /// Maximum time a caller waits for discovery subscription cleanup.
+    pub subscription_close_timeout: Duration,
     /// Maximum number of response body bytes accepted from a peer.
     pub max_response_body_bytes: usize,
 }
@@ -51,6 +60,7 @@ impl Default for ClientConfig {
             connect_timeout: Duration::from_secs(3),
             request_timeout: Duration::from_secs(10),
             discovery_timeout: Duration::from_secs(5),
+            subscription_close_timeout: Duration::from_secs(5),
             max_response_body_bytes: 2 * 1024 * 1024,
         }
     }
@@ -139,6 +149,7 @@ impl FusenClientContextBuilder {
         if self.config.connect_timeout.is_zero()
             || self.config.request_timeout.is_zero()
             || self.config.discovery_timeout.is_zero()
+            || self.config.subscription_close_timeout.is_zero()
             || self.config.max_response_body_bytes == 0
         {
             return Err(FusenError::InvalidRequest(
@@ -229,11 +240,7 @@ impl FusenClientContext {
         let subscription = match options.endpoint {
             ClientEndpoint::Direct(uri) => {
                 resource.addr = validate_endpoint(&uri)?;
-                let directory = Directory::default();
-                directory.replace(vec![resource]).map_err(|error| {
-                    FusenError::internal("failed to initialize directory", error)
-                })?;
-                ServiceSubscription::local(directory)
+                ServiceSubscription::local(vec![resource])
             }
             ClientEndpoint::Discovery => {
                 let register = self.register.as_ref().ok_or_else(|| {
@@ -255,6 +262,8 @@ impl FusenClientContext {
             handler_controller,
             methods,
             request_timeout: self.config.request_timeout,
+            subscription_close_timeout: self.config.subscription_close_timeout,
+            closed: AtomicBool::new(false),
         })
     }
 }
@@ -267,6 +276,8 @@ pub struct FusenClient {
     handler_controller: HandlerController,
     methods: HashMap<String, Arc<MethodInfo>>,
     request_timeout: Duration,
+    subscription_close_timeout: Duration,
+    closed: AtomicBool,
 }
 
 impl FusenClient {
@@ -276,6 +287,9 @@ impl FusenClient {
         method_name: &str,
         arguments: Vec<Value>,
     ) -> Result<Value, FusenError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(FusenError::ServiceUnavailable("client is closed".into()));
+        }
         tokio::time::timeout(
             self.request_timeout,
             self.invoke_inner(method_name, arguments),
@@ -355,9 +369,10 @@ impl FusenClient {
 
     /// Closes a discovery subscription. Direct clients complete immediately.
     pub async fn close(&self) -> Result<(), FusenError> {
-        self.subscription
-            .close()
+        self.closed.store(true, Ordering::Release);
+        tokio::time::timeout(self.subscription_close_timeout, self.subscription.close())
             .await
+            .map_err(|_| FusenError::Timeout("subscription cleanup deadline exceeded".into()))?
             .map_err(|error| FusenError::internal("failed to close service subscription", error))
     }
 }
@@ -409,11 +424,12 @@ mod tests {
         protocol::fusen::service::{ParameterInfo, ParameterSource, ServiceDesc},
     };
     use fusen_internal_common::{BoxFuture, BoxFutureV2};
-    use fusen_register::error::RegisterError;
+    use fusen_register::{error::RegisterError, subscription_cleanup};
     use http::Method;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
+        sync::Notify,
     };
 
     fn service(method: MethodInfo) -> ServiceInfo {
@@ -459,6 +475,20 @@ mod tests {
     fn rejects_zero_client_limits() {
         let config = ClientConfig {
             request_timeout: Duration::ZERO,
+            ..ClientConfig::default()
+        };
+        assert!(
+            FusenClientContextBuilder::new()
+                .config(config)
+                .build()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_zero_subscription_close_timeout() {
+        let config = ClientConfig {
+            subscription_close_timeout: Duration::ZERO,
             ..ClientConfig::default()
         };
         assert!(
@@ -677,6 +707,51 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct HangingCleanupRegister {
+        release: Arc<Notify>,
+        completed: Arc<Notify>,
+    }
+
+    impl Register for HangingCleanupRegister {
+        fn register(
+            &self,
+            _resource: Arc<ServiceResource>,
+            _protocol: WireProtocol,
+        ) -> BoxFuture<Result<(), RegisterError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn deregister(
+            &self,
+            _resource: Arc<ServiceResource>,
+            _protocol: WireProtocol,
+        ) -> BoxFuture<Result<(), RegisterError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn subscribe(
+            &self,
+            _resource: ServiceResource,
+            _protocol: WireProtocol,
+        ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
+            let release = self.release.clone();
+            let completed = self.completed.clone();
+            Box::pin(async move {
+                let (closer, cleanup) = subscription_cleanup();
+                tokio::spawn(cleanup.run(async move {
+                    release.notified().await;
+                    completed.notify_one();
+                    Ok(())
+                }));
+                Ok(ServiceSubscription::new(
+                    fusen_register::directory::Directory::fixed(Vec::new()),
+                    closer,
+                ))
+            })
+        }
+    }
+
     #[tokio::test]
     async fn discovery_timeout_bounds_initial_subscription() {
         let desc = ServiceDesc::new("slow-discovery", None, None);
@@ -701,6 +776,46 @@ mod tests {
             )
             .await;
         assert!(matches!(result, Err(FusenError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn subscription_close_timeout_marks_client_closed() {
+        let desc = ServiceDesc::new("hanging-cleanup", None, None);
+        let release = Arc::new(Notify::new());
+        let completed = Arc::new(Notify::new());
+        let mut context = FusenClientContextBuilder::new()
+            .config(ClientConfig {
+                subscription_close_timeout: Duration::from_millis(20),
+                ..ClientConfig::default()
+            })
+            .register(HangingCleanupRegister {
+                release: release.clone(),
+                completed: completed.clone(),
+            })
+            .build()
+            .unwrap();
+        let client = context
+            .init_client(
+                service(MethodInfo::new(
+                    desc,
+                    "find".into(),
+                    Method::GET,
+                    "/find".into(),
+                    Vec::new(),
+                )),
+                ClientOptions::discovery(WireProtocol::Fusen),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(client.close().await, Err(FusenError::Timeout(_))));
+        assert!(matches!(
+            client.invoke("find", Vec::new()).await,
+            Err(FusenError::ServiceUnavailable(message)) if message == "client is closed"
+        ));
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), completed.notified())
+            .await
+            .expect("background subscription cleanup did not complete");
     }
 
     #[tokio::test]

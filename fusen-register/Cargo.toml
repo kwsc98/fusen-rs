@@ -15,5 +15,7 @@ license-file.workspace = true
 [dependencies]
 fusen-internal-common.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-tracing.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
