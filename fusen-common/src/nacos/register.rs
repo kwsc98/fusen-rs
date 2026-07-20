@@ -1,6 +1,6 @@
 use crate::{error::Error, nacos::NacosConfig};
 use fusen_register::{
-    Register,
+    Register, ServiceSubscription, SubscriptionLifecycle,
     directory::Directory,
     error::RegisterError,
     fusen_internal_common::{
@@ -14,7 +14,17 @@ use nacos_sdk::api::{
     },
     props::ClientProps,
 };
-use std::sync::Arc;
+use std::{
+    future::Future,
+    sync::{Arc, Mutex},
+};
+use tokio::sync::{oneshot, watch};
+
+const META_SCHEME: &str = "fusen.scheme";
+const META_BASE_PATH: &str = "fusen.base_path";
+const META_SERVICE_ID: &str = "fusen.service_id";
+const META_VERSION: &str = "fusen.version";
+const META_GROUP: &str = "fusen.group";
 
 #[derive(Clone)]
 pub struct NacosRegister {
@@ -51,10 +61,26 @@ impl Register for NacosRegister {
         Box::pin(async move {
             let service_name = get_service_name(&resource, protocol);
             let instance = build_instance(&resource)?;
-            naming
-                .register_instance(service_name, resource.group.clone(), instance)
-                .await
-                .map_err(|error| RegisterError::Error(Box::new(error)))
+            let group = resource.group.clone();
+            let register_naming = naming.clone();
+            let register_service_name = service_name.clone();
+            let register_group = group.clone();
+            let register_instance = instance.clone();
+            cancellation_safe_registration(
+                async move {
+                    register_naming
+                        .register_instance(register_service_name, register_group, register_instance)
+                        .await
+                        .map_err(RegisterError::provider)
+                },
+                move || async move {
+                    naming
+                        .deregister_instance(service_name, group, instance)
+                        .await
+                        .map_err(RegisterError::provider)
+                },
+            )
+            .await
         })
     }
 
@@ -70,7 +96,7 @@ impl Register for NacosRegister {
             naming
                 .deregister_instance(service_name, resource.group.clone(), instance)
                 .await
-                .map_err(|error| RegisterError::Error(Box::new(error)))
+                .map_err(RegisterError::provider)
         })
     }
 
@@ -78,51 +104,240 @@ impl Register for NacosRegister {
         &self,
         resource: ServiceResource,
         protocol: WireProtocol,
-    ) -> BoxFuture<Result<Directory, RegisterError>> {
+    ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
         let naming = self.naming_service.clone();
         Box::pin(async move {
             let service_name = get_service_name(&resource, protocol);
-            let instances = naming
-                .get_all_instances(
-                    service_name.clone(),
-                    resource.group.clone(),
-                    Vec::new(),
-                    false,
-                )
-                .await
-                .map_err(|error| RegisterError::Error(Box::new(error)))?;
+            let clusters = Vec::new();
             let directory = Directory::default();
-            directory.replace(to_service_resources(instances))?;
+            let snapshot_gate = Arc::new(SnapshotGate::new(directory.clone()));
+            let listener: Arc<dyn NamingEventListener> = Arc::new(ServiceChangeListener {
+                snapshot_gate: snapshot_gate.clone(),
+            });
             naming
                 .subscribe(
-                    service_name,
-                    resource.group,
-                    Vec::new(),
-                    Arc::new(ServiceChangeListener {
-                        directory: directory.clone(),
-                    }),
+                    service_name.clone(),
+                    resource.group.clone(),
+                    clusters.clone(),
+                    listener.clone(),
                 )
                 .await
-                .map_err(|error| RegisterError::Error(Box::new(error)))?;
-            Ok(directory)
+                .map_err(RegisterError::provider)?;
+            let lifecycle = Arc::new(NacosSubscriptionLifecycle::new(
+                naming,
+                service_name,
+                resource.group.clone(),
+                clusters,
+                listener,
+            ));
+            let setup_guard = NamingSetupGuard::new(lifecycle);
+            let instances = setup_guard
+                .lifecycle()
+                .naming
+                .select_instances(
+                    setup_guard.lifecycle().service_name.clone(),
+                    resource.group,
+                    setup_guard.lifecycle().clusters.clone(),
+                    false,
+                    true,
+                )
+                .await
+                .map_err(RegisterError::provider)?;
+            snapshot_gate.initialize(to_service_resources(instances))?;
+            Ok(ServiceSubscription::new(directory, setup_guard.disarm()))
         })
+    }
+}
+
+async fn cancellation_safe_registration<R, C, CF>(
+    registration: R,
+    compensation: C,
+) -> Result<(), RegisterError>
+where
+    R: Future<Output = Result<(), RegisterError>> + Send + 'static,
+    C: FnOnce() -> CF + Send + 'static,
+    CF: Future<Output = Result<(), RegisterError>> + Send + 'static,
+{
+    let (result_sender, result_receiver) = oneshot::channel();
+    let (acknowledged_sender, acknowledged_receiver) = oneshot::channel();
+    tokio::spawn(async move {
+        match registration.await {
+            Err(error) => {
+                let _ = result_sender.send(Err(error));
+            }
+            Ok(()) => {
+                let delivered = result_sender.send(Ok(())).is_ok();
+                if delivered && acknowledged_receiver.await.is_ok() {
+                    return;
+                }
+                if let Err(error) = compensation().await {
+                    tracing::error!(?error, "late Nacos registration compensation failed");
+                }
+            }
+        }
+    });
+    let result = result_receiver.await.map_err(|_| {
+        RegisterError::provider(std::io::Error::other(
+            "Nacos registration task ended without a result",
+        ))
+    })?;
+    if result.is_ok() {
+        let _ = acknowledged_sender.send(());
+    }
+    result
+}
+
+struct NacosSubscriptionLifecycle {
+    naming: Arc<NamingService>,
+    service_name: String,
+    clusters: Vec<String>,
+    cancel: watch::Sender<bool>,
+    result: watch::Receiver<Option<Result<(), RegisterError>>>,
+}
+
+impl NacosSubscriptionLifecycle {
+    fn new(
+        naming: Arc<NamingService>,
+        service_name: String,
+        group: Option<String>,
+        clusters: Vec<String>,
+        listener: Arc<dyn NamingEventListener>,
+    ) -> Self {
+        let (cancel, mut receiver) = watch::channel(false);
+        let (result_sender, result) = watch::channel(None);
+        let cleanup_naming = naming.clone();
+        let cleanup_service_name = service_name.clone();
+        let cleanup_clusters = clusters.clone();
+        tokio::spawn(async move {
+            if !*receiver.borrow() {
+                let _ = receiver.changed().await;
+            }
+            let result = cleanup_naming
+                .unsubscribe(cleanup_service_name, group, cleanup_clusters, listener)
+                .await
+                .map_err(RegisterError::provider);
+            result_sender.send_replace(Some(result));
+        });
+        Self {
+            naming,
+            service_name,
+            clusters,
+            cancel,
+            result,
+        }
+    }
+}
+
+impl SubscriptionLifecycle for NacosSubscriptionLifecycle {
+    fn request_close(&self) {
+        self.cancel.send_replace(true);
+    }
+
+    fn close(&self) -> BoxFuture<Result<(), RegisterError>> {
+        self.request_close();
+        let mut result = self.result.clone();
+        Box::pin(async move {
+            loop {
+                if let Some(result) = result.borrow().clone() {
+                    return result;
+                }
+                result.changed().await.map_err(|_| {
+                    RegisterError::provider(std::io::Error::other(
+                        "Nacos unsubscribe task ended without a result",
+                    ))
+                })?;
+            }
+        })
+    }
+}
+
+struct NamingSetupGuard {
+    lifecycle: Option<Arc<NacosSubscriptionLifecycle>>,
+}
+
+impl NamingSetupGuard {
+    fn new(lifecycle: Arc<NacosSubscriptionLifecycle>) -> Self {
+        Self {
+            lifecycle: Some(lifecycle),
+        }
+    }
+
+    fn lifecycle(&self) -> &NacosSubscriptionLifecycle {
+        self.lifecycle
+            .as_deref()
+            .expect("setup lifecycle is present until disarmed")
+    }
+
+    fn disarm(mut self) -> Arc<NacosSubscriptionLifecycle> {
+        self.lifecycle
+            .take()
+            .expect("setup lifecycle is present until disarmed")
+    }
+}
+
+impl Drop for NamingSetupGuard {
+    fn drop(&mut self) {
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.request_close();
+        }
+    }
+}
+
+#[derive(Default)]
+struct SnapshotGateState {
+    initialized: bool,
+    pending: Option<Vec<ServiceResource>>,
+}
+
+struct SnapshotGate {
+    directory: Directory,
+    state: Mutex<SnapshotGateState>,
+}
+
+impl SnapshotGate {
+    fn new(directory: Directory) -> Self {
+        Self {
+            directory,
+            state: Mutex::new(SnapshotGateState::default()),
+        }
+    }
+
+    fn initialize(&self, initial: Vec<ServiceResource>) -> Result<(), RegisterError> {
+        let mut state = self.state.lock().map_err(|_| {
+            RegisterError::provider(std::io::Error::other("Nacos snapshot gate was poisoned"))
+        })?;
+        let snapshot = state.pending.take().unwrap_or(initial);
+        self.directory.replace(snapshot)?;
+        state.initialized = true;
+        Ok(())
+    }
+
+    fn update(&self, resources: Vec<ServiceResource>) -> Result<(), RegisterError> {
+        let mut state = self.state.lock().map_err(|_| {
+            RegisterError::provider(std::io::Error::other("Nacos snapshot gate was poisoned"))
+        })?;
+        if state.initialized {
+            self.directory.replace(resources)
+        } else {
+            state.pending = Some(resources);
+            Ok(())
+        }
     }
 }
 
 #[derive(Clone)]
 struct ServiceChangeListener {
-    directory: Directory,
+    snapshot_gate: Arc<SnapshotGate>,
 }
 
 impl NamingEventListener for ServiceChangeListener {
     fn event(&self, event: Arc<NamingChangeEvent>) {
-        let directory = self.directory.clone();
         let resources = event
             .instances
             .clone()
             .map(to_service_resources)
             .unwrap_or_default();
-        if let Err(error) = directory.replace(resources) {
+        if let Err(error) = self.snapshot_gate.update(resources) {
             tracing::error!(?error, service = %event.service_name, "failed to update service directory");
         }
     }
@@ -131,14 +346,50 @@ impl NamingEventListener for ServiceChangeListener {
 fn to_service_resources(instances: Vec<ServiceInstance>) -> Vec<ServiceResource> {
     instances
         .into_iter()
-        .map(|instance| ServiceResource {
-            addr: format!("http://{}:{}", instance.ip(), instance.port),
-            service_id: instance.service_name.unwrap_or_default(),
-            group: None,
-            version: None,
-            methods: Vec::new(),
-            weight: Some(instance.weight),
-            metadata: instance.metadata,
+        .filter(|instance| instance.healthy && instance.enabled && instance.weight > 0.0)
+        .filter_map(|instance| {
+            let port = u16::try_from(instance.port).ok()?;
+            let host = if instance.ip.parse::<std::net::Ipv6Addr>().is_ok() {
+                format!("[{}]", instance.ip)
+            } else {
+                instance.ip.clone()
+            };
+            let scheme = instance
+                .metadata
+                .get(META_SCHEME)
+                .map(String::as_str)
+                .unwrap_or("http");
+            if !matches!(scheme, "http" | "https") {
+                return None;
+            }
+            let mut url = url::Url::parse(&format!("{scheme}://{host}:{port}")).ok()?;
+            if let Some(path) = instance.metadata.get(META_BASE_PATH) {
+                let mut segments = url.path_segments_mut().ok()?;
+                segments.clear();
+                for segment in path.trim_matches('/').split('/') {
+                    if segment.is_empty() {
+                        continue;
+                    }
+                    let segment = percent_encoding::percent_decode_str(segment)
+                        .decode_utf8()
+                        .ok()?;
+                    segments.push(&segment);
+                }
+            }
+            Some(ServiceResource {
+                addr: url.to_string().trim_end_matches('/').to_owned(),
+                service_id: instance
+                    .metadata
+                    .get(META_SERVICE_ID)
+                    .cloned()
+                    .or(instance.service_name)
+                    .unwrap_or_default(),
+                group: instance.metadata.get(META_GROUP).cloned(),
+                version: instance.metadata.get(META_VERSION).cloned(),
+                methods: Vec::new(),
+                weight: Some(instance.weight),
+                metadata: instance.metadata,
+            })
         })
         .collect()
 }
@@ -162,16 +413,39 @@ pub fn get_service_name(resource: &ServiceResource, protocol: WireProtocol) -> S
 fn build_instance(resource: &ServiceResource) -> Result<ServiceInstance, RegisterError> {
     let url = url::Url::parse(&resource.addr)
         .map_err(|error| RegisterError::InvalidResource(error.to_string()))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(RegisterError::InvalidResource(
+            "advertised URL must use HTTP or HTTPS".into(),
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(RegisterError::InvalidResource(
+            "advertised URL must not contain a query or fragment".into(),
+        ));
+    }
     let ip = url
         .host_str()
         .ok_or_else(|| RegisterError::InvalidResource("advertised URL has no host".into()))?;
     let port = url
         .port_or_known_default()
         .ok_or_else(|| RegisterError::InvalidResource("advertised URL has no port".into()))?;
+    let mut metadata = resource.metadata.clone();
+    metadata.insert(META_SCHEME.into(), url.scheme().into());
+    metadata.insert(META_SERVICE_ID.into(), resource.service_id.clone());
+    if url.path() != "/" && !url.path().is_empty() {
+        metadata.insert(META_BASE_PATH.into(), url.path().into());
+    }
+    if let Some(version) = &resource.version {
+        metadata.insert(META_VERSION.into(), version.clone());
+    }
+    if let Some(group) = &resource.group {
+        metadata.insert(META_GROUP.into(), group.clone());
+    }
     Ok(ServiceInstance {
         ip: ip.to_owned(),
         port: i32::from(port),
-        metadata: resource.metadata.clone(),
+        weight: resource.weight.unwrap_or(1.0),
+        metadata,
         ..Default::default()
     })
 }
@@ -179,6 +453,12 @@ fn build_instance(resource: &ServiceResource) -> Result<ServiceInstance, Registe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    use tokio::sync::Notify;
 
     fn resource(addr: &str) -> ServiceResource {
         ServiceResource {
@@ -212,11 +492,136 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn live_nacos_registration_when_configured() {
-        let Ok(server_addr) = std::env::var("NACOS_ADDR") else {
-            return;
+    #[test]
+    fn filters_unhealthy_instances_and_restores_https_base_path() {
+        let healthy = ServiceInstance {
+            ip: "::1".into(),
+            port: 8443,
+            weight: 2.0,
+            metadata: HashMap::from([
+                (META_SCHEME.into(), "https".into()),
+                (META_BASE_PATH.into(), "/rpc".into()),
+                (META_SERVICE_ID.into(), "demo".into()),
+            ]),
+            ..ServiceInstance::default()
         };
+        let unhealthy = ServiceInstance {
+            healthy: false,
+            ip: "127.0.0.1".into(),
+            port: 8080,
+            ..ServiceInstance::default()
+        };
+        let resources = to_service_resources(vec![unhealthy, healthy]);
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].addr, "https://[::1]:8443/rpc");
+        assert_eq!(resources[0].weight, Some(2.0));
+    }
+
+    #[test]
+    fn preserves_encoded_base_path_without_double_encoding() {
+        let instance = ServiceInstance {
+            ip: "127.0.0.1".into(),
+            port: 8443,
+            metadata: HashMap::from([
+                (META_SCHEME.into(), "https".into()),
+                (META_BASE_PATH.into(), "/api%20v1/a%2Fb".into()),
+                (META_SERVICE_ID.into(), "demo".into()),
+            ]),
+            ..ServiceInstance::default()
+        };
+        let resources = to_service_resources(vec![instance]);
+        assert_eq!(resources[0].addr, "https://127.0.0.1:8443/api%20v1/a%2Fb");
+    }
+
+    #[test]
+    fn ignores_instances_with_non_http_metadata() {
+        let instance = ServiceInstance {
+            ip: "127.0.0.1".into(),
+            port: 21,
+            metadata: HashMap::from([(META_SCHEME.into(), "ftp".into())]),
+            ..ServiceInstance::default()
+        };
+        assert!(to_service_resources(vec![instance]).is_empty());
+    }
+
+    #[test]
+    fn registration_metadata_preserves_address_and_weight() {
+        let mut resource = resource("https://127.0.0.1:8443/rpc");
+        resource.weight = Some(3.0);
+        let instance = build_instance(&resource).unwrap();
+        assert_eq!(instance.weight, 3.0);
+        assert_eq!(instance.metadata[META_SCHEME], "https");
+        assert_eq!(instance.metadata[META_BASE_PATH], "/rpc");
+    }
+
+    #[test]
+    fn initialization_event_overrides_stale_snapshot() {
+        let directory = Directory::default();
+        let gate = SnapshotGate::new(directory.clone());
+        gate.update(vec![resource("http://127.0.0.1:9002")])
+            .unwrap();
+        gate.initialize(vec![resource("http://127.0.0.1:9001")])
+            .unwrap();
+        assert_eq!(directory.snapshot()[0].addr, "http://127.0.0.1:9002");
+    }
+
+    #[test]
+    fn snapshot_gate_keeps_latest_initialization_event_and_live_updates() {
+        let directory = Directory::default();
+        let gate = SnapshotGate::new(directory.clone());
+        gate.update(vec![resource("http://127.0.0.1:9001")])
+            .unwrap();
+        gate.update(vec![resource("http://127.0.0.1:9002")])
+            .unwrap();
+        gate.initialize(vec![resource("http://127.0.0.1:9000")])
+            .unwrap();
+        assert_eq!(directory.snapshot()[0].addr, "http://127.0.0.1:9002");
+        gate.update(vec![resource("http://127.0.0.1:9003")])
+            .unwrap();
+        assert_eq!(directory.snapshot()[0].addr, "http://127.0.0.1:9003");
+    }
+
+    #[tokio::test]
+    async fn late_registration_success_is_compensated_after_caller_cancellation() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let compensated = Arc::new(Notify::new());
+        let compensation_count = Arc::new(AtomicUsize::new(0));
+        let operation = tokio::spawn(cancellation_safe_registration(
+            {
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(())
+                }
+            },
+            {
+                let compensated = compensated.clone();
+                let compensation_count = compensation_count.clone();
+                move || async move {
+                    compensation_count.fetch_add(1, Ordering::SeqCst);
+                    compensated.notify_one();
+                    Ok(())
+                }
+            },
+        ));
+        started.notified().await;
+        operation.abort();
+        let _ = operation.await;
+        release.notify_waiters();
+        tokio::time::timeout(Duration::from_secs(1), compensated.notified())
+            .await
+            .expect("late registration success was not compensated");
+        assert_eq!(compensation_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires NACOS_ADDR and a manually managed Nacos server"]
+    async fn live_nacos_registration_when_configured() {
+        let server_addr = std::env::var("NACOS_ADDR")
+            .expect("set NACOS_ADDR before running the ignored Nacos integration test");
         let register = NacosRegister::init_nacos_register(
             "fusen-test",
             Arc::new(NacosConfig {

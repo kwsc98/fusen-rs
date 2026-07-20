@@ -1,0 +1,5 @@
+error: service id, version, group, method, and path metadata belong on the fusen_trait
+ --> tests/ui/fusen_service_metadata.rs:7:1
+  |
+7 | impl Demo for Service {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^

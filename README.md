@@ -18,7 +18,7 @@ use fusen_rs::{
 };
 
 # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-let mut context = FusenClientContextBuilder::new().build();
+let mut context = FusenClientContextBuilder::new().build()?;
 let options = ClientOptions::direct("http://127.0.0.1:8081".parse()?);
 // Generated clients use: DemoServiceClient::init(&mut context, options).await?;
 

@@ -11,21 +11,32 @@ pub trait RpcService: Send + Sync + FusenFilter {
 
 #[derive(Clone, Default)]
 pub struct RpcServerHandler {
-    cache: HashMap<String, Arc<Box<dyn FusenFilter>>>,
+    cache: HashMap<String, Arc<RpcServiceFilter>>,
+}
+
+struct RpcServiceFilter(Box<dyn RpcService>);
+
+impl FusenFilter for RpcServiceFilter {
+    fn call<'a>(
+        &'a self,
+        join_point: ProceedingJoinPoint,
+    ) -> fusen_internal_common::BoxFutureV2<'a, Result<FusenContext, FusenError>> {
+        self.0.call(join_point)
+    }
 }
 
 impl RpcServerHandler {
     pub fn new(cache: HashMap<String, Box<dyn RpcService>>) -> Self {
-        let mut leak_cache: HashMap<String, Arc<Box<dyn FusenFilter>>> = HashMap::default();
+        let mut leak_cache = HashMap::default();
         for (key, value) in cache {
-            leak_cache.insert(key, Arc::new(value));
+            leak_cache.insert(key, Arc::new(RpcServiceFilter(value)));
         }
         Self { cache: leak_cache }
     }
 
     pub async fn call(
         &self,
-        link: Arc<Vec<Arc<Box<dyn FusenFilter>>>>,
+        link: Arc<Vec<Arc<dyn FusenFilter>>>,
         context: FusenContext,
     ) -> Result<FusenContext, FusenError> {
         let service = self
@@ -34,7 +45,8 @@ impl RpcServerHandler {
             .cloned();
         match service {
             Some(service) => {
-                let join_point = ProceedingJoinPoint::new(link, service, context);
+                let base_filter: Arc<dyn FusenFilter> = service;
+                let join_point = ProceedingJoinPoint::new(link, base_filter, context);
                 join_point.proceed().await
             }
             None => Err(FusenError::RouteNotFound(

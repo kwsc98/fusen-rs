@@ -2,16 +2,22 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{ItemImpl, Type, parse_macro_input};
 
-use crate::HandlerAttr;
+use crate::{HandlerAttr, fusen_crate_path};
 
 pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
     let org_item = parse_macro_input!(item as ItemImpl);
+    let runtime = fusen_crate_path();
     let item_self = &org_item.self_ty;
     let id = match attr.id {
         Some(id) => id,
         None => {
             if let Type::Path(path) = item_self.as_ref() {
-                path.path.segments[0].ident.to_string()
+                let Some(segment) = path.path.segments.last() else {
+                    return syn::Error::new_spanned(&path.path, "handler type path is empty")
+                        .into_compile_error()
+                        .into();
+                };
+                segment.ident.to_string()
             } else {
                 return syn::Error::new_spanned(org_item, "handler must exist impl")
                     .into_compile_error()
@@ -25,19 +31,27 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
             .into_compile_error()
             .into();
     };
-    let (handler_invoker, handler_trait) = match trait_ident.segments[0].ident.to_string().as_str()
-    {
+    let Some(handler_trait_name) = trait_ident
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+    else {
+        return syn::Error::new_spanned(trait_ident, "handler trait path is empty")
+            .into_compile_error()
+            .into();
+    };
+    let (handler_invoker, handler_trait) = match handler_trait_name.as_str() {
         "LoadBalance" => (
-            quote!(fusen_rs::handler::HandlerInvoker::LoadBalance(
-                std::sync::Arc::new(Box::new(self))
+            quote!(#runtime::handler::HandlerInvoker::LoadBalance(
+                std::sync::Arc::new(self)
             ),),
             quote! {
-                impl fusen_rs::handler::loadbalance::LoadBalance_ for #item_self {
-                    fn select_<'a>(
+                impl #runtime::handler::loadbalance::LoadBalanceDyn for #item_self {
+                    fn select_dyn<'a>(
                         &'a self,
-                        context: &'a fusen_rs::protocol::fusen::context::FusenContext,
-                        invokers: std::sync::Arc<Vec<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>>,
-                    ) -> fusen_rs::fusen_internal_common::BoxFutureV2<'a,Result<std::option::Option<std::sync::Arc<fusen_rs::fusen_internal_common::resource::service::ServiceResource>>, fusen_rs::error::FusenError>> {
+                        context: &'a #runtime::protocol::fusen::context::FusenContext,
+                        invokers: std::sync::Arc<Vec<std::sync::Arc<#runtime::fusen_internal_common::resource::service::ServiceResource>>>,
+                    ) -> #runtime::fusen_internal_common::BoxFutureV2<'a,Result<std::option::Option<std::sync::Arc<#runtime::fusen_internal_common::resource::service::ServiceResource>>, #runtime::error::FusenError>> {
                         Box::pin(async move {
                            self.select(context,invokers).await
                         })
@@ -46,17 +60,17 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
             },
         ),
         "Aspect" => (
-            quote!(fusen_rs::handler::HandlerInvoker::Aspect(
-                std::sync::Arc::new(Box::new(self))
+            quote!(#runtime::handler::HandlerInvoker::Aspect(
+                std::sync::Arc::new(self)
             ),),
             quote! {
-                impl fusen_rs::filter::FusenFilter for #item_self {
+                impl #runtime::filter::FusenFilter for #item_self {
                     fn call<'a>(
                         &'a self,
-                        join_point: fusen_rs::filter::ProceedingJoinPoint,
-                    ) -> fusen_rs::fusen_internal_common::BoxFutureV2<'a,Result<fusen_rs::protocol::fusen::context::FusenContext, fusen_rs::error::FusenError>> {
+                        join_point: #runtime::filter::ProceedingJoinPoint,
+                    ) -> #runtime::fusen_internal_common::BoxFutureV2<'a,Result<#runtime::protocol::fusen::context::FusenContext, #runtime::error::FusenError>> {
                         Box::pin(async move {
-                            self.aroud(join_point).await
+                            self.around(join_point).await
                         })
                     }
                 }
@@ -76,9 +90,9 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
 
         #handler_trait
 
-        impl fusen_rs::handler::HandlerLoad for #item_self {
-            fn load(self) -> fusen_rs::handler::Handler {
-                fusen_rs::handler::Handler{
+        impl #runtime::handler::HandlerLoad for #item_self {
+            fn load(self) -> #runtime::handler::Handler {
+                #runtime::handler::Handler{
                     id: #id.to_string(),
                     handler_invoker: #handler_invoker
                 }

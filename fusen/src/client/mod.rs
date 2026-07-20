@@ -8,24 +8,20 @@ use crate::{
         fusen::{
             context::FusenContext,
             request::FusenRequest,
-            service::{MethodInfo, ServiceInfo},
+            service::{MethodInfo, ParameterSource, ServiceInfo},
         },
     },
 };
 use fusen_internal_common::{
     protocol::WireProtocol,
-    resource::service::{MethodResource, ServiceResource},
+    resource::service::{MethodResource, ParameterResource, ServiceResource},
     utils::uuid::uuid,
 };
-use fusen_register::{Register, directory::Directory};
-use http::Uri;
+use fusen_register::{Register, ServiceSubscription, directory::Directory};
+use http::{HeaderValue, Uri, header::HeaderName};
 use http_body_util::BodyExt;
 use serde_json::Value;
-use std::{
-    collections::{HashMap, LinkedList},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 #[derive(Clone, Debug)]
 /// Selects whether a client calls one absolute URI or uses service discovery.
@@ -43,6 +39,8 @@ pub struct ClientConfig {
     pub connect_timeout: Duration,
     /// End-to-end deadline for one HTTP request.
     pub request_timeout: Duration,
+    /// Maximum time allowed for an initial discovery subscription.
+    pub discovery_timeout: Duration,
     /// Maximum number of response body bytes accepted from a peer.
     pub max_response_body_bytes: usize,
 }
@@ -52,6 +50,7 @@ impl Default for ClientConfig {
         Self {
             connect_timeout: Duration::from_secs(3),
             request_timeout: Duration::from_secs(10),
+            discovery_timeout: Duration::from_secs(5),
             max_response_body_bytes: 2 * 1024 * 1024,
         }
     }
@@ -136,19 +135,26 @@ impl FusenClientContextBuilder {
     }
 
     /// Builds a reusable client context and Hyper connection pools.
-    pub fn build(self) -> FusenClientContext {
+    pub fn build(self) -> Result<FusenClientContext, FusenError> {
+        if self.config.connect_timeout.is_zero()
+            || self.config.request_timeout.is_zero()
+            || self.config.discovery_timeout.is_zero()
+            || self.config.max_response_body_bytes == 0
+        {
+            return Err(FusenError::InvalidRequest(
+                "client limits and timeouts must be greater than zero".into(),
+            ));
+        }
         let transport = HttpTransport {
             http_codec: FusenHttpCodec::new(self.config.max_response_body_bytes),
-            http_client: protocol::http::client::HttpClient::new(
-                self.config.connect_timeout,
-                self.config.request_timeout,
-            ),
+            http_client: protocol::http::client::HttpClient::new(self.config.connect_timeout),
         };
-        FusenClientContext {
+        Ok(FusenClientContext {
             register: self.register,
             handler_context: self.handler_context,
-            http_client: Arc::new(Box::new(transport)),
-        }
+            http_client: Arc::new(transport),
+            config: self.config,
+        })
     }
 }
 
@@ -156,7 +162,8 @@ impl FusenClientContextBuilder {
 pub struct FusenClientContext {
     register: Option<Arc<dyn Register>>,
     handler_context: HandlerContext,
-    http_client: Arc<Box<dyn FusenFilter>>,
+    http_client: Arc<dyn FusenFilter>,
+    config: ClientConfig,
 }
 
 impl FusenClientContext {
@@ -166,12 +173,27 @@ impl FusenClientContext {
         service_info: ServiceInfo,
         options: ClientOptions,
     ) -> Result<FusenClient, FusenError> {
+        service_info.validate()?;
         let methods = service_info
             .method_infos
             .iter()
             .cloned()
             .map(|method| (method.method_name.clone(), Arc::new(method)))
             .collect::<HashMap<_, _>>();
+        if options.protocol == WireProtocol::SpringCloud
+            && methods.values().any(|method| {
+                method
+                    .parameters
+                    .iter()
+                    .filter(|parameter| parameter.source == ParameterSource::Body)
+                    .count()
+                    > 1
+            })
+        {
+            return Err(FusenError::InvalidRequest(
+                "SpringCloud services support at most one body parameter per method".into(),
+            ));
+        }
         self.handler_context.load_controller(HandlerInfo {
             service_desc: service_info.service_desc.clone(),
             handlers: options.handlers,
@@ -190,53 +212,61 @@ impl FusenClientContext {
                     method_name: method.method_name.clone(),
                     path: method.path.clone(),
                     method: method.method.to_string(),
+                    parameters: method
+                        .parameters
+                        .iter()
+                        .map(|parameter| ParameterResource {
+                            name: parameter.name.clone(),
+                            source: parameter.source,
+                        })
+                        .collect(),
                 })
                 .collect(),
             addr: String::new(),
             weight: Some(1.0),
             metadata: Default::default(),
         };
-        let directory = match options.endpoint {
+        let subscription = match options.endpoint {
             ClientEndpoint::Direct(uri) => {
-                if uri.scheme().is_none() || uri.authority().is_none() {
-                    return Err(FusenError::InvalidRequest(
-                        "direct endpoint must be an absolute URI".into(),
-                    ));
-                }
-                resource.addr = uri.to_string().trim_end_matches('/').to_owned();
+                resource.addr = validate_endpoint(&uri)?;
                 let directory = Directory::default();
                 directory.replace(vec![resource]).map_err(|error| {
                     FusenError::internal("failed to initialize directory", error)
                 })?;
-                directory
+                ServiceSubscription::local(directory)
             }
-            ClientEndpoint::Discovery => self
-                .register
-                .as_ref()
-                .ok_or_else(|| {
+            ClientEndpoint::Discovery => {
+                let register = self.register.as_ref().ok_or_else(|| {
                     FusenError::ServiceUnavailable("discovery endpoint requires a register".into())
-                })?
-                .subscribe(resource, options.protocol)
+                })?;
+                tokio::time::timeout(
+                    self.config.discovery_timeout,
+                    register.subscribe(resource, options.protocol),
+                )
                 .await
-                .map_err(|error| FusenError::internal("service subscription failed", error))?,
+                .map_err(|_| FusenError::Timeout("service discovery deadline exceeded".into()))?
+                .map_err(|error| FusenError::internal("service subscription failed", error))?
+            }
         };
         Ok(FusenClient {
             http_client: self.http_client.clone(),
             protocol: options.protocol,
-            directory,
+            subscription,
             handler_controller,
             methods,
+            request_timeout: self.config.request_timeout,
         })
     }
 }
 
 /// Runtime owned by one generated service client.
 pub struct FusenClient {
-    http_client: Arc<Box<dyn FusenFilter>>,
+    http_client: Arc<dyn FusenFilter>,
     protocol: WireProtocol,
-    directory: Directory,
+    subscription: ServiceSubscription,
     handler_controller: HandlerController,
     methods: HashMap<String, Arc<MethodInfo>>,
+    request_timeout: Duration,
 }
 
 impl FusenClient {
@@ -244,35 +274,51 @@ impl FusenClient {
     pub async fn invoke(
         &self,
         method_name: &str,
-        method: &str,
-        path: &str,
-        field_pats: &[&str],
-        request_bodies: LinkedList<Value>,
+        arguments: Vec<Value>,
     ) -> Result<Value, FusenError> {
-        let request =
-            FusenRequest::init_request(self.protocol, method, path, field_pats, request_bodies)?;
+        tokio::time::timeout(
+            self.request_timeout,
+            self.invoke_inner(method_name, arguments),
+        )
+        .await
+        .map_err(|_| FusenError::Timeout("client request deadline exceeded".into()))?
+    }
+
+    async fn invoke_inner(
+        &self,
+        method_name: &str,
+        arguments: Vec<Value>,
+    ) -> Result<Value, FusenError> {
         let method_info = self
             .methods
             .get(method_name)
             .ok_or_else(|| FusenError::InvalidRequest(format!("unknown method {method_name}")))?;
+        let mut request = FusenRequest::init_request(self.protocol, method_info, arguments)?;
+        let request_id = uuid();
+        request.headers.insert(
+            HeaderName::from_static("x-request-id"),
+            HeaderValue::from_str(&request_id).map_err(|error| {
+                FusenError::internal("failed to create request ID header", error)
+            })?,
+        );
         let mut context = FusenContext {
-            unique_identifier: uuid(),
+            unique_identifier: request_id,
             metadata: Default::default(),
             method_info: method_info.clone(),
             request,
             response: None,
         };
-        let resources = self.directory.snapshot();
+        let resources = self.subscription.directory().snapshot();
         let load_balance = self
             .handler_controller
             .load_balance
             .as_ref()
             .ok_or_else(|| FusenError::ServiceUnavailable("load balancer is missing".into()))?;
         let resource = load_balance
-            .select_(&context, resources)
+            .select_dyn(&context, resources)
             .await?
             .ok_or_else(|| FusenError::ServiceUnavailable("no healthy service instances".into()))?;
-        context.request.addr = Some(resource.addr.clone());
+        context.request.endpoint = Some(resource.addr.clone());
         let context = ProceedingJoinPoint::new(
             self.handler_controller.aspect.clone(),
             self.http_client.clone(),
@@ -283,22 +329,53 @@ impl FusenClient {
         let response = context.response.ok_or_else(|| {
             FusenError::ServiceUnavailable("transport returned no response".into())
         })?;
-        if !(200..300).contains(&response.http_status.status) {
+        if !response.http_status.status.is_success() {
             if let Some(body) = response.body
-                && let Ok(problem) = serde_json::from_value::<ProblemDetails>(body)
+                && let Ok(mut problem) = serde_json::from_value::<ProblemDetails>(body)
             {
+                problem.status = response.http_status.status.as_u16();
                 return Err(FusenError::Remote(Box::new(problem)));
             }
-            return Err(FusenError::Application {
-                status: response.http_status.status,
-                code: "remote_error".into(),
-                message: "remote service returned an error".into(),
-            });
+            return Err(FusenError::application(
+                response.http_status.status,
+                "remote_error",
+                "remote service returned an error",
+            )
+            .unwrap_or_else(|_| {
+                FusenError::InvalidResponse(format!(
+                    "remote service returned unexpected HTTP status {}",
+                    response.http_status.status
+                ))
+            }));
         }
         response
             .body
-            .ok_or_else(|| FusenError::InvalidRequest("successful response body is empty".into()))
+            .ok_or_else(|| FusenError::InvalidResponse("successful response body is empty".into()))
     }
+
+    /// Closes a discovery subscription. Direct clients complete immediately.
+    pub async fn close(&self) -> Result<(), FusenError> {
+        self.subscription
+            .close()
+            .await
+            .map_err(|error| FusenError::internal("failed to close service subscription", error))
+    }
+}
+
+fn validate_endpoint(uri: &Uri) -> Result<String, FusenError> {
+    let url = url::Url::parse(&uri.to_string())
+        .map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(FusenError::InvalidRequest(
+            "direct endpoint must be an absolute HTTP(S) URI".into(),
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(FusenError::InvalidRequest(
+            "direct endpoint must not contain a query or fragment".into(),
+        ));
+    }
+    Ok(url.to_string().trim_end_matches('/').to_owned())
 }
 
 struct HttpTransport {
@@ -320,5 +397,439 @@ impl FusenFilter for HttpTransport {
             );
             Ok(context)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        filter::ProceedingJoinPoint,
+        handler::{Handler, HandlerInvoker, loadbalance::LoadBalanceDyn},
+        protocol::fusen::service::{ParameterInfo, ParameterSource, ServiceDesc},
+    };
+    use fusen_internal_common::{BoxFuture, BoxFutureV2};
+    use fusen_register::error::RegisterError;
+    use http::Method;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    fn service(method: MethodInfo) -> ServiceInfo {
+        ServiceInfo::new(method.service_desc.clone(), vec![method])
+    }
+
+    async fn spring_client(
+        endpoint: String,
+        request_timeout: Duration,
+        method: MethodInfo,
+    ) -> FusenClient {
+        let mut context = FusenClientContextBuilder::new()
+            .config(ClientConfig {
+                request_timeout,
+                ..ClientConfig::default()
+            })
+            .build()
+            .unwrap();
+        context
+            .init_client(
+                service(method),
+                ClientOptions {
+                    endpoint: ClientEndpoint::Direct(endpoint.parse().unwrap()),
+                    protocol: WireProtocol::SpringCloud,
+                    handlers: Vec::new(),
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn read_headers(stream: &mut tokio::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        String::from_utf8(request).unwrap()
+    }
+
+    #[test]
+    fn rejects_zero_client_limits() {
+        let config = ClientConfig {
+            request_timeout: Duration::ZERO,
+            ..ClientConfig::default()
+        };
+        assert!(
+            FusenClientContextBuilder::new()
+                .config(config)
+                .build()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn spring_http1_preserves_path_and_query_arguments() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_headers(&mut stream).await;
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\"ok\"",
+                )
+                .await
+                .unwrap();
+            request
+        });
+        let desc = ServiceDesc::new("spring", None, None);
+        let client = spring_client(
+            format!("http://{addr}/api"),
+            Duration::from_secs(1),
+            MethodInfo::new(
+                desc,
+                "find".into(),
+                Method::GET,
+                "/users/{id}".into(),
+                vec![
+                    ParameterInfo::new("id", ParameterSource::Path),
+                    ParameterInfo::new("filter", ParameterSource::Query),
+                ],
+            ),
+        )
+        .await;
+        let value = client
+            .invoke(
+                "find",
+                vec![serde_json::json!("a/b"), serde_json::json!("x y")],
+            )
+            .await
+            .unwrap();
+        assert_eq!(value, serde_json::json!("ok"));
+        let request = server.await.unwrap();
+        assert!(request.starts_with("GET /api/users/a%2Fb?filter=x+y HTTP/1.1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn request_timeout_includes_streaming_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_headers(&mut stream).await;
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let _ = stream.write_all(b"\"ok\"").await;
+        });
+        let desc = ServiceDesc::new("slow", None, None);
+        let client = spring_client(
+            format!("http://{addr}"),
+            Duration::from_millis(30),
+            MethodInfo::new(desc, "slow".into(), Method::GET, "/slow".into(), Vec::new()),
+        )
+        .await;
+        let error = client.invoke("slow", Vec::new()).await.unwrap_err();
+        assert!(matches!(error, FusenError::Timeout(_)));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn request_timeout_includes_response_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_headers(&mut stream).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\n\r\n\"ok\"",
+                )
+                .await;
+        });
+        let desc = ServiceDesc::new("slow-headers", None, None);
+        let client = spring_client(
+            format!("http://{addr}"),
+            Duration::from_millis(30),
+            MethodInfo::new(desc, "slow".into(), Method::GET, "/slow".into(), Vec::new()),
+        )
+        .await;
+        assert!(matches!(
+            client.invoke("slow", Vec::new()).await,
+            Err(FusenError::Timeout(_))
+        ));
+        server.abort();
+    }
+
+    struct SlowLoadBalance;
+
+    impl LoadBalanceDyn for SlowLoadBalance {
+        fn select_dyn<'a>(
+            &'a self,
+            _context: &'a FusenContext,
+            _invokers: Arc<Vec<Arc<ServiceResource>>>,
+        ) -> BoxFutureV2<'a, Result<Option<Arc<ServiceResource>>, FusenError>> {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Ok(None)
+            })
+        }
+    }
+
+    struct SlowAspect;
+
+    impl FusenFilter for SlowAspect {
+        fn call<'a>(
+            &'a self,
+            join_point: ProceedingJoinPoint,
+        ) -> BoxFutureV2<'a, Result<FusenContext, FusenError>> {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                join_point.proceed().await
+            })
+        }
+    }
+
+    async fn client_with_handler(handler: Handler) -> FusenClient {
+        let desc = ServiceDesc::new("slow-handler", None, None);
+        let mut context = FusenClientContextBuilder::new()
+            .config(ClientConfig {
+                request_timeout: Duration::from_millis(30),
+                ..ClientConfig::default()
+            })
+            .handler(handler)
+            .unwrap()
+            .build()
+            .unwrap();
+        context
+            .init_client(
+                service(MethodInfo::new(
+                    desc,
+                    "slow".into(),
+                    Method::GET,
+                    "/slow".into(),
+                    Vec::new(),
+                )),
+                ClientOptions::direct("http://127.0.0.1:1".parse().unwrap()).handlers(["slow"]),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn request_timeout_includes_load_balancing() {
+        let client = client_with_handler(Handler {
+            id: "slow".into(),
+            handler_invoker: HandlerInvoker::LoadBalance(Arc::new(SlowLoadBalance)),
+        })
+        .await;
+        assert!(matches!(
+            client.invoke("slow", Vec::new()).await,
+            Err(FusenError::Timeout(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn request_timeout_includes_aspects() {
+        let client = client_with_handler(Handler {
+            id: "slow".into(),
+            handler_invoker: HandlerInvoker::Aspect(Arc::new(SlowAspect)),
+        })
+        .await;
+        assert!(matches!(
+            client.invoke("slow", Vec::new()).await,
+            Err(FusenError::Timeout(_))
+        ));
+    }
+
+    struct HangingRegister;
+
+    impl Register for HangingRegister {
+        fn register(
+            &self,
+            _resource: Arc<ServiceResource>,
+            _protocol: WireProtocol,
+        ) -> BoxFuture<Result<(), RegisterError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn deregister(
+            &self,
+            _resource: Arc<ServiceResource>,
+            _protocol: WireProtocol,
+        ) -> BoxFuture<Result<(), RegisterError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn subscribe(
+            &self,
+            _resource: ServiceResource,
+            _protocol: WireProtocol,
+        ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_timeout_bounds_initial_subscription() {
+        let desc = ServiceDesc::new("slow-discovery", None, None);
+        let mut context = FusenClientContextBuilder::new()
+            .config(ClientConfig {
+                discovery_timeout: Duration::from_millis(30),
+                ..ClientConfig::default()
+            })
+            .register(HangingRegister)
+            .build()
+            .unwrap();
+        let result = context
+            .init_client(
+                service(MethodInfo::new(
+                    desc,
+                    "find".into(),
+                    Method::GET,
+                    "/find".into(),
+                    Vec::new(),
+                )),
+                ClientOptions::discovery(WireProtocol::Fusen),
+            )
+            .await;
+        assert!(matches!(result, Err(FusenError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn spring_http1_sends_one_body_argument_as_raw_json() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let headers = read_headers(&mut stream).await;
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|value| value.parse::<usize>().ok())
+                })
+                .unwrap();
+            let mut body = vec![0; content_length];
+            stream.read_exact(&mut body).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\"ok\"",
+                )
+                .await
+                .unwrap();
+            (headers, body)
+        });
+        let desc = ServiceDesc::new("spring", None, None);
+        let client = spring_client(
+            format!("http://{addr}/api"),
+            Duration::from_secs(1),
+            MethodInfo::new(
+                desc,
+                "create".into(),
+                Method::POST,
+                "/orders".into(),
+                vec![ParameterInfo::new("order", ParameterSource::Body)],
+            ),
+        )
+        .await;
+        client
+            .invoke("create", vec![serde_json::json!({ "name": "demo" })])
+            .await
+            .unwrap();
+        let (headers, body) = server.await.unwrap();
+        assert!(headers.starts_with("POST /api/orders HTTP/1.1\r\n"));
+        assert_eq!(body, br#"{"name":"demo"}"#);
+    }
+
+    #[tokio::test]
+    async fn spring_http1_decodes_problem_details() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_headers(&mut stream).await;
+            let body = br#"{"type":"https://example.test/problems/rejected","title":"Conflict","status":409,"detail":"rejected","code":"rejected","request_id":"remote-1"}"#;
+            let response = format!(
+                "HTTP/1.1 422 Unprocessable Entity\r\nContent-Type: application/problem+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.write_all(body).await.unwrap();
+        });
+        let desc = ServiceDesc::new("spring-error", None, None);
+        let client = spring_client(
+            format!("http://{addr}"),
+            Duration::from_secs(1),
+            MethodInfo::new(desc, "find".into(), Method::GET, "/find".into(), Vec::new()),
+        )
+        .await;
+        let error = client.invoke("find", Vec::new()).await.unwrap_err();
+        assert!(matches!(
+            error,
+            FusenError::Remote(problem) if problem.status == 422 && problem.code == "rejected"
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn successful_response_without_json_body_is_invalid_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_headers(&mut stream).await;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let desc = ServiceDesc::new("empty-success", None, None);
+        let client = spring_client(
+            format!("http://{addr}"),
+            Duration::from_secs(1),
+            MethodInfo::new(desc, "find".into(), Method::GET, "/find".into(), Vec::new()),
+        )
+        .await;
+        assert!(matches!(
+            client.invoke("find", Vec::new()).await,
+            Err(FusenError::InvalidResponse(_))
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn spring_rejects_multiple_body_parameters_during_initialization() {
+        let desc = ServiceDesc::new("spring", None, None);
+        let method = MethodInfo::new(
+            desc,
+            "invalid".into(),
+            Method::POST,
+            "/invalid".into(),
+            vec![
+                ParameterInfo::new("left", ParameterSource::Body),
+                ParameterInfo::new("right", ParameterSource::Body),
+            ],
+        );
+        let mut context = FusenClientContextBuilder::new().build().unwrap();
+        let result = context
+            .init_client(
+                service(method),
+                ClientOptions {
+                    endpoint: ClientEndpoint::Direct("http://127.0.0.1:1".parse().unwrap()),
+                    protocol: WireProtocol::SpringCloud,
+                    handlers: Vec::new(),
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(FusenError::InvalidRequest(_))));
     }
 }

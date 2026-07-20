@@ -3,6 +3,6 @@
 > English summary: JSON is the only body codec in 0.9; body frames are read
 > incrementally with a hard byte limit.
 
-HTTP/2 用于 Fusen，HTTP/1.1 用于 SpringCloud。JSON 请求支持单参数对象和多参数数组；GET/DELETE/HEAD 使用 query，其余方法使用 body。读取 frame 失败立即终止，累计大小超过限制返回 413。
+HTTP/2 用于 Fusen，HTTP/1.1 用于 SpringCloud。路径模板参数始终进入 URL path；GET/DELETE/HEAD 的其余参数进入 query；其他参数进入 body。Fusen 的零/单/多 body 参数分别编码为空、原始 JSON、精确长度 JSON 数组；SpringCloud 最多允许一个 body 参数。
 
-`application/json` 与 `application/problem+json` 可解码；`application/grpc` 固定返回 415。路径参数和 query 均进行百分号编码。codec tests 覆盖超限与禁用协议。
+所有请求和响应 body 都逐 frame 读取并受硬字节上限约束。`application/json` 与 `application/problem+json` 通过 MIME 解析；请求中的重复、非法或非 JSON Content-Type（包括 `application/grpc`）返回 415，响应中的对应问题统一映射为 `InvalidResponse`。URI 使用结构化 URL API，路径参数按 segment 编码并在服务端解码，query 支持重复字段。

@@ -8,7 +8,7 @@ use crate::{
 
 #[allow(async_fn_in_trait)]
 pub trait Aspect {
-    async fn aroud(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError>;
+    async fn around(&self, join_point: ProceedingJoinPoint) -> Result<FusenContext, FusenError>;
 }
 
 pub struct DefaultAspect;

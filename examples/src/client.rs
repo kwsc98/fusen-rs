@@ -1,5 +1,4 @@
 use examples::handler::aspect::log::LogAspect;
-use examples::handler::aspect::time::TimeAspect;
 use examples::handler::aspect::tracing::TraceAspect;
 use examples::handler::loadbalance::custom::CustomLoadBalance;
 use examples::{DemoServiceClient, DemoServiceV2Client, RequestDto};
@@ -20,29 +19,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "fusen-client",
         LogConfig {
             level: "debug".to_string(),
-            path: Some("log".to_string()),
-            endpoint: Some("http://127.0.0.1:4317".to_string()),
+            path: None,
+            endpoint: None,
             env_filter: Some(
                 "client={level},examples::handler={level},fusen_rs={level},fusen_common={level}"
                     .to_string(),
             ),
         },
     );
-    let nacos_register = NacosRegister::init_nacos_register(
-        "fusen_client",
-        Arc::new(NacosConfig {
-            server_addr: "127.0.0.1:8848".to_string(),
-            ..Default::default()
-        }),
-    )
-    .unwrap();
     let mut fusen_contet = FusenClientContextBuilder::new()
         .handler(LogAspect.load())?
-        .handler(TimeAspect.load())?
         .handler(TraceAspect::default().load())?
         .handler(CustomLoadBalance.load())?
-        .register(nacos_register)
-        .build();
+        .build()?;
     debug!("-------------------------使用 Host 直接调用-------------------------");
     let client = DemoServiceClient::init(
         &mut fusen_contet,
@@ -50,72 +39,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "CustomLoadBalance",
             "TraceAspect",
             "LogAspect",
-            "TimeAspect",
         ]),
     )
-    .await
-    .unwrap();
+    .await?;
     let client_v2 = DemoServiceV2Client::init(
         &mut fusen_contet,
         ClientOptions::direct("http://127.0.0.1:8081".parse()?)
             .handlers(["TraceAspect", "LogAspect"]),
     )
-    .await
-    .unwrap();
-    debug!("{:?}", client.sayHelloV4().await);
-    debug!("{:?}", client.divideV2(1, 2).await);
-    debug!("{:?}", client.sayHello("test1".to_owned()).await);
-    debug!(
-        "{:?}",
-        client
-            .sayHelloV2(RequestDto {
-                str: "test2".to_string()
-            })
-            .await
-    );
-    debug!(
-        "{:?}",
-        client_v2
-            .sayHelloV3(RequestDto {
-                str: "test3".to_string()
-            })
-            .await
-    );
-    debug!("-------------------------使用 Nacos 作为注册中心-------------------------");
-    //使用 nacos 为注册中心
-    let fusen_client = DemoServiceClient::init(
-        &mut fusen_contet,
-        ClientOptions::discovery(WireProtocol::Fusen).handlers([
-            "TraceAspect",
-            "LogAspect",
-            "TimeAspect",
-        ]),
-    )
-    .await
-    .unwrap();
-    let fusen_client_v2 = DemoServiceV2Client::init(
-        &mut fusen_contet,
-        ClientOptions::discovery(WireProtocol::Fusen).handlers(["TraceAspect", "LogAspect"]),
-    )
-    .await
-    .unwrap();
-    debug!("{:?}", fusen_client.divideV2(1, 2).await);
-    debug!("{:?}", fusen_client.sayHello("test1".to_owned()).await);
-    debug!(
-        "{:?}",
-        fusen_client
-            .sayHelloV2(RequestDto {
-                str: "test2".to_string()
-            })
-            .await
-    );
-    debug!(
-        "{:?}",
-        fusen_client_v2
-            .sayHelloV3(RequestDto {
-                str: "test3".to_string()
-            })
-            .await
-    );
+    .await?;
+    client.sayHelloV4().await?;
+    client.divideV2(1, 2).await?;
+    client.sayHello("test1".to_owned()).await?;
+    client
+        .sayHelloV2(RequestDto {
+            str: "test2".into(),
+        })
+        .await?;
+    client_v2
+        .sayHelloV3(RequestDto {
+            str: "test3".into(),
+        })
+        .await?;
+
+    if let Ok(server_addr) = std::env::var("NACOS_ADDR") {
+        debug!("-------------------------使用 Nacos 作为注册中心-------------------------");
+        let register = NacosRegister::init_nacos_register(
+            "fusen_client",
+            Arc::new(NacosConfig {
+                server_addr,
+                ..Default::default()
+            }),
+        )?;
+        let mut discovery_context = FusenClientContextBuilder::new()
+            .handler(LogAspect.load())?
+            .handler(TraceAspect::default().load())?
+            .register(register)
+            .build()?;
+        let discovered = DemoServiceClient::init(
+            &mut discovery_context,
+            ClientOptions::discovery(WireProtocol::Fusen).handlers(["TraceAspect", "LogAspect"]),
+        )
+        .await?;
+        discovered.sayHello("discovery".into()).await?;
+        discovered.close().await?;
+    }
+    client.close().await?;
+    client_v2.close().await?;
     Ok(())
 }

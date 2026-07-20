@@ -11,15 +11,15 @@ pub trait FusenFilter: Send + Sync {
 
 pub struct ProceedingJoinPoint {
     index: usize,
-    link: Arc<Vec<Arc<Box<dyn FusenFilter>>>>,
-    base_filter: Option<Arc<Box<dyn FusenFilter>>>,
+    link: Arc<Vec<Arc<dyn FusenFilter>>>,
+    base_filter: Option<Arc<dyn FusenFilter>>,
     pub context: FusenContext,
 }
 
 impl ProceedingJoinPoint {
     pub fn new(
-        link: Arc<Vec<Arc<Box<dyn FusenFilter>>>>,
-        base_filter: Arc<Box<dyn FusenFilter>>,
+        link: Arc<Vec<Arc<dyn FusenFilter>>>,
+        base_filter: Arc<dyn FusenFilter>,
         context: FusenContext,
     ) -> Self {
         Self {

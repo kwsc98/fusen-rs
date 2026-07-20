@@ -2,7 +2,7 @@
 
 `fusen-rs` 是面向 Rust 微服务的异步 RPC 框架，通过过程宏生成客户端和服务端适配代码，支持 JSON over HTTP/1.1、HTTP/2、Direct 寻址、Nacos 注册发现、中间件与优雅停机。
 
-0.9 的重点是可靠性契约：有界请求体、客户端和服务端 deadline、并发限制、启动注册回滚、RFC 9457 错误、确定性路由以及可等待的连接排空。Dubbo Triple 在本版本明确禁用，不再声明不完整的兼容能力。
+0.9 的重点是可靠性契约：所有 body 有界、完整客户端 deadline、请求与连接并发限制、启动注册回滚、RFC 9457 错误、静态优先路由、可关闭发现订阅以及有总期限的连接排空。Dubbo Triple 在本版本明确禁用。
 
 ## 文档导航
 
@@ -20,7 +20,7 @@
 use fusen_rs::client::{ClientOptions, FusenClientContextBuilder};
 
 # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-let mut context = FusenClientContextBuilder::new().build();
+let mut context = FusenClientContextBuilder::new().build()?;
 let options = ClientOptions::direct("http://127.0.0.1:8081".parse()?);
 // let client = DemoServiceClient::init(&mut context, options).await?;
 # let _ = (context, options);

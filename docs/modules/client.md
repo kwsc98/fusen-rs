@@ -9,8 +9,10 @@
 
 ## 状态、并发与错误
 
-客户端和 Hyper 连接池可安全共享；Directory 读取不可变快照。Direct URI 必须包含 scheme 和 authority。默认连接超时 3 秒、请求超时 10 秒、响应体上限 2 MiB。无实例返回 503 语义，deadline 返回 504 语义，非 2xx Problem Details 还原为 `FusenError::Remote`。
+客户端和 Hyper 连接池可安全共享；Directory 读取不可变快照。Direct URL 只允许 HTTP(S)，可包含 base path，不允许 query/fragment。默认连接超时 3 秒、完整调用超时 10 秒、发现超时 5 秒、响应体上限 2 MiB；配置零值在 `build` 时失败。
+
+完整调用 timeout 覆盖负载均衡、Aspect、DNS/TLS、响应头和响应体。非 2xx Problem Details 还原为 `FusenError::Remote`。发现客户端通过生成的 `close` 显式取消订阅，最后引用释放也会触发后台清理。
 
 ## 扩展与测试
 
-负载均衡和 Aspect 是扩展点；0.9 不自动重试。客户端错误还原由 codec/error 单元测试和 examples 验证。
+负载均衡和 Aspect 是扩展点；0.9 不自动重试。测试覆盖慢流式响应、Spring HTTP/1.1、path/query 编码和错误还原。

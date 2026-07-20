@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Attribute, Data, DeriveInput, Fields, Meta, parse_macro_input};
 
-pub fn debug(item: TokenStream) -> TokenStream {
+pub fn debug(item: TokenStream, runtime: proc_macro2::TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     let ident = &input.ident;
     let Data::Struct(data) = &input.data else {
@@ -29,7 +29,7 @@ pub fn debug(item: TokenStream) -> TokenStream {
         if strategy.ignore.is_some() {
             fields.push(quote! { .field(#name, &"...") });
         } else if strategy.mask.is_some() {
-            fields.push(quote! { .field(#name, &fusen_common::string::mask_str(&format!("{:?}", self.#field_ident))) });
+            fields.push(quote! { .field(#name, &#runtime::string::mask_str(&format!("{:?}", self.#field_ident))) });
         } else if let Some(limit) = strategy.limit {
             let Ok(limit) = limit.parse::<usize>() else {
                 return syn::Error::new_spanned(
@@ -39,7 +39,7 @@ pub fn debug(item: TokenStream) -> TokenStream {
                 .into_compile_error()
                 .into();
             };
-            fields.push(quote! { .field(#name, &fusen_common::string::limit_str(&format!("{:?}", self.#field_ident), #limit)) });
+            fields.push(quote! { .field(#name, &#runtime::string::limit_str(&format!("{:?}", self.#field_ident), #limit)) });
         } else {
             fields.push(quote! { .field(#name, &self.#field_ident) });
         }

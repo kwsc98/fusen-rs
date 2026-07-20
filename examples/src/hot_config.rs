@@ -18,7 +18,7 @@ pub struct CloudConfig {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: CloudConfig = CloudConfig {
         config: "config".to_string(),
         username: "kwsc98".to_string(),
@@ -29,22 +29,25 @@ async fn main() {
     println!("{config:?}");
     //nacos热配置
     let config = NacosConfig {
-        server_addr: "127.0.0.1:8848".to_string(),
+        server_addr: std::env::var("NACOS_ADDR")?,
         namespace: None,
         username: None,
         password: None,
     };
-    let config = NacosConfiguration::init_nacos_configuration(Arc::new(config))
-        .await
-        .unwrap();
+    let config = NacosConfiguration::init_nacos_configuration(Arc::new(config)).await?;
     //可直接导入nacos : examples/resource/nacos_config_export_20250928160704.zip
     let cloud_config: ConfigManager<CloudConfig> = config
         .get_config_manager("application-config1", "DEFAULT_GROUP")
-        .await
-        .unwrap();
-    println!("{:?}", cloud_config.get_hot_config().await);
+        .await?;
+    println!("{:?}", cloud_config.get_hot_config());
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        println!("{:?}", cloud_config.get_hot_config().await);
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                println!("{:?}", cloud_config.get_hot_config());
+            }
+        }
     }
+    cloud_config.close().await?;
+    Ok(())
 }

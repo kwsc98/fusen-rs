@@ -17,7 +17,12 @@ impl LoadBalance for CustomLoadBalance {
         context: &FusenContext,
         invokers: Arc<Vec<Arc<ServiceResource>>>,
     ) -> Result<Option<Arc<ServiceResource>>, FusenError> {
-        debug!("Start CustomLoadBalance : {context:?}");
+        debug!(
+            request_id = %context.unique_identifier,
+            method = %context.request.path.method,
+            path = %context.request.path.path,
+            "load balancing request"
+        );
         if invokers.is_empty() {
             return Ok(None);
         }

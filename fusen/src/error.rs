@@ -1,5 +1,44 @@
+use http::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use thiserror::Error;
+
+/// A validated application failure that can be returned over HTTP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationError {
+    status: StatusCode,
+    code: String,
+    message: String,
+}
+
+impl ApplicationError {
+    /// Returns the validated 4xx or 5xx HTTP status.
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    /// Returns the stable machine-readable application code.
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Returns the public application error description.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl Display for ApplicationError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "application error {}: {}",
+            self.code, self.message
+        )
+    }
+}
+
+impl std::error::Error for ApplicationError {}
 
 /// RFC 9457 problem details returned by the HTTP transport.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -29,6 +68,9 @@ pub enum FusenError {
     /// Request syntax or argument conversion failed.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// A peer returned a malformed or unsupported response.
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
     /// No service method matches the request route.
     #[error("route not found: {0}")]
     RouteNotFound(String),
@@ -48,15 +90,8 @@ pub enum FusenError {
     #[error("request timed out: {0}")]
     Timeout(String),
     /// Stable error intentionally returned by application code.
-    #[error("application error {code}: {message}")]
-    Application {
-        /// HTTP status returned to the caller.
-        status: u16,
-        /// Stable machine-readable application code.
-        code: String,
-        /// Public application error description.
-        message: String,
-    },
+    #[error("{0}")]
+    Application(ApplicationError),
     /// RFC 9457 error returned by a remote service.
     #[error("remote error {0:?}")]
     Remote(Box<ProblemDetails>),
@@ -72,6 +107,24 @@ pub enum FusenError {
 }
 
 impl FusenError {
+    /// Creates a validated application error with a 4xx or 5xx status.
+    pub fn application(
+        status: StatusCode,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Result<Self, Self> {
+        if !status.is_client_error() && !status.is_server_error() {
+            return Err(Self::InvalidRequest(format!(
+                "application error status must be 4xx or 5xx, got {status}"
+            )));
+        }
+        Ok(Self::Application(ApplicationError {
+            status,
+            code: code.into(),
+            message: message.into(),
+        }))
+    }
+
     /// Wraps a thread-safe source as a non-public internal error.
     pub fn internal<E>(message: &'static str, source: E) -> Self
     where
@@ -84,17 +137,20 @@ impl FusenError {
     }
 
     /// Returns the HTTP status associated with this error.
-    pub fn status(&self) -> u16 {
+    pub fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidRequest(_) => 400,
-            Self::RouteNotFound(_) => 404,
-            Self::PayloadTooLarge { .. } => 413,
-            Self::UnsupportedProtocol(_) => 415,
-            Self::ServiceUnavailable(_) => 503,
-            Self::Timeout(_) => 504,
-            Self::Application { status, .. } => *status,
-            Self::Remote(problem) => problem.status,
-            Self::Internal { .. } => 500,
+            Self::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidResponse(_) => StatusCode::BAD_GATEWAY,
+            Self::RouteNotFound(_) => StatusCode::NOT_FOUND,
+            Self::PayloadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UnsupportedProtocol(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            Self::Application(error) => error.status(),
+            Self::Remote(problem) => {
+                StatusCode::from_u16(problem.status).unwrap_or(StatusCode::BAD_GATEWAY)
+            }
+            Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -102,12 +158,13 @@ impl FusenError {
     pub fn code(&self) -> &str {
         match self {
             Self::InvalidRequest(_) => "invalid_request",
+            Self::InvalidResponse(_) => "invalid_response",
             Self::RouteNotFound(_) => "route_not_found",
             Self::PayloadTooLarge { .. } => "payload_too_large",
             Self::UnsupportedProtocol(_) => "unsupported_protocol",
             Self::ServiceUnavailable(_) => "service_unavailable",
             Self::Timeout(_) => "timeout",
-            Self::Application { code, .. } => code,
+            Self::Application(error) => error.code(),
             Self::Remote(problem) => &problem.code,
             Self::Internal { .. } => "internal_error",
         }
@@ -128,12 +185,8 @@ impl FusenError {
         };
         ProblemDetails {
             type_uri: format!("https://fusen.rs/problems/{code}"),
-            title: http::StatusCode::from_u16(status)
-                .ok()
-                .and_then(|value| value.canonical_reason())
-                .unwrap_or("Error")
-                .to_owned(),
-            status,
+            title: status.canonical_reason().unwrap_or("Error").to_owned(),
+            status: status.as_u16(),
             detail,
             instance,
             code,
@@ -153,5 +206,24 @@ mod tests {
         assert_eq!(problem.status, 500);
         assert_eq!(problem.detail.as_deref(), Some("Internal server error"));
         assert!(!problem.detail.unwrap().contains("secret"));
+    }
+
+    #[test]
+    fn application_errors_reject_non_error_statuses() {
+        for status in [StatusCode::CONTINUE, StatusCode::OK, StatusCode::FOUND] {
+            assert!(FusenError::application(status, "invalid", "invalid").is_err());
+        }
+    }
+
+    #[test]
+    fn application_errors_expose_validated_fields() {
+        let error =
+            FusenError::application(StatusCode::CONFLICT, "duplicate", "already exists").unwrap();
+        let FusenError::Application(application) = error else {
+            panic!("expected an application error");
+        };
+        assert_eq!(application.status(), StatusCode::CONFLICT);
+        assert_eq!(application.code(), "duplicate");
+        assert_eq!(application.message(), "already exists");
     }
 }

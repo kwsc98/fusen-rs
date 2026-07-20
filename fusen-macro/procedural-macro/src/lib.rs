@@ -3,11 +3,24 @@
 
 use fusen_derive_macro::fusen_attr;
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
+use quote::{format_ident, quote};
 use syn::{Attribute, Meta};
 
 mod handler_macro;
 mod service_macro;
 mod trait_macro;
+
+fn fusen_crate_path() -> proc_macro2::TokenStream {
+    match crate_name("fusen-rs") {
+        Ok(FoundCrate::Itself) => quote!(crate),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = format_ident!("{}", name.replace('-', "_"));
+            quote!(::#ident)
+        }
+        Err(_) => quote!(::fusen_rs),
+    }
+}
 
 #[proc_macro_attribute]
 /// Generates an internal adapter for an Aspect or LoadBalance implementation.

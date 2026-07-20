@@ -3,19 +3,17 @@ use crate::{
     protocol::{
         codec::body::{RequestBodyCodec, ResponseBodyCodec, json::JsonCodec},
         fusen::{
-            request::{FusenRequest, Path},
+            request::{FusenRequest, Path, QueryParameters},
             response::{FusenResponse, HttpStatus},
         },
     },
 };
 use bytes::{Bytes, BytesMut};
 use fusen_internal_common::protocol::WireProtocol;
-use http::{
-    Request, Response, Version,
-    header::{CONNECTION, CONTENT_TYPE},
-};
+use http::{Request, Response, Uri, Version, header::CONTENT_TYPE};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
-use std::{collections::HashMap, convert::Infallible};
+use mime::Mime;
+use std::{convert::Infallible, str::FromStr};
 
 pub mod body;
 
@@ -46,97 +44,68 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
         &self,
         fusen_request: &mut FusenRequest,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, FusenError> {
-        let mut builder = Request::builder().header(CONNECTION, "keep-alive");
-        for (key, value) in fusen_request.headers.drain() {
-            builder = builder.header(key, value);
-        }
-        let addr = fusen_request
-            .addr
-            .as_deref()
-            .ok_or_else(|| FusenError::ServiceUnavailable("request endpoint is missing".into()))?;
-        let mut uri = format!("{}{}", addr.trim_end_matches('/'), fusen_request.path.path);
-        if !fusen_request.querys.is_empty() {
-            if fusen_request.path.path.contains('{') {
-                let mut path = fusen_request.path.path.clone();
-                for (key, value) in &fusen_request.querys {
-                    path = path.replace(&format!("{{{key}}}"), &urlencoding::encode(value));
-                }
-                uri = format!("{}{path}", addr.trim_end_matches('/'));
-            } else {
-                let query = fusen_request
-                    .querys
-                    .iter()
-                    .map(|(key, value)| {
-                        format!(
-                            "{}={}",
-                            urlencoding::encode(key),
-                            urlencoding::encode(value)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("&");
-                uri.push('?');
-                uri.push_str(&query);
-            }
-        }
-        let mut body = Bytes::new();
-        if let Some(bodies) = fusen_request.bodys.take() {
-            builder = builder.header(CONTENT_TYPE, "application/json");
-            body = RequestBodyCodec::encode(&self.json_codec, bodies)?;
-        }
+        let uri = build_uri(fusen_request)?;
+        let body = match fusen_request.body.take() {
+            Some(body) => RequestBodyCodec::encode(&self.json_codec, body)?,
+            None => Bytes::new(),
+        };
         let version = match fusen_request.protocol {
             WireProtocol::Fusen => Version::HTTP_2,
             WireProtocol::SpringCloud => Version::HTTP_11,
         };
-        builder
+        let mut request = Request::builder()
             .version(version)
             .method(fusen_request.path.method.clone())
             .uri(uri)
-            .body(Full::new(body).boxed())
-            .map_err(|error| FusenError::internal("failed to build HTTP request", error))
+            .body(Full::new(body.clone()).boxed())
+            .map_err(|error| FusenError::internal("failed to build HTTP request", error))?;
+        *request.headers_mut() = std::mem::take(&mut fusen_request.headers);
+        if !body.is_empty() {
+            request.headers_mut().insert(
+                CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+        }
+        Ok(request)
     }
 
     async fn decode(
         &self,
         mut request: Request<BoxBody<Bytes, hyper::Error>>,
     ) -> Result<FusenRequest, FusenError> {
-        let mut querys = HashMap::new();
-        if let Some(request_querys) = request.uri().query() {
-            for query in request_querys.split('&') {
-                if let Some((key, value)) = query.split_once('=') {
-                    let key = urlencoding::decode(key)
-                        .map_err(|error| FusenError::InvalidRequest(error.to_string()))?
-                        .into_owned();
-                    let value = urlencoding::decode(value)
-                        .map_err(|error| FusenError::InvalidRequest(error.to_string()))?
-                        .into_owned();
-                    querys.insert(key, value);
-                }
-            }
+        let query_parameters = request.uri().query().map(parse_query).unwrap_or_default();
+        let headers = std::mem::take(request.headers_mut());
+        let bytes = read_body(request.body_mut(), self.max_body_bytes, false).await?;
+        let content_type = parse_content_type(&headers, false)?;
+        if let Some(content_type) = &content_type
+            && !is_json(content_type)
+        {
+            let message = if is_grpc(content_type) {
+                "Dubbo Triple is disabled in 0.9".into()
+            } else {
+                format!("unsupported request content type {content_type}")
+            };
+            return Err(FusenError::UnsupportedProtocol(message));
         }
-        let headers = drain_headers(request.headers_mut());
-        let content_type = headers.get(CONTENT_TYPE.as_str()).map(String::as_str);
-        if content_type.is_some_and(|value| value.starts_with("application/grpc")) {
-            return Err(FusenError::UnsupportedProtocol(
-                "Dubbo Triple is disabled in 0.9".into(),
-            ));
-        }
-        let bodys = if content_type.is_some_and(is_json_content_type) {
-            let bytes = read_body(request.body_mut(), self.max_body_bytes).await?;
+        let body = if bytes.is_empty() {
+            None
+        } else if content_type.is_some() {
             Some(RequestBodyCodec::decode(&self.json_codec, bytes)?)
         } else {
-            None
+            return Err(FusenError::UnsupportedProtocol(
+                "a non-empty request body requires application/json".into(),
+            ));
         };
         Ok(FusenRequest {
             path: Path {
                 method: request.method().clone(),
                 path: request.uri().path().to_owned(),
             },
-            addr: None,
-            querys,
+            endpoint: None,
+            path_parameters: Default::default(),
+            query_parameters,
             headers,
-            extensions: None,
-            bodys,
+            body,
             protocol: if request.version() == Version::HTTP_2 {
                 WireProtocol::Fusen
             } else {
@@ -151,39 +120,46 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
         &self,
         fusen_response: &mut FusenResponse,
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, FusenError> {
-        let mut builder = Response::builder();
-        for (key, value) in fusen_response.headers.drain() {
-            builder = builder.header(key, value);
-        }
-        let body = if let Some(value) = fusen_response.body.take() {
-            builder = builder.header(CONTENT_TYPE, "application/json");
-            ResponseBodyCodec::encode(&self.json_codec, value)?
-        } else {
-            Bytes::new()
+        let body = match fusen_response.body.take() {
+            Some(value) => ResponseBodyCodec::encode(&self.json_codec, value)?,
+            None => Bytes::new(),
         };
-        builder
+        let mut response = Response::builder()
             .status(fusen_response.http_status.status)
-            .body(Full::new(body).boxed())
-            .map_err(|error| FusenError::internal("failed to build HTTP response", error))
+            .body(Full::new(body.clone()).boxed())
+            .map_err(|error| FusenError::internal("failed to build HTTP response", error))?;
+        *response.headers_mut() = std::mem::take(&mut fusen_response.headers);
+        if !body.is_empty() {
+            response.headers_mut().insert(
+                CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+        }
+        Ok(response)
     }
 
     async fn decode(
         &self,
         mut response: Response<BoxBody<Bytes, hyper::Error>>,
     ) -> Result<FusenResponse, FusenError> {
-        let headers = drain_headers(response.headers_mut());
-        let body = if headers
-            .get(CONTENT_TYPE.as_str())
-            .is_some_and(|value| is_json_content_type(value))
+        let headers = std::mem::take(response.headers_mut());
+        let bytes = read_body(response.body_mut(), self.max_body_bytes, true).await?;
+        let content_type = parse_content_type(&headers, true)?;
+        if let Some(content_type) = &content_type
+            && !is_json(content_type)
         {
-            let bytes = read_body(response.body_mut(), self.max_body_bytes).await?;
-            if bytes.is_empty() {
-                None
-            } else {
-                Some(ResponseBodyCodec::decode(&self.json_codec, bytes)?)
-            }
-        } else {
+            return Err(FusenError::InvalidResponse(format!(
+                "unsupported response content type {content_type}"
+            )));
+        }
+        let body = if bytes.is_empty() {
             None
+        } else if content_type.is_some() {
+            Some(ResponseBodyCodec::decode(&self.json_codec, bytes)?)
+        } else {
+            return Err(FusenError::InvalidResponse(
+                "a non-empty response body requires a JSON content type".into(),
+            ));
         };
         Ok(FusenResponse {
             protocol: if response.version() == Version::HTTP_2 {
@@ -192,32 +168,122 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
                 WireProtocol::SpringCloud
             },
             http_status: HttpStatus {
-                status: response.status().as_u16(),
+                status: response.status(),
                 message: None,
             },
             headers,
-            extensions: None,
             body,
         })
     }
 }
 
-fn drain_headers(headers: &mut http::HeaderMap) -> HashMap<String, String> {
-    headers
-        .drain()
-        .filter_map(|(key, value)| {
-            key.map(|key| {
-                (
-                    key.to_string().to_ascii_lowercase(),
-                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                )
-            })
-        })
-        .collect()
+fn build_uri(request: &mut FusenRequest) -> Result<Uri, FusenError> {
+    let endpoint = request
+        .endpoint
+        .as_deref()
+        .ok_or_else(|| FusenError::ServiceUnavailable("request endpoint is missing".into()))?;
+    let mut url =
+        url::Url::parse(endpoint).map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(FusenError::InvalidRequest(
+            "request endpoint must be an absolute HTTP(S) URL".into(),
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(FusenError::InvalidRequest(
+            "request endpoint must not contain a query or fragment".into(),
+        ));
+    }
+    {
+        let mut segments = url.path_segments_mut().map_err(|_| {
+            FusenError::InvalidRequest("request endpoint cannot be a base URL".into())
+        })?;
+        segments.pop_if_empty();
+        for segment in request.path.path.trim_matches('/').split('/') {
+            if segment.is_empty() {
+                continue;
+            }
+            if let Some(name) = segment
+                .strip_prefix('{')
+                .and_then(|value| value.strip_suffix('}'))
+            {
+                let value = request.path_parameters.remove(name).ok_or_else(|| {
+                    FusenError::InvalidRequest(format!("missing path parameter {name}"))
+                })?;
+                segments.push(&value);
+            } else {
+                segments.push(segment);
+            }
+        }
+    }
+    if let Some(name) = request.path_parameters.keys().next() {
+        return Err(FusenError::InvalidRequest(format!(
+            "unused path parameter {name}"
+        )));
+    }
+    if request
+        .query_parameters
+        .values()
+        .any(|values| !values.is_empty())
+    {
+        let mut pairs = url.query_pairs_mut();
+        for (name, values) in &request.query_parameters {
+            for value in values {
+                pairs.append_pair(name, value);
+            }
+        }
+    }
+    Uri::from_str(url.as_str()).map_err(|error| FusenError::InvalidRequest(error.to_string()))
 }
 
-fn is_json_content_type(value: &str) -> bool {
-    value.starts_with("application/json") || value.starts_with("application/problem+json")
+fn parse_query(query: &str) -> QueryParameters {
+    let mut parameters = QueryParameters::new();
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        parameters
+            .entry(name.into_owned())
+            .or_default()
+            .push(value.into_owned());
+    }
+    parameters
+}
+
+fn parse_content_type(
+    headers: &http::HeaderMap,
+    response: bool,
+) -> Result<Option<Mime>, FusenError> {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(content_type_error(
+            response,
+            "multiple Content-Type headers are not allowed".into(),
+        ));
+    }
+    let value = value.to_str().map_err(|error| {
+        content_type_error(response, format!("invalid Content-Type header: {error}"))
+    })?;
+    value.parse::<Mime>().map(Some).map_err(|error| {
+        content_type_error(response, format!("invalid Content-Type header: {error}"))
+    })
+}
+
+fn content_type_error(response: bool, message: String) -> FusenError {
+    if response {
+        FusenError::InvalidResponse(message)
+    } else {
+        FusenError::UnsupportedProtocol(message)
+    }
+}
+
+fn is_json(value: &Mime) -> bool {
+    (value.type_() == mime::APPLICATION && value.subtype() == mime::JSON)
+        || value.essence_str() == "application/problem+json"
+}
+
+fn is_grpc(value: &Mime) -> bool {
+    value.type_() == mime::APPLICATION && value.subtype().as_str().starts_with("grpc")
 }
 
 #[allow(async_fn_in_trait)]
@@ -241,10 +307,17 @@ pub trait ResponseCodec<T, E> {
 async fn read_body(
     body: &mut BoxBody<Bytes, hyper::Error>,
     limit: usize,
+    response: bool,
 ) -> Result<Bytes, FusenError> {
     let mut bytes = BytesMut::new();
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
+        let frame = frame.map_err(|error| {
+            if response {
+                FusenError::InvalidResponse(error.to_string())
+            } else {
+                FusenError::InvalidRequest(error.to_string())
+            }
+        })?;
         if let Ok(data) = frame.into_data() {
             if bytes.len().saturating_add(data.len()) > limit {
                 return Err(FusenError::PayloadTooLarge { limit });
@@ -258,6 +331,8 @@ async fn read_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::{HeaderValue, Method, header::SET_COOKIE};
+    use std::collections::HashMap;
 
     fn body(value: &'static [u8]) -> BoxBody<Bytes, hyper::Error> {
         Full::new(Bytes::from_static(value))
@@ -266,12 +341,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_oversized_body() {
+    async fn rejects_oversized_body_regardless_of_content_type() {
         let codec = FusenHttpCodec::new(3);
         let request = Request::builder()
             .method("POST")
             .uri("/demo")
-            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(body(b"1234"))
+            .unwrap();
+        let error = RequestCodec::decode(&codec, request).await.unwrap_err();
+        assert!(matches!(error, FusenError::PayloadTooLarge { limit: 3 }));
+    }
+
+    #[tokio::test]
+    async fn body_limit_precedes_malformed_content_type_rejection() {
+        let codec = FusenHttpCodec::new(3);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/demo")
+            .header(CONTENT_TYPE, "not a mime")
             .body(body(b"1234"))
             .unwrap();
         let error = RequestCodec::decode(&codec, request).await.unwrap_err();
@@ -289,5 +377,140 @@ mod tests {
             .unwrap();
         let error = RequestCodec::decode(&codec, request).await.unwrap_err();
         assert!(matches!(error, FusenError::UnsupportedProtocol(_)));
+    }
+
+    #[tokio::test]
+    async fn rejects_content_type_prefix_lookalikes() {
+        let codec = FusenHttpCodec::default();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/demo")
+            .header(CONTENT_TYPE, "application/json-malformed")
+            .body(body(b"{}"))
+            .unwrap();
+        let error = RequestCodec::decode(&codec, request).await.unwrap_err();
+        assert!(matches!(error, FusenError::UnsupportedProtocol(_)));
+    }
+
+    #[tokio::test]
+    async fn rejects_duplicate_request_content_type() {
+        let codec = FusenHttpCodec::default();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/demo")
+            .body(body(b"{}"))
+            .unwrap();
+        request
+            .headers_mut()
+            .append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        request
+            .headers_mut()
+            .append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let error = RequestCodec::decode(&codec, request).await.unwrap_err();
+        assert!(matches!(error, FusenError::UnsupportedProtocol(_)));
+    }
+
+    #[tokio::test]
+    async fn invalid_request_content_type_is_unsupported() {
+        let codec = FusenHttpCodec::default();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/demo")
+            .body(body(b"{}"))
+            .unwrap();
+        request.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_bytes(b"\xff").expect("opaque header value"),
+        );
+        let error = RequestCodec::decode(&codec, request).await.unwrap_err();
+        assert!(matches!(error, FusenError::UnsupportedProtocol(_)));
+    }
+
+    #[tokio::test]
+    async fn invalid_response_content_type_is_invalid_response() {
+        let codec = FusenHttpCodec::default();
+        let mut response = Response::builder().status(200).body(body(b"{}")).unwrap();
+        response
+            .headers_mut()
+            .append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        response.headers_mut().append(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        );
+        let error = ResponseCodec::decode(&codec, response).await.unwrap_err();
+        assert!(matches!(error, FusenError::InvalidResponse(_)));
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_and_non_json_response_content_types() {
+        let codec = FusenHttpCodec::default();
+        for content_type in ["not a mime", "text/plain"] {
+            let response = Response::builder()
+                .status(200)
+                .header(CONTENT_TYPE, content_type)
+                .body(body(b"{}"))
+                .unwrap();
+            let error = ResponseCodec::decode(&codec, response).await.unwrap_err();
+            assert!(matches!(error, FusenError::InvalidResponse(_)));
+        }
+    }
+
+    #[tokio::test]
+    async fn preserves_repeated_headers() {
+        let codec = FusenHttpCodec::default();
+        let mut request = Request::builder()
+            .method("GET")
+            .uri("/demo")
+            .body(body(b""))
+            .unwrap();
+        request
+            .headers_mut()
+            .append(SET_COOKIE, HeaderValue::from_static("a=1"));
+        request
+            .headers_mut()
+            .append(SET_COOKIE, HeaderValue::from_static("b=2"));
+        let decoded = RequestCodec::decode(&codec, request).await.unwrap();
+        assert_eq!(decoded.headers.get_all(SET_COOKIE).iter().count(), 2);
+    }
+
+    #[test]
+    fn builds_path_and_query_without_losing_either() {
+        let mut request = FusenRequest {
+            protocol: WireProtocol::Fusen,
+            path: Path {
+                method: Method::GET,
+                path: "/users/{id}".into(),
+            },
+            endpoint: Some("http://[::1]:8080/api".into()),
+            path_parameters: HashMap::from([("id".into(), "a/b c".into())]),
+            query_parameters: QueryParameters::from([("filter".into(), vec!["x y".into()])]),
+            headers: Default::default(),
+            body: None,
+        };
+        let uri = build_uri(&mut request).unwrap();
+        assert_eq!(
+            uri.to_string(),
+            "http://[::1]:8080/api/users/a%2Fb%20c?filter=x+y"
+        );
+    }
+
+    #[test]
+    fn preserves_encoded_base_path_without_double_encoding() {
+        let mut request = FusenRequest {
+            protocol: WireProtocol::Fusen,
+            path: Path {
+                method: Method::GET,
+                path: "/users".into(),
+            },
+            endpoint: Some("http://localhost/api%20v1".into()),
+            path_parameters: HashMap::new(),
+            query_parameters: QueryParameters::new(),
+            headers: Default::default(),
+            body: None,
+        };
+        assert_eq!(
+            build_uri(&mut request).unwrap().to_string(),
+            "http://localhost/api%20v1/users"
+        );
     }
 }

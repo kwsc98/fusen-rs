@@ -1,16 +1,19 @@
 use chrono::Local;
+#[cfg(feature = "otel")]
 use opentelemetry::{StringValue, Value, trace::TracerProvider};
+#[cfg(feature = "otel")]
 use opentelemetry_otlp::{ExporterBuildError, SpanExporter, WithExportConfig};
+#[cfg(feature = "otel")]
 use opentelemetry_sdk::{
     Resource, runtime,
     trace::{SdkTracerProvider, span_processor_with_async_runtime},
 };
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use tracing_appender::{
     non_blocking::WorkerGuard,
     rolling::{RollingFileAppender, Rotation},
 };
+#[cfg(feature = "otel")]
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -24,11 +27,13 @@ pub struct LogConfig {
 
 pub struct LogWorkGroup {
     _work_guard: Option<WorkerGuard>,
+    #[cfg(feature = "otel")]
     trace_provider: Option<SdkTracerProvider>,
 }
 
 impl Drop for LogWorkGroup {
     fn drop(&mut self) {
+        #[cfg(feature = "otel")]
         if let Some(provider) = &self.trace_provider
             && let Err(error) = provider.shutdown()
         {
@@ -37,6 +42,7 @@ impl Drop for LogWorkGroup {
     }
 }
 
+#[cfg(feature = "otel")]
 fn trace_provider(endpoint: &str, app_name: &str) -> Result<SdkTracerProvider, ExporterBuildError> {
     let exporter = SpanExporter::builder()
         .with_tonic()
@@ -62,11 +68,19 @@ pub fn init_log(app_name: &str, config: LogConfig) -> Option<LogWorkGroup> {
     let filter_source = config
         .env_filter
         .as_deref()
-        .map(|value| value.replace("{level}", &config.level));
-    let filter = filter_source
-        .as_deref()
-        .and_then(|value| EnvFilter::from_str(value).ok())
-        .unwrap_or_else(EnvFilter::from_default_env);
+        .map(|value| value.replace("{level}", &config.level))
+        .or_else(|| std::env::var("RUST_LOG").ok())
+        .unwrap_or_else(|| {
+            if config.level.is_empty() {
+                "info".into()
+            } else {
+                config.level.clone()
+            }
+        });
+    let filter = EnvFilter::try_new(filter_source).unwrap_or_else(|error| {
+        eprintln!("invalid log filter, falling back to info: {error}");
+        EnvFilter::new("info")
+    });
     let mut guard = None;
     let file_layer = config.path.as_ref().and_then(|path| {
         match RollingFileAppender::builder()
@@ -91,6 +105,9 @@ pub fn init_log(app_name: &str, config: LogConfig) -> Option<LogWorkGroup> {
             }
         }
     });
+    let console = tracing_subscriber::fmt::layer().with_timer(LocalTimer);
+
+    #[cfg(feature = "otel")]
     let provider =
         config
             .endpoint
@@ -102,32 +119,47 @@ pub fn init_log(app_name: &str, config: LogConfig) -> Option<LogWorkGroup> {
                     None
                 }
             });
-    let otel_layer = provider
-        .as_ref()
-        .map(|provider| OpenTelemetryLayer::new(provider.tracer(app_name.to_owned())));
-    let console = tracing_subscriber::fmt::layer().with_timer(LocalTimer);
-    if tracing_subscriber::registry()
+    #[cfg(feature = "otel")]
+    let initialized = tracing_subscriber::registry()
         .with(filter)
         .with(console)
         .with(file_layer)
-        .with(otel_layer)
-        .try_init()
-        .is_err()
-    {
+        .with(
+            provider
+                .as_ref()
+                .map(|provider| OpenTelemetryLayer::new(provider.tracer(app_name.to_owned()))),
+        )
+        .try_init();
+
+    #[cfg(not(feature = "otel"))]
+    let initialized = {
+        if config.endpoint.is_some() {
+            eprintln!("OpenTelemetry endpoint ignored because the `otel` feature is disabled");
+        }
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(console)
+            .with(file_layer)
+            .try_init()
+    };
+
+    if initialized.is_err() {
         return None;
     }
     Some(LogWorkGroup {
         _work_guard: guard,
+        #[cfg(feature = "otel")]
         trace_provider: provider,
     })
 }
 
 struct LocalTimer;
+
 impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
     fn format_time(
         &self,
         writer: &mut tracing_subscriber::fmt::format::Writer<'_>,
     ) -> std::fmt::Result {
-        write!(writer, "{}", Local::now().format("%FT%T%.3f"))
+        write!(writer, "{}", Local::now().format("%FT%T%.3f%:z"))
     }
 }

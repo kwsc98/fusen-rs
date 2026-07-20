@@ -19,3 +19,5 @@ pub mod server;
 pub use fusen_internal_common;
 /// Attribute macros used to generate RPC clients, services, and handlers.
 pub use fusen_procedural_macro;
+/// HTTP types used by generated service metadata.
+pub use http;

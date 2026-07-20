@@ -3,7 +3,7 @@ use crate::{
     filter::FusenFilter,
     handler::{
         aspect::DefaultAspect,
-        loadbalance::{DefaultLoadBalance, LoadBalance_},
+        loadbalance::{DefaultLoadBalance, LoadBalanceDyn},
     },
     protocol::fusen::service::ServiceDesc,
 };
@@ -14,13 +14,13 @@ pub mod loadbalance;
 
 #[derive(Clone)]
 pub struct HandlerController {
-    pub load_balance: Option<Arc<Box<dyn LoadBalance_>>>,
-    pub aspect: Arc<Vec<Arc<Box<dyn FusenFilter>>>>,
+    pub load_balance: Option<Arc<dyn LoadBalanceDyn>>,
+    pub aspect: Arc<Vec<Arc<dyn FusenFilter>>>,
 }
 
 pub enum HandlerInvoker {
-    LoadBalance(Arc<Box<dyn LoadBalance_>>),
-    Aspect(Arc<Box<dyn FusenFilter>>),
+    LoadBalance(Arc<dyn LoadBalanceDyn>),
+    Aspect(Arc<dyn FusenFilter>),
 }
 
 pub struct HandlerContext {
@@ -35,8 +35,7 @@ pub struct HandlerInfo {
 
 impl Default for HandlerContext {
     fn default() -> Self {
-        let default_load_balance: Arc<Box<dyn LoadBalance_>> =
-            Arc::new(Box::new(DefaultLoadBalance));
+        let default_load_balance: Arc<dyn LoadBalanceDyn> = Arc::new(DefaultLoadBalance);
         let mut context = Self {
             handlers: Default::default(),
             cache: Default::default(),
@@ -47,7 +46,7 @@ impl Default for HandlerContext {
         );
         context.handlers.insert(
             "DefaultAspect".to_string(),
-            Arc::new(HandlerInvoker::Aspect(Arc::new(Box::new(DefaultAspect)))),
+            Arc::new(HandlerInvoker::Aspect(Arc::new(DefaultAspect))),
         );
         context.cache.insert(
             ServiceDesc::new("DefaultHandlerController", None, None)
@@ -90,8 +89,8 @@ impl HandlerContext {
     }
 
     pub fn load_controller(&mut self, handler_info: HandlerInfo) -> Result<(), FusenError> {
-        let mut load_balance: Option<Arc<Box<dyn LoadBalance_>>> = None;
-        let mut aspect: Vec<Arc<Box<dyn FusenFilter>>> = Vec::new();
+        let mut load_balance: Option<Arc<dyn LoadBalanceDyn>> = None;
+        let mut aspect: Vec<Arc<dyn FusenFilter>> = Vec::new();
         for handler_id in &handler_info.handlers {
             let handler_invoker = self.get_handler(handler_id).ok_or_else(|| {
                 FusenError::InvalidRequest(format!("unknown handler id {handler_id}"))

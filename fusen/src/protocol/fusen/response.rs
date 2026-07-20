@@ -1,28 +1,28 @@
 use crate::error::FusenError;
 use fusen_internal_common::protocol::WireProtocol;
+use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
-use std::{collections::HashMap, fmt::Display};
+use std::fmt::Display;
 
 #[derive(Debug, Default)]
 pub struct FusenResponse {
     pub protocol: WireProtocol,
     pub http_status: HttpStatus,
-    pub headers: HashMap<String, String>,
-    pub extensions: Option<HashMap<String, String>>,
+    pub headers: HeaderMap,
     pub body: Option<Value>,
 }
 
 #[derive(Debug)]
 pub struct HttpStatus {
-    pub status: u16,
+    pub status: StatusCode,
     pub message: Option<String>,
 }
 
 impl Default for HttpStatus {
     fn default() -> Self {
         Self {
-            status: 200,
+            status: StatusCode::OK,
             message: None,
         }
     }
