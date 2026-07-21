@@ -1,0 +1,17 @@
+[package]
+name = "fusen-contract"
+version = "0.9.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Stable protocol and service registry contracts for fusen-rs"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/fusen-contract"
+readme.workspace = true
+license-file.workspace = true
+
+[dependencies]
+http = "1.3.1"
+thiserror.workspace = true
+url.workspace = true

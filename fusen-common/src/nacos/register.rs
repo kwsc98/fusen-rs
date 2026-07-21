@@ -1,17 +1,18 @@
 use crate::{error::Error, nacos::NacosConfig};
 use fusen_register::{
     Register, ServiceSubscription, SubscriptionCloser,
+    contract::{
+        ServiceEndpoint, ServiceInstance, ServiceRegistration, ServiceSelector, ServiceWeight,
+        StaticBoxFuture, WireProtocol,
+    },
     directory::{DirectoryWriter, directory_channel},
     error::RegisterError,
-    fusen_internal_common::{
-        BoxFuture, protocol::WireProtocol, resource::service::ServiceResource,
-    },
     subscription_cleanup,
 };
 use nacos_sdk::api::{
     naming::{
         NamingChangeEvent, NamingEventListener, NamingService, NamingServiceBuilder,
-        ServiceInstance,
+        ServiceInstance as NacosServiceInstance,
     },
     props::ClientProps,
 };
@@ -55,14 +56,14 @@ impl NacosRegister {
 impl Register for NacosRegister {
     fn register(
         &self,
-        resource: Arc<ServiceResource>,
+        registration: Arc<ServiceRegistration>,
         protocol: WireProtocol,
-    ) -> BoxFuture<Result<(), RegisterError>> {
+    ) -> StaticBoxFuture<Result<(), RegisterError>> {
         let naming = self.naming_service.clone();
         Box::pin(async move {
-            let service_name = get_service_name(&resource, protocol);
-            let instance = build_instance(&resource)?;
-            let group = resource.group.clone();
+            let service_name = get_service_name(registration.selector(), protocol)?;
+            let instance = build_instance(&registration)?;
+            let group = registration.selector().group().map(str::to_owned);
             let register_naming = naming.clone();
             let register_service_name = service_name.clone();
             let register_group = group.clone();
@@ -87,15 +88,19 @@ impl Register for NacosRegister {
 
     fn deregister(
         &self,
-        resource: Arc<ServiceResource>,
+        registration: Arc<ServiceRegistration>,
         protocol: WireProtocol,
-    ) -> BoxFuture<Result<(), RegisterError>> {
+    ) -> StaticBoxFuture<Result<(), RegisterError>> {
         let naming = self.naming_service.clone();
         Box::pin(async move {
-            let service_name = get_service_name(&resource, protocol);
-            let instance = build_instance(&resource)?;
+            let service_name = get_service_name(registration.selector(), protocol)?;
+            let instance = build_instance(&registration)?;
             naming
-                .deregister_instance(service_name, resource.group.clone(), instance)
+                .deregister_instance(
+                    service_name,
+                    registration.selector().group().map(str::to_owned),
+                    instance,
+                )
                 .await
                 .map_err(RegisterError::provider)
         })
@@ -103,12 +108,13 @@ impl Register for NacosRegister {
 
     fn subscribe(
         &self,
-        resource: ServiceResource,
+        selector: ServiceSelector,
         protocol: WireProtocol,
-    ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
+    ) -> StaticBoxFuture<Result<ServiceSubscription, RegisterError>> {
         let naming = self.naming_service.clone();
         Box::pin(async move {
-            let service_name = get_service_name(&resource, protocol);
+            let service_name = get_service_name(&selector, protocol)?;
+            let group = selector.group().map(str::to_owned);
             let clusters = Vec::new();
             let (directory_writer, directory) = directory_channel(Vec::new());
             let snapshot_gate = Arc::new(SnapshotGate::new(directory_writer));
@@ -118,7 +124,7 @@ impl Register for NacosRegister {
             naming
                 .subscribe(
                     service_name.clone(),
-                    resource.group.clone(),
+                    group.clone(),
                     clusters.clone(),
                     listener.clone(),
                 )
@@ -127,7 +133,7 @@ impl Register for NacosRegister {
             let (closer, cleanup) = subscription_cleanup();
             let cleanup_naming = naming.clone();
             let cleanup_service_name = service_name.clone();
-            let cleanup_group = resource.group.clone();
+            let cleanup_group = group.clone();
             let cleanup_clusters = clusters.clone();
             tokio::spawn(cleanup.run(async move {
                 cleanup_naming
@@ -142,10 +148,10 @@ impl Register for NacosRegister {
             }));
             let setup_guard = NamingSetupGuard::new(closer);
             let instances = naming
-                .select_instances(service_name, resource.group, clusters, false, true)
+                .select_instances(service_name, group, clusters, false, true)
                 .await
                 .map_err(RegisterError::provider)?;
-            snapshot_gate.initialize(to_service_resources(instances))?;
+            snapshot_gate.initialize(to_service_instances(instances))?;
             Ok(ServiceSubscription::new(directory, setup_guard.disarm()))
         })
     }
@@ -218,7 +224,7 @@ impl Drop for NamingSetupGuard {
 #[derive(Default)]
 struct SnapshotGateState {
     initialized: bool,
-    pending: Option<Vec<ServiceResource>>,
+    pending: Option<Vec<ServiceInstance>>,
 }
 
 struct SnapshotGate {
@@ -234,7 +240,7 @@ impl SnapshotGate {
         }
     }
 
-    fn initialize(&self, initial: Vec<ServiceResource>) -> Result<(), RegisterError> {
+    fn initialize(&self, initial: Vec<ServiceInstance>) -> Result<(), RegisterError> {
         let mut state = self.state.lock().map_err(|_| {
             RegisterError::provider(std::io::Error::other("Nacos snapshot gate was poisoned"))
         })?;
@@ -244,7 +250,7 @@ impl SnapshotGate {
         Ok(())
     }
 
-    fn update(&self, resources: Vec<ServiceResource>) -> Result<(), RegisterError> {
+    fn update(&self, resources: Vec<ServiceInstance>) -> Result<(), RegisterError> {
         let mut state = self.state.lock().map_err(|_| {
             RegisterError::provider(std::io::Error::other("Nacos snapshot gate was poisoned"))
         })?;
@@ -268,7 +274,7 @@ impl NamingEventListener for ServiceChangeListener {
         let resources = event
             .instances
             .clone()
-            .map(to_service_resources)
+            .map(to_service_instances)
             .unwrap_or_default();
         if let Err(error) = self.snapshot_gate.update(resources) {
             tracing::error!(?error, service = %event.service_name, "failed to update service directory");
@@ -276,7 +282,7 @@ impl NamingEventListener for ServiceChangeListener {
     }
 }
 
-fn to_service_resources(instances: Vec<ServiceInstance>) -> Vec<ServiceResource> {
+fn to_service_instances(instances: Vec<NacosServiceInstance>) -> Vec<ServiceInstance> {
     instances
         .into_iter()
         .filter(|instance| instance.healthy && instance.enabled && instance.weight > 0.0)
@@ -309,75 +315,73 @@ fn to_service_resources(instances: Vec<ServiceInstance>) -> Vec<ServiceResource>
                     segments.push(&segment);
                 }
             }
-            Some(ServiceResource {
-                addr: url.to_string().trim_end_matches('/').to_owned(),
-                service_id: instance
-                    .metadata
-                    .get(META_SERVICE_ID)
-                    .cloned()
-                    .or(instance.service_name)
-                    .unwrap_or_default(),
-                group: instance.metadata.get(META_GROUP).cloned(),
-                version: instance.metadata.get(META_VERSION).cloned(),
-                methods: Vec::new(),
-                weight: Some(instance.weight),
-                metadata: instance.metadata,
-            })
+            let endpoint = ServiceEndpoint::try_from(url).ok()?;
+            let weight = ServiceWeight::new(instance.weight).ok()?;
+            ServiceInstance::new(endpoint, weight)
+                .with_metadata(instance.metadata.into_iter().collect())
+                .ok()
         })
         .collect()
 }
 
-pub fn get_service_name(resource: &ServiceResource, protocol: WireProtocol) -> String {
+pub fn get_service_name(
+    selector: &ServiceSelector,
+    protocol: WireProtocol,
+) -> Result<String, RegisterError> {
     match protocol {
-        WireProtocol::SpringCloud => resource
-            .metadata
+        WireProtocol::SpringCloud => Ok(selector
+            .metadata()
             .get("spring.application.name")
             .cloned()
-            .unwrap_or_else(|| resource.service_id.clone()),
-        WireProtocol::Fusen => format!(
+            .unwrap_or_else(|| selector.service_id().to_owned())),
+        WireProtocol::Fusen => Ok(format!(
             "providers:{}:{}:{}",
-            resource.service_id,
-            resource.version.as_deref().unwrap_or(""),
-            resource.group.as_deref().unwrap_or("")
-        ),
+            selector.service_id(),
+            selector.version().unwrap_or(""),
+            selector.group().unwrap_or("")
+        )),
+        _ => Err(RegisterError::UnsupportedProtocol(protocol.to_string())),
     }
 }
 
-fn build_instance(resource: &ServiceResource) -> Result<ServiceInstance, RegisterError> {
-    let url = url::Url::parse(&resource.addr)
-        .map_err(|error| RegisterError::InvalidResource(error.to_string()))?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(RegisterError::InvalidResource(
-            "advertised URL must use HTTP or HTTPS".into(),
-        ));
-    }
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err(RegisterError::InvalidResource(
-            "advertised URL must not contain a query or fragment".into(),
-        ));
-    }
+fn build_instance(
+    registration: &ServiceRegistration,
+) -> Result<NacosServiceInstance, RegisterError> {
+    let url = registration.endpoint().as_url();
     let ip = url
         .host_str()
         .ok_or_else(|| RegisterError::InvalidResource("advertised URL has no host".into()))?;
+    let ip = ip
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(ip);
     let port = url
         .port_or_known_default()
         .ok_or_else(|| RegisterError::InvalidResource("advertised URL has no port".into()))?;
-    let mut metadata = resource.metadata.clone();
+    let mut metadata = registration
+        .selector()
+        .metadata()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     metadata.insert(META_SCHEME.into(), url.scheme().into());
-    metadata.insert(META_SERVICE_ID.into(), resource.service_id.clone());
+    metadata.insert(
+        META_SERVICE_ID.into(),
+        registration.selector().service_id().to_owned(),
+    );
     if url.path() != "/" && !url.path().is_empty() {
         metadata.insert(META_BASE_PATH.into(), url.path().into());
     }
-    if let Some(version) = &resource.version {
-        metadata.insert(META_VERSION.into(), version.clone());
+    if let Some(version) = registration.selector().version() {
+        metadata.insert(META_VERSION.into(), version.to_owned());
     }
-    if let Some(group) = &resource.group {
-        metadata.insert(META_GROUP.into(), group.clone());
+    if let Some(group) = registration.selector().group() {
+        metadata.insert(META_GROUP.into(), group.to_owned());
     }
-    Ok(ServiceInstance {
+    Ok(NacosServiceInstance {
         ip: ip.to_owned(),
         port: i32::from(port),
-        weight: resource.weight.unwrap_or(1.0),
+        weight: registration.weight().get(),
         metadata,
         ..Default::default()
     })
@@ -386,6 +390,7 @@ fn build_instance(resource: &ServiceResource) -> Result<ServiceInstance, Registe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusen_register::contract::MethodDescriptor;
     use std::{
         collections::HashMap,
         sync::atomic::{AtomicUsize, Ordering},
@@ -393,41 +398,46 @@ mod tests {
     };
     use tokio::sync::Notify;
 
-    fn resource(addr: &str) -> ServiceResource {
-        ServiceResource {
-            service_id: "demo".into(),
-            group: Some("DEFAULT_GROUP".into()),
-            version: Some("1.0".into()),
-            methods: Vec::new(),
-            addr: addr.into(),
-            weight: Some(1.0),
-            metadata: Default::default(),
-        }
+    fn selector() -> ServiceSelector {
+        ServiceSelector::new("demo", Some("DEFAULT_GROUP".into()), Some("1.0".into())).unwrap()
+    }
+
+    fn registration(addr: &str) -> ServiceRegistration {
+        ServiceRegistration::new(
+            selector(),
+            addr.parse().unwrap(),
+            vec![MethodDescriptor::new("call", http::Method::GET, "/call", Vec::new()).unwrap()],
+            ServiceWeight::default(),
+        )
+        .unwrap()
+    }
+
+    fn instance(addr: &str) -> ServiceInstance {
+        ServiceInstance::new(addr.parse().unwrap(), ServiceWeight::default())
     }
 
     #[test]
     fn rejects_invalid_advertised_url() {
-        assert!(matches!(
-            build_instance(&resource("127.0.0.1:8080")),
-            Err(RegisterError::InvalidResource(_))
-        ));
+        assert!("127.0.0.1:8080".parse::<ServiceEndpoint>().is_err());
     }
 
     #[test]
     fn spring_cloud_service_name_uses_metadata() {
-        let mut resource = resource("http://127.0.0.1:8080");
-        resource
-            .metadata
-            .insert("spring.application.name".into(), "orders".into());
+        let resource = selector()
+            .with_metadata(std::collections::BTreeMap::from([(
+                "spring.application.name".into(),
+                "orders".into(),
+            )]))
+            .unwrap();
         assert_eq!(
-            get_service_name(&resource, WireProtocol::SpringCloud),
+            get_service_name(&resource, WireProtocol::SpringCloud).unwrap(),
             "orders"
         );
     }
 
     #[test]
     fn filters_unhealthy_instances_and_restores_https_base_path() {
-        let healthy = ServiceInstance {
+        let healthy = NacosServiceInstance {
             ip: "::1".into(),
             port: 8443,
             weight: 2.0,
@@ -436,23 +446,23 @@ mod tests {
                 (META_BASE_PATH.into(), "/rpc".into()),
                 (META_SERVICE_ID.into(), "demo".into()),
             ]),
-            ..ServiceInstance::default()
+            ..NacosServiceInstance::default()
         };
-        let unhealthy = ServiceInstance {
+        let unhealthy = NacosServiceInstance {
             healthy: false,
             ip: "127.0.0.1".into(),
             port: 8080,
-            ..ServiceInstance::default()
+            ..NacosServiceInstance::default()
         };
-        let resources = to_service_resources(vec![unhealthy, healthy]);
+        let resources = to_service_instances(vec![unhealthy, healthy]);
         assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0].addr, "https://[::1]:8443/rpc");
-        assert_eq!(resources[0].weight, Some(2.0));
+        assert_eq!(resources[0].endpoint().as_str(), "https://[::1]:8443/rpc");
+        assert_eq!(resources[0].weight().get(), 2.0);
     }
 
     #[test]
     fn preserves_encoded_base_path_without_double_encoding() {
-        let instance = ServiceInstance {
+        let instance = NacosServiceInstance {
             ip: "127.0.0.1".into(),
             port: 8443,
             metadata: HashMap::from([
@@ -460,27 +470,36 @@ mod tests {
                 (META_BASE_PATH.into(), "/api%20v1/a%2Fb".into()),
                 (META_SERVICE_ID.into(), "demo".into()),
             ]),
-            ..ServiceInstance::default()
+            ..NacosServiceInstance::default()
         };
-        let resources = to_service_resources(vec![instance]);
-        assert_eq!(resources[0].addr, "https://127.0.0.1:8443/api%20v1/a%2Fb");
+        let resources = to_service_instances(vec![instance]);
+        assert_eq!(
+            resources[0].endpoint().as_str(),
+            "https://127.0.0.1:8443/api%20v1/a%2Fb"
+        );
     }
 
     #[test]
     fn ignores_instances_with_non_http_metadata() {
-        let instance = ServiceInstance {
+        let instance = NacosServiceInstance {
             ip: "127.0.0.1".into(),
             port: 21,
             metadata: HashMap::from([(META_SCHEME.into(), "ftp".into())]),
-            ..ServiceInstance::default()
+            ..NacosServiceInstance::default()
         };
-        assert!(to_service_resources(vec![instance]).is_empty());
+        assert!(to_service_instances(vec![instance]).is_empty());
     }
 
     #[test]
     fn registration_metadata_preserves_address_and_weight() {
-        let mut resource = resource("https://127.0.0.1:8443/rpc");
-        resource.weight = Some(3.0);
+        let selector = selector();
+        let resource = ServiceRegistration::new(
+            selector,
+            "https://127.0.0.1:8443/rpc".parse().unwrap(),
+            vec![MethodDescriptor::new("call", http::Method::GET, "/call", Vec::new()).unwrap()],
+            ServiceWeight::new(3.0).unwrap(),
+        )
+        .unwrap();
         let instance = build_instance(&resource).unwrap();
         assert_eq!(instance.weight, 3.0);
         assert_eq!(instance.metadata[META_SCHEME], "https");
@@ -491,27 +510,36 @@ mod tests {
     fn initialization_event_overrides_stale_snapshot() {
         let (writer, directory) = directory_channel(Vec::new());
         let gate = SnapshotGate::new(writer);
-        gate.update(vec![resource("http://127.0.0.1:9002")])
+        gate.update(vec![instance("http://127.0.0.1:9002")])
             .unwrap();
-        gate.initialize(vec![resource("http://127.0.0.1:9001")])
+        gate.initialize(vec![instance("http://127.0.0.1:9001")])
             .unwrap();
-        assert_eq!(directory.snapshot()[0].addr, "http://127.0.0.1:9002");
+        assert_eq!(
+            directory.snapshot()[0].endpoint().as_str(),
+            "http://127.0.0.1:9002/"
+        );
     }
 
     #[test]
     fn snapshot_gate_keeps_latest_initialization_event_and_live_updates() {
         let (writer, directory) = directory_channel(Vec::new());
         let gate = SnapshotGate::new(writer);
-        gate.update(vec![resource("http://127.0.0.1:9001")])
+        gate.update(vec![instance("http://127.0.0.1:9001")])
             .unwrap();
-        gate.update(vec![resource("http://127.0.0.1:9002")])
+        gate.update(vec![instance("http://127.0.0.1:9002")])
             .unwrap();
-        gate.initialize(vec![resource("http://127.0.0.1:9000")])
+        gate.initialize(vec![instance("http://127.0.0.1:9000")])
             .unwrap();
-        assert_eq!(directory.snapshot()[0].addr, "http://127.0.0.1:9002");
-        gate.update(vec![resource("http://127.0.0.1:9003")])
+        assert_eq!(
+            directory.snapshot()[0].endpoint().as_str(),
+            "http://127.0.0.1:9002/"
+        );
+        gate.update(vec![instance("http://127.0.0.1:9003")])
             .unwrap();
-        assert_eq!(directory.snapshot()[0].addr, "http://127.0.0.1:9003");
+        assert_eq!(
+            directory.snapshot()[0].endpoint().as_str(),
+            "http://127.0.0.1:9003/"
+        );
     }
 
     #[tokio::test]
@@ -563,7 +591,7 @@ mod tests {
             }),
         )
         .unwrap();
-        let resource = Arc::new(resource("http://127.0.0.1:18081"));
+        let resource = Arc::new(registration("http://127.0.0.1:18081"));
         register
             .register(resource.clone(), WireProtocol::Fusen)
             .await

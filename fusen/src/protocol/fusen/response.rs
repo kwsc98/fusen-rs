@@ -1,5 +1,5 @@
 use crate::error::FusenError;
-use fusen_internal_common::protocol::WireProtocol;
+use fusen_contract::WireProtocol;
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 use serde_json::Value;

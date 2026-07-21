@@ -61,8 +61,8 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                     fn select_dyn<'a>(
                         &'a self,
                         context: &'a #runtime::protocol::fusen::context::FusenContext,
-                        invokers: std::sync::Arc<Vec<std::sync::Arc<#runtime::fusen_internal_common::resource::service::ServiceResource>>>,
-                    ) -> #runtime::fusen_internal_common::BoxFutureV2<'a, Result<std::option::Option<std::sync::Arc<#runtime::fusen_internal_common::resource::service::ServiceResource>>, #runtime::error::FusenError>> {
+                        invokers: std::sync::Arc<Vec<std::sync::Arc<#runtime::contract::ServiceInstance>>>,
+                    ) -> #runtime::contract::BoxFuture<'a, Result<std::option::Option<std::sync::Arc<#runtime::contract::ServiceInstance>>, #runtime::error::FusenError>> {
                         Box::pin(async move {
                             <Self as #trait_path>::select(self, context, invokers).await
                         })
@@ -79,7 +79,7 @@ pub fn fusen_handler(attr: HandlerAttr, item: TokenStream) -> TokenStream {
                     fn call<'a>(
                         &'a self,
                         join_point: #runtime::filter::ProceedingJoinPoint,
-                    ) -> #runtime::fusen_internal_common::BoxFutureV2<'a, Result<#runtime::protocol::fusen::context::FusenContext, #runtime::error::FusenError>> {
+                    ) -> #runtime::contract::BoxFuture<'a, Result<#runtime::protocol::fusen::context::FusenContext, #runtime::error::FusenError>> {
                         Box::pin(async move {
                             <Self as #trait_path>::around(self, join_point).await
                         })

@@ -12,10 +12,8 @@ use crate::{
         },
     },
 };
-use fusen_internal_common::{
-    protocol::WireProtocol,
-    resource::service::{MethodResource, ParameterResource, ServiceResource},
-    utils::uuid::uuid,
+use fusen_contract::{
+    ServiceEndpoint, ServiceInstance, ServiceSelector, ServiceWeight, WireProtocol,
 };
 use fusen_register::{Register, ServiceSubscription};
 use http::{HeaderValue, Uri, header::HeaderName};
@@ -213,42 +211,24 @@ impl FusenClientContext {
             .handler_context
             .get_controller(&service_info.service_desc)?
             .clone();
-        let mut resource = ServiceResource {
-            service_id: service_info.service_desc.service_id,
-            group: service_info.service_desc.group,
-            version: service_info.service_desc.version,
-            methods: methods
-                .values()
-                .map(|method| MethodResource {
-                    method_name: method.method_name.clone(),
-                    path: method.path.clone(),
-                    method: method.method.to_string(),
-                    parameters: method
-                        .parameters
-                        .iter()
-                        .map(|parameter| ParameterResource {
-                            name: parameter.name.clone(),
-                            source: parameter.source,
-                        })
-                        .collect(),
-                })
-                .collect(),
-            addr: String::new(),
-            weight: Some(1.0),
-            metadata: Default::default(),
-        };
+        let selector = ServiceSelector::new(
+            service_info.service_desc.service_id.clone(),
+            service_info.service_desc.group.clone(),
+            service_info.service_desc.version.clone(),
+        )
+        .map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
         let subscription = match options.endpoint {
-            ClientEndpoint::Direct(uri) => {
-                resource.addr = validate_endpoint(&uri)?;
-                ServiceSubscription::local(vec![resource])
-            }
+            ClientEndpoint::Direct(uri) => ServiceSubscription::local(vec![ServiceInstance::new(
+                validate_endpoint(&uri)?,
+                ServiceWeight::default(),
+            )]),
             ClientEndpoint::Discovery => {
                 let register = self.register.as_ref().ok_or_else(|| {
                     FusenError::ServiceUnavailable("discovery endpoint requires a register".into())
                 })?;
                 tokio::time::timeout(
                     self.config.discovery_timeout,
-                    register.subscribe(resource, options.protocol),
+                    register.subscribe(selector, options.protocol),
                 )
                 .await
                 .map_err(|_| FusenError::Timeout("service discovery deadline exceeded".into()))?
@@ -308,7 +288,7 @@ impl FusenClient {
             .get(method_name)
             .ok_or_else(|| FusenError::InvalidRequest(format!("unknown method {method_name}")))?;
         let mut request = FusenRequest::init_request(self.protocol, method_info, arguments)?;
-        let request_id = uuid();
+        let request_id = crate::request_id::new_request_id();
         request.headers.insert(
             HeaderName::from_static("x-request-id"),
             HeaderValue::from_str(&request_id).map_err(|error| {
@@ -332,7 +312,7 @@ impl FusenClient {
             .select_dyn(&context, resources)
             .await?
             .ok_or_else(|| FusenError::ServiceUnavailable("no healthy service instances".into()))?;
-        context.request.endpoint = Some(resource.addr.clone());
+        context.request.endpoint = Some(resource.endpoint().as_str().to_owned());
         let context = ProceedingJoinPoint::new(
             self.handler_controller.aspect.clone(),
             self.http_client.clone(),
@@ -377,7 +357,7 @@ impl FusenClient {
     }
 }
 
-fn validate_endpoint(uri: &Uri) -> Result<String, FusenError> {
+fn validate_endpoint(uri: &Uri) -> Result<ServiceEndpoint, FusenError> {
     let url = url::Url::parse(&uri.to_string())
         .map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
@@ -390,7 +370,7 @@ fn validate_endpoint(uri: &Uri) -> Result<String, FusenError> {
             "direct endpoint must not contain a query or fragment".into(),
         ));
     }
-    Ok(url.to_string().trim_end_matches('/').to_owned())
+    ServiceEndpoint::new(url).map_err(|error| FusenError::InvalidRequest(error.to_string()))
 }
 
 struct HttpTransport {
@@ -402,7 +382,7 @@ impl FusenFilter for HttpTransport {
     fn call<'a>(
         &'a self,
         join_point: ProceedingJoinPoint,
-    ) -> fusen_internal_common::BoxFutureV2<'a, Result<FusenContext, FusenError>> {
+    ) -> fusen_contract::BoxFuture<'a, Result<FusenContext, FusenError>> {
         Box::pin(async move {
             let mut context = join_point.context;
             let request = RequestCodec::encode(&self.http_codec, &mut context.request)?;
@@ -423,7 +403,7 @@ mod tests {
         handler::{Handler, HandlerInvoker, loadbalance::LoadBalanceDyn},
         protocol::fusen::service::{ParameterInfo, ParameterSource, ServiceDesc},
     };
-    use fusen_internal_common::{BoxFuture, BoxFutureV2};
+    use fusen_contract::{BoxFuture, ServiceRegistration, StaticBoxFuture};
     use fusen_register::{error::RegisterError, subscription_cleanup};
     use http::Method;
     use tokio::{
@@ -604,8 +584,8 @@ mod tests {
         fn select_dyn<'a>(
             &'a self,
             _context: &'a FusenContext,
-            _invokers: Arc<Vec<Arc<ServiceResource>>>,
-        ) -> BoxFutureV2<'a, Result<Option<Arc<ServiceResource>>, FusenError>> {
+            _invokers: Arc<Vec<Arc<ServiceInstance>>>,
+        ) -> BoxFuture<'a, Result<Option<Arc<ServiceInstance>>, FusenError>> {
             Box::pin(async {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 Ok(None)
@@ -619,7 +599,7 @@ mod tests {
         fn call<'a>(
             &'a self,
             join_point: ProceedingJoinPoint,
-        ) -> BoxFutureV2<'a, Result<FusenContext, FusenError>> {
+        ) -> BoxFuture<'a, Result<FusenContext, FusenError>> {
             Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 join_point.proceed().await
@@ -684,25 +664,25 @@ mod tests {
     impl Register for HangingRegister {
         fn register(
             &self,
-            _resource: Arc<ServiceResource>,
+            _resource: Arc<ServiceRegistration>,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<(), RegisterError>> {
+        ) -> StaticBoxFuture<Result<(), RegisterError>> {
             Box::pin(async { Ok(()) })
         }
 
         fn deregister(
             &self,
-            _resource: Arc<ServiceResource>,
+            _resource: Arc<ServiceRegistration>,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<(), RegisterError>> {
+        ) -> StaticBoxFuture<Result<(), RegisterError>> {
             Box::pin(async { Ok(()) })
         }
 
         fn subscribe(
             &self,
-            _resource: ServiceResource,
+            _resource: ServiceSelector,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
+        ) -> StaticBoxFuture<Result<ServiceSubscription, RegisterError>> {
             Box::pin(std::future::pending())
         }
     }
@@ -716,25 +696,25 @@ mod tests {
     impl Register for HangingCleanupRegister {
         fn register(
             &self,
-            _resource: Arc<ServiceResource>,
+            _resource: Arc<ServiceRegistration>,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<(), RegisterError>> {
+        ) -> StaticBoxFuture<Result<(), RegisterError>> {
             Box::pin(async { Ok(()) })
         }
 
         fn deregister(
             &self,
-            _resource: Arc<ServiceResource>,
+            _resource: Arc<ServiceRegistration>,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<(), RegisterError>> {
+        ) -> StaticBoxFuture<Result<(), RegisterError>> {
             Box::pin(async { Ok(()) })
         }
 
         fn subscribe(
             &self,
-            _resource: ServiceResource,
+            _resource: ServiceSelector,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
+        ) -> StaticBoxFuture<Result<ServiceSubscription, RegisterError>> {
             let release = self.release.clone();
             let completed = self.completed.clone();
             Box::pin(async move {

@@ -5,7 +5,9 @@
 
 ## 边界
 
-workspace 分为核心 RPC、注册契约、内部共享类型、通用基础设施和两组过程宏。`fusen-common` 管理 Nacos、配置与日志，但不反向依赖核心 RPC；`fusen-register` 只定义注册发现契约。
+workspace 分为核心 RPC、稳定的 `fusen-contract` 契约、通用基础设施和两组过程宏。`fusen-common` 管理 Nacos、配置与日志，但不反向依赖核心 RPC；`fusen-register` 只定义注册发现契约。运行时私有化 UUID 和 JSON 依赖，不再存在 `fusen-internal-common`。
+
+`fusen-contract` 将服务模型拆成三个边界：`ServiceSelector` 描述发现目标，`ServiceRegistration` 描述待发布服务及方法，`ServiceInstance` 描述可调用端点和权重。借用 Future 使用 `BoxFuture<'a, T>`，不借用调用方的注册操作使用 `StaticBoxFuture<T>`。
 
 ## 客户端数据流
 

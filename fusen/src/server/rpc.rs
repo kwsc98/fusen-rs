@@ -20,7 +20,7 @@ impl FusenFilter for RpcServiceFilter {
     fn call<'a>(
         &'a self,
         join_point: ProceedingJoinPoint,
-    ) -> fusen_internal_common::BoxFutureV2<'a, Result<FusenContext, FusenError>> {
+    ) -> fusen_contract::BoxFuture<'a, Result<FusenContext, FusenError>> {
         self.0.call(join_point)
     }
 }

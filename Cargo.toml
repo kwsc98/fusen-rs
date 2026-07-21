@@ -3,7 +3,7 @@ members = [
     "fusen-common",
     "fusen-common/derive-macro",
     "fusen-common/procedural-macro",
-    "fusen-internal-common",
+    "fusen-contract",
     "fusen-macro/derive-macro",
     "fusen-macro/procedural-macro",
     "fusen-macro/tests/renamed-runtime",
@@ -29,7 +29,7 @@ license-file = "LICENSE"
 fusen-common = { path = "fusen-common", version = "0.9.0" }
 fusen-common-derive-macro = { path = "fusen-common/derive-macro", version = "0.9.0" }
 fusen-common-procedural-macro = { path = "fusen-common/procedural-macro", version = "0.9.0" }
-fusen-internal-common = { path = "fusen-internal-common", version = "0.9.0" }
+fusen-contract = { path = "fusen-contract", version = "0.9.0" }
 fusen-derive-macro = { path = "fusen-macro/derive-macro", version = "0.9.0" }
 fusen-procedural-macro = { path = "fusen-macro/procedural-macro", version = "0.9.0" }
 fusen-register = { path = "fusen-register", version = "0.9.0" }

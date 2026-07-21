@@ -48,7 +48,7 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
             fn call<'a>(
                 &'a self,
                 join_point: #runtime::filter::ProceedingJoinPoint,
-            ) -> #runtime::fusen_internal_common::BoxFutureV2<
+            ) -> #runtime::contract::BoxFuture<
                 'a,
                 Result<#runtime::protocol::fusen::context::FusenContext, #runtime::error::FusenError>,
             > {

@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use bytes::Bytes;
-use fusen_internal_common::{BoxFuture, utils::uuid::uuid};
+use fusen_contract::StaticBoxFuture;
 use http::{HeaderValue, Request, Response, StatusCode, header::CONTENT_TYPE};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::service::Service;
@@ -35,7 +35,7 @@ pub struct RouterContext {
 impl Service<Request<hyper::body::Incoming>> for Router {
     type Response = Response<BoxBody<Bytes, Infallible>>;
     type Error = Infallible;
-    type Future = BoxFuture<Result<Self::Response, Self::Error>>;
+    type Future = StaticBoxFuture<Result<Self::Response, Self::Error>>;
 
     fn call(&self, request: Request<hyper::body::Incoming>) -> Self::Future {
         let router = self.context.clone();
@@ -127,7 +127,7 @@ fn request_identifier(request: &Request<hyper::body::Incoming>) -> String {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         })
         .map(str::to_owned)
-        .unwrap_or_else(uuid)
+        .unwrap_or_else(crate::request_id::new_request_id)
 }
 
 fn problem_response(

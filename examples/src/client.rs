@@ -8,7 +8,7 @@ use fusen_common::nacos::register::NacosRegister;
 use fusen_rs::handler::HandlerLoad;
 use fusen_rs::{
     client::{ClientOptions, FusenClientContextBuilder},
-    fusen_internal_common::protocol::WireProtocol,
+    contract::WireProtocol,
 };
 use std::sync::Arc;
 use tracing::debug;

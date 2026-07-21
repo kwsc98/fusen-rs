@@ -11,9 +11,9 @@ use crate::{
         rpc::{RpcServerHandler, RpcService},
     },
 };
-use fusen_internal_common::{
-    protocol::WireProtocol,
-    resource::service::{MethodResource, ParameterResource, ServiceResource},
+use fusen_contract::{
+    MethodDescriptor, ParameterDescriptor, ServiceEndpoint, ServiceRegistration, ServiceSelector,
+    ServiceWeight, WireProtocol,
 };
 use fusen_register::Register;
 use std::{collections::HashMap, future::Future, net::SocketAddr, sync::Arc, time::Duration};
@@ -201,31 +201,42 @@ impl FusenServerBuilder {
         for info in service_infos {
             info.validate()?;
             method_infos.extend(info.method_infos.iter().cloned().map(Arc::new));
-            resources.push(Arc::new(ServiceResource {
-                service_id: info.service_desc.service_id,
-                group: info.service_desc.group,
-                version: info.service_desc.version,
-                methods: info
-                    .method_infos
-                    .into_iter()
-                    .map(|method| MethodResource {
-                        method_name: method.method_name,
-                        path: method.path,
-                        method: method.method.to_string(),
-                        parameters: method
-                            .parameters
-                            .into_iter()
-                            .map(|parameter| ParameterResource {
-                                name: parameter.name,
-                                source: parameter.source,
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-                addr: advertised.clone(),
-                weight: None,
-                metadata: Default::default(),
-            }));
+            let selector = ServiceSelector::new(
+                info.service_desc.service_id,
+                info.service_desc.group,
+                info.service_desc.version,
+            )
+            .map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
+            let methods = info
+                .method_infos
+                .into_iter()
+                .map(|method| {
+                    let parameters = method
+                        .parameters
+                        .into_iter()
+                        .map(|parameter| {
+                            ParameterDescriptor::new(parameter.name, parameter.source)
+                                .map_err(|error| FusenError::InvalidRequest(error.to_string()))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    MethodDescriptor::new(
+                        method.method_name,
+                        method.method,
+                        method.path,
+                        parameters,
+                    )
+                    .map_err(|error| FusenError::InvalidRequest(error.to_string()))
+                })
+                .collect::<Result<Vec<_>, FusenError>>()?;
+            resources.push(Arc::new(
+                ServiceRegistration::new(
+                    selector,
+                    advertised.clone(),
+                    methods,
+                    ServiceWeight::default(),
+                )
+                .map_err(|error| FusenError::InvalidRequest(error.to_string()))?,
+            ));
         }
         let path_cache = PathCache::build(method_infos)?;
         for controller in self.service_handlers {
@@ -306,7 +317,7 @@ impl FusenServerBuilder {
     }
 }
 
-fn validate_advertised_url(value: &str) -> Result<String, FusenError> {
+fn validate_advertised_url(value: &str) -> Result<ServiceEndpoint, FusenError> {
     let url =
         url::Url::parse(value).map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
     if !matches!(url.scheme(), "http" | "https")
@@ -319,11 +330,11 @@ fn validate_advertised_url(value: &str) -> Result<String, FusenError> {
             "advertised_base_url must be an absolute HTTP(S) URL without query or fragment".into(),
         ));
     }
-    Ok(url.to_string().trim_end_matches('/').to_owned())
+    ServiceEndpoint::new(url).map_err(|error| FusenError::InvalidRequest(error.to_string()))
 }
 
 async fn rollback(
-    entries: &[(Arc<dyn Register>, Arc<ServiceResource>)],
+    entries: &[(Arc<dyn Register>, Arc<ServiceRegistration>)],
     protocol: WireProtocol,
     operation_timeout: Duration,
     deadline: Option<Instant>,
@@ -334,16 +345,16 @@ async fn rollback(
             .unwrap_or(operation_timeout);
         let timeout = operation_timeout.min(remaining);
         if timeout.is_zero() {
-            tracing::error!(service = %resource.service_id, "service deregistration skipped after shutdown deadline");
+            tracing::error!(service = %resource.selector().service_id(), "service deregistration skipped after shutdown deadline");
             break;
         }
         match tokio::time::timeout(timeout, register.deregister(resource.clone(), protocol)).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                tracing::error!(?error, service = %resource.service_id, "service deregistration failed");
+                tracing::error!(?error, service = %resource.selector().service_id(), "service deregistration failed");
             }
             Err(_) => {
-                tracing::error!(service = %resource.service_id, "service deregistration timed out");
+                tracing::error!(service = %resource.selector().service_id(), "service deregistration timed out");
             }
         }
     }
@@ -359,7 +370,7 @@ mod tests {
             service::{MethodInfo, ServiceDesc, ServiceInfo},
         },
     };
-    use fusen_internal_common::BoxFuture;
+    use fusen_contract::{BoxFuture, ServiceSelector, StaticBoxFuture};
     use fusen_register::{ServiceSubscription, error::RegisterError};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
@@ -379,9 +390,9 @@ mod tests {
     impl Register for MockRegister {
         fn register(
             &self,
-            _resource: Arc<ServiceResource>,
+            _resource: Arc<ServiceRegistration>,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<(), RegisterError>> {
+        ) -> StaticBoxFuture<Result<(), RegisterError>> {
             let count = self.registered.fetch_add(1, Ordering::SeqCst) + 1;
             let fail = self.fail_on == Some(count);
             let hang = self.hang_on == Some(count);
@@ -400,9 +411,9 @@ mod tests {
         }
         fn deregister(
             &self,
-            _resource: Arc<ServiceResource>,
+            _resource: Arc<ServiceRegistration>,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<(), RegisterError>> {
+        ) -> StaticBoxFuture<Result<(), RegisterError>> {
             let counter = self.deregistered.clone();
             let hang = self.hang_deregister;
             Box::pin(async move {
@@ -415,9 +426,9 @@ mod tests {
         }
         fn subscribe(
             &self,
-            _resource: ServiceResource,
+            _resource: ServiceSelector,
             _protocol: WireProtocol,
-        ) -> BoxFuture<Result<ServiceSubscription, RegisterError>> {
+        ) -> StaticBoxFuture<Result<ServiceSubscription, RegisterError>> {
             Box::pin(async { Ok(ServiceSubscription::local(Vec::new())) })
         }
     }
@@ -427,7 +438,7 @@ mod tests {
         fn call<'a>(
             &'a self,
             join_point: ProceedingJoinPoint,
-        ) -> fusen_internal_common::BoxFutureV2<'a, Result<FusenContext, FusenError>> {
+        ) -> BoxFuture<'a, Result<FusenContext, FusenError>> {
             Box::pin(async move { Ok(join_point.context) })
         }
     }
@@ -441,7 +452,7 @@ mod tests {
         fn call<'a>(
             &'a self,
             join_point: ProceedingJoinPoint,
-        ) -> fusen_internal_common::BoxFutureV2<'a, Result<FusenContext, FusenError>> {
+        ) -> BoxFuture<'a, Result<FusenContext, FusenError>> {
             Box::pin(async move {
                 let mut context = join_point.context;
                 self.started.notify_one();

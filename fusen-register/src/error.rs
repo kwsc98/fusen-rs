@@ -14,6 +14,9 @@ pub enum RegisterError {
     /// A service address or resource cannot be published.
     #[error("invalid service resource: {0}")]
     InvalidResource(String),
+    /// The registry provider does not support the requested wire protocol.
+    #[error("unsupported wire protocol: {0}")]
+    UnsupportedProtocol(String),
     /// Subscription cleanup ended without publishing a result.
     #[error("subscription cleanup was aborted")]
     CleanupAborted,

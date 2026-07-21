@@ -1,5 +1,5 @@
 use crate::error::FusenError;
-pub use fusen_internal_common::resource::service::ParameterSource;
+pub use fusen_contract::ParameterSource;
 use http::Method;
 use std::collections::HashSet;
 
@@ -190,6 +190,12 @@ fn validate_method(method: &MethodInfo) -> Result<(), FusenError> {
                 )));
             }
             ParameterSource::Query | ParameterSource::Body => {}
+            _ => {
+                return Err(FusenError::InvalidRequest(format!(
+                    "method {} uses an unsupported parameter source",
+                    method.method_name
+                )));
+            }
         }
     }
     if placeholders != path_parameters {

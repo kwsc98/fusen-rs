@@ -17,7 +17,7 @@
    cargo audit
    ```
 
-3. 按内部公共类型、注册契约、宏、common、核心 RPC 的依赖顺序，对每个发布 crate 执行 `cargo +1.97.0 package --locked --list -p <crate>` 并检查归档内容。
+3. 按 `fusen-contract`、`fusen-register`、宏、common、核心 RPC 的依赖顺序，对每个发布 crate 执行 `cargo +1.97.0 package --locked --list -p <crate>` 并检查归档内容。
 4. 依赖顺序中的前置 crate 已能从 registry 解析后，逐个执行真实的 `cargo +1.97.0 publish --locked --dry-run -p <crate>`；前置 crate 尚不可用时，不得用跳过验证替代该步骤。
 5. 从干净环境运行不依赖 Nacos/OTLP 的 Direct 示例。真实 Nacos 验证是可选的手工步骤，由维护者准备服务并显式运行：
 

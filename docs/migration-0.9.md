@@ -19,6 +19,8 @@ Dubbo/Triple、`Protocol::Dubbo` 和 Prost codec 已删除。调用方必须使�
 
 ## 注册中心
 
+`fusen-internal-common` 已删除。稳定共享契约位于 `fusen-contract`，可通过 `fusen_rs::contract` 或 `fusen_register::contract` 使用。`ServiceResource` 拆分为 `ServiceSelector`、`ServiceRegistration` 和 `ServiceInstance`；注册和摘除接受 `Arc<ServiceRegistration>`，发现只接受 `ServiceSelector`，Directory 快照只包含 `ServiceInstance`。`BoxFutureV2` 已删除，分别使用 `fusen_contract::BoxFuture<'a, T>` 和 `StaticBoxFuture<T>`。
+
 `Register` 接受 `WireProtocol`，错误源要求 `Send + Sync` 并通过 `Arc` 支持 `Clone`；register/deregister 实现必须幂等。`subscribe` 改为返回 `ServiceSubscription`。
 
 注册 provider 使用 `directory_channel(initial)` 获得 `DirectoryWriter` 和只读 `Directory`，listener 只持有 writer。旧的 `Directory::default/get/change/replace` 已删除。订阅 cleanup 使用 `subscription_cleanup()` 获得 closer/cleanup；provider 必须在自己的 executor 上运行 `cleanup.run(unsubscribe_future)`，然后把 closer 交给 `ServiceSubscription::new`。`SubscriptionLifecycle` trait 已删除。

@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 //! Service registration and discovery contracts for fusen-rs.
 
-use fusen_internal_common::{
-    BoxFuture, protocol::WireProtocol, resource::service::ServiceResource,
+use fusen_contract::{
+    ServiceInstance, ServiceRegistration, ServiceSelector, StaticBoxFuture, WireProtocol,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{future::Future, sync::Arc};
@@ -156,9 +156,9 @@ impl ServiceSubscription {
     }
 
     /// Creates an immutable local directory with no remote cleanup.
-    pub fn local(resources: Vec<ServiceResource>) -> Self {
+    pub fn local(instances: Vec<ServiceInstance>) -> Self {
         Self::new(
-            Directory::fixed(resources),
+            Directory::fixed(instances),
             SubscriptionCloser::completed(Ok(())),
         )
     }
@@ -179,8 +179,8 @@ impl ServiceSubscription {
 pub mod directory;
 /// Registration and directory failures.
 pub mod error;
-/// Shared types used when implementing [`Register`].
-pub use fusen_internal_common;
+/// Stable shared types used when implementing [`Register`].
+pub use fusen_contract as contract;
 
 /// Pluggable service registry used by clients and servers.
 pub trait Register: Send + Sync {
@@ -190,24 +190,24 @@ pub trait Register: Send + Sync {
     /// including after a local timeout or cancellation.
     fn register(
         &self,
-        resource: Arc<ServiceResource>,
+        registration: Arc<ServiceRegistration>,
         protocol: WireProtocol,
-    ) -> BoxFuture<Result<(), RegisterError>>;
+    ) -> StaticBoxFuture<Result<(), RegisterError>>;
 
     /// Removes one previously published service instance. Implementations must be idempotent,
     /// including when no matching instance exists.
     fn deregister(
         &self,
-        resource: Arc<ServiceResource>,
+        registration: Arc<ServiceRegistration>,
         protocol: WireProtocol,
-    ) -> BoxFuture<Result<(), RegisterError>>;
+    ) -> StaticBoxFuture<Result<(), RegisterError>>;
 
     /// Subscribes to all instances matching the requested service resource.
     fn subscribe(
         &self,
-        resource: ServiceResource,
+        selector: ServiceSelector,
         protocol: WireProtocol,
-    ) -> BoxFuture<Result<ServiceSubscription, RegisterError>>;
+    ) -> StaticBoxFuture<Result<ServiceSubscription, RegisterError>>;
 }
 
 #[cfg(test)]

@@ -68,7 +68,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                     let mut arguments = Vec::new();
                     #(
                         arguments.push(
-                            #runtime::fusen_internal_common::serde_json::to_value(&#arguments)
+                            #runtime::serde_json::to_value(&#arguments)
                                 .map_err(|error| #runtime::error::FusenError::internal(
                                     "failed to serialize request argument",
                                     error,
@@ -76,7 +76,7 @@ pub fn fusen_trait(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         );
                     )*
                     let response = self.client.invoke(stringify!(#ident), arguments).await?;
-                    #runtime::fusen_internal_common::serde_json::from_value(response)
+                    #runtime::serde_json::from_value(response)
                         .map_err(|error| #runtime::error::FusenError::InvalidResponse(error.to_string()))
                 }
             }

@@ -9,7 +9,7 @@ use crate::{
     },
 };
 use bytes::{Bytes, BytesMut};
-use fusen_internal_common::protocol::WireProtocol;
+use fusen_contract::WireProtocol;
 use http::{Request, Response, Uri, Version, header::CONTENT_TYPE};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use mime::Mime;
@@ -52,6 +52,11 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
         let version = match fusen_request.protocol {
             WireProtocol::Fusen => Version::HTTP_2,
             WireProtocol::SpringCloud => Version::HTTP_11,
+            _ => {
+                return Err(FusenError::UnsupportedProtocol(
+                    fusen_request.protocol.to_string(),
+                ));
+            }
         };
         let mut request = Request::builder()
             .version(version)

@@ -69,11 +69,8 @@ mod tests {
         async fn select<'a>(
             &'a self,
             _context: &'a FusenContext,
-            invokers: Arc<Vec<Arc<rpc::fusen_internal_common::resource::service::ServiceResource>>>,
-        ) -> Result<
-            Option<Arc<rpc::fusen_internal_common::resource::service::ServiceResource>>,
-            FusenError,
-        > {
+            invokers: Arc<Vec<Arc<rpc::contract::ServiceInstance>>>,
+        ) -> Result<Option<Arc<rpc::contract::ServiceInstance>>, FusenError> {
             Ok(invokers.first().cloned())
         }
     }

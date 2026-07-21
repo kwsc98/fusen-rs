@@ -2,7 +2,7 @@ use crate::{
     error::FusenError,
     protocol::fusen::service::{MethodInfo, ParameterSource},
 };
-use fusen_internal_common::protocol::WireProtocol;
+use fusen_contract::WireProtocol;
 use http::{HeaderMap, Method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -124,6 +124,12 @@ impl FusenRequest {
                     .ok_or_else(|| {
                         FusenError::InvalidRequest("request body argument count mismatch".into())
                     })?,
+                _ => {
+                    return Err(FusenError::InvalidRequest(format!(
+                        "parameter {} uses an unsupported source",
+                        parameter.name
+                    )));
+                }
             };
             arguments.push(argument);
         }
@@ -181,6 +187,12 @@ impl FusenRequest {
                     }
                 }
                 ParameterSource::Body => body_values.push(value),
+                _ => {
+                    return Err(FusenError::InvalidRequest(format!(
+                        "parameter {} uses an unsupported source",
+                        parameter.name
+                    )));
+                }
             }
         }
         if protocol == WireProtocol::SpringCloud && body_values.len() > 1 {

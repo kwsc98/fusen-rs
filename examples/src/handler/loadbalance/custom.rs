@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use fusen_rs::{
-    error::FusenError, fusen_internal_common::resource::service::ServiceResource,
-    fusen_procedural_macro::handler, handler::loadbalance::LoadBalance,
-    protocol::fusen::context::FusenContext,
+    contract::ServiceInstance, error::FusenError, fusen_procedural_macro::handler,
+    handler::loadbalance::LoadBalance, protocol::fusen::context::FusenContext,
 };
 use rand::Rng;
 use tracing::debug;
@@ -15,8 +14,8 @@ impl LoadBalance for CustomLoadBalance {
     async fn select(
         &self,
         context: &FusenContext,
-        invokers: Arc<Vec<Arc<ServiceResource>>>,
-    ) -> Result<Option<Arc<ServiceResource>>, FusenError> {
+        invokers: Arc<Vec<Arc<ServiceInstance>>>,
+    ) -> Result<Option<Arc<ServiceInstance>>, FusenError> {
         debug!(
             request_id = %context.unique_identifier,
             method = %context.request.path.method,

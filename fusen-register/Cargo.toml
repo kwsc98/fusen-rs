@@ -13,7 +13,7 @@ license-file.workspace = true
 
 
 [dependencies]
-fusen-internal-common.workspace = true
+fusen-contract.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 

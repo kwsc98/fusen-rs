@@ -15,8 +15,12 @@ pub mod protocol;
 /// Transactional server builder and runtime.
 pub mod server;
 
-/// Shared protocol and resource types used by generated code.
-pub use fusen_internal_common;
+/// Stable service registration and wire protocol contracts.
+pub use fusen_contract as contract;
+#[doc(hidden)]
+pub use serde_json;
+
+mod request_id;
 /// Attribute macros used to generate RPC clients, services, and handlers.
 pub use fusen_procedural_macro;
 /// HTTP types used by generated service metadata.

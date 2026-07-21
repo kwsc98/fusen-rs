@@ -1,12 +1,12 @@
 use crate::{error::FusenError, protocol::fusen::context::FusenContext};
-use fusen_internal_common::BoxFutureV2;
+use fusen_contract::BoxFuture;
 use std::sync::Arc;
 
 pub trait FusenFilter: Send + Sync {
     fn call<'a>(
         &'a self,
         join_point: ProceedingJoinPoint,
-    ) -> BoxFutureV2<'a, Result<FusenContext, FusenError>>;
+    ) -> BoxFuture<'a, Result<FusenContext, FusenError>>;
 }
 
 pub struct ProceedingJoinPoint {

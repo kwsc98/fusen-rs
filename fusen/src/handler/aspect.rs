@@ -1,4 +1,4 @@
-use fusen_internal_common::BoxFuture;
+use fusen_contract::StaticBoxFuture;
 
 use crate::{
     error::FusenError,
@@ -14,7 +14,10 @@ pub trait Aspect {
 pub struct DefaultAspect;
 
 impl FusenFilter for DefaultAspect {
-    fn call(&self, join_point: ProceedingJoinPoint) -> BoxFuture<Result<FusenContext, FusenError>> {
+    fn call(
+        &self,
+        join_point: ProceedingJoinPoint,
+    ) -> StaticBoxFuture<Result<FusenContext, FusenError>> {
         Box::pin(async move { join_point.proceed().await })
     }
 }

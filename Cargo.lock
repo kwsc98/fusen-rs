@@ -371,6 +371,7 @@ dependencies = [
  "fusen-common-derive-macro",
  "fusen-common-procedural-macro",
  "fusen-register",
+ "http",
  "nacos-sdk",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -409,20 +410,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fusen-contract"
+version = "0.9.0"
+dependencies = [
+ "http",
+ "thiserror 2.0.19",
+ "url",
+]
+
+[[package]]
 name = "fusen-derive-macro"
 version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "fusen-internal-common"
-version = "0.9.0"
-dependencies = [
- "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -449,7 +451,7 @@ dependencies = [
 name = "fusen-register"
 version = "0.9.0"
 dependencies = [
- "fusen-internal-common",
+ "fusen-contract",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -459,7 +461,7 @@ name = "fusen-rs"
 version = "0.9.0"
 dependencies = [
  "bytes",
- "fusen-internal-common",
+ "fusen-contract",
  "fusen-procedural-macro",
  "fusen-register",
  "http",
@@ -476,6 +478,7 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]
