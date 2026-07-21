@@ -1,0 +1,21 @@
+error[E0119]: conflicting implementations of trait `FusenFilter` for type `Service`
+  --> tests/ui/multiple_services.rs:25:1
+   |
+18 | #[fusen_service]
+   | ---------------- first implementation here
+...
+25 | #[fusen_service]
+   | ^^^^^^^^^^^^^^^^ conflicting implementation for `Service`
+   |
+   = note: this error originates in the attribute macro `fusen_service` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `RpcService` for type `Service`
+  --> tests/ui/multiple_services.rs:25:1
+   |
+18 | #[fusen_service]
+   | ---------------- first implementation here
+...
+25 | #[fusen_service]
+   | ^^^^^^^^^^^^^^^^ conflicting implementation for `Service`
+   |
+   = note: this error originates in the attribute macro `fusen_service` (in Nightly builds, run with -Z macro-backtrace for more info)

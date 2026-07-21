@@ -1,0 +1,5 @@
+error: RPC traits must not declare generic parameters
+ --> tests/ui/fusen_trait_generic.rs:4:12
+  |
+4 | trait Demo<T> {
+  |            ^

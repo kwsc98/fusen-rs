@@ -1,0 +1,7 @@
+error: RPC methods must not provide default implementations
+ --> tests/ui/fusen_trait_default_method.rs:5:5
+  |
+5 | /     async fn call(&self) -> String {
+6 | |         "default".into()
+7 | |     }
+  | |_____^

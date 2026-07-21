@@ -24,6 +24,7 @@
 - Nacos naming/config 改为 listener-first 初始化，路由对分段后的路径执行严格百分号解码。
 - Directory 拆分只读 reader/provider writer，订阅 cleanup 改为 executor-neutral 的共享终态协调器。
 - 客户端增加订阅关闭 deadline 和关闭状态，收窄 Tokio 与 internal-common 依赖 feature。
+- RPC 宏改为结构化属性解析和受验证的具体类型契约，支持限定 `asset`、泛型 service/handler 实现及显式 handler kind。
 
 ### Removed
 

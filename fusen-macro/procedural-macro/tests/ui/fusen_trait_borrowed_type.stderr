@@ -1,0 +1,5 @@
+error: RPC parameter and return types must be owned
+ --> tests/ui/fusen_trait_borrowed_type.rs:5:40
+  |
+5 |     async fn call(&self, value: Option<&str>) -> String;
+  |                                        ^^^^

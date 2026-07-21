@@ -6,6 +6,7 @@ members = [
     "fusen-internal-common",
     "fusen-macro/derive-macro",
     "fusen-macro/procedural-macro",
+    "fusen-macro/tests/renamed-runtime",
     "fusen-register",
     "fusen",
     "examples",

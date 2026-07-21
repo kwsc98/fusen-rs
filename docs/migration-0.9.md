@@ -25,7 +25,11 @@ Dubbo/Triple、`Protocol::Dubbo` 和 Prost codec 已删除。调用方必须使�
 
 ## 宏与参数
 
-所有 service id/group/version 和 `asset` 只保留在 `fusen_trait`，实现上的重复属性必须删除。参数根据模板和 HTTP method 自动分类为 Path/Query/Body；公开请求字段改为 HeaderMap、结构化 query 和原始 JSON body。
+所有 service id/group/version 和 `asset` 只保留在 `fusen_trait`，实现上的重复属性必须删除。推荐将导入的裸 `#[asset]` 改为限定路径 `#[fusen_rs::fusen_procedural_macro::asset(...)]`；依赖重命名时使用实际 crate 名。属性字段必须使用 `name = value`，重复字段和任意表达式不再接受。
+
+RPC trait 现在只接受非泛型的 `async fn(&self, ...)`，参数和返回值必须是拥有所有权的具体类型；泛型、引用/生命周期、默认方法和关联项会直接产生宏诊断。泛型 service/handler 实现仍受支持。handler trait 使用别名时增加 `kind = Aspect` 或 `kind = LoadBalance`。一个实现类型只能承载一个 `fusen_service`，多个服务需要拆分实现类型。
+
+参数根据模板和 HTTP method 自动分类为 Path/Query/Body；公开请求字段改为 HeaderMap、结构化 query 和原始 JSON body。
 
 ## 工具链
 

@@ -1,0 +1,5 @@
+error: RPC methods must not declare generic parameters or where clauses
+ --> tests/ui/fusen_trait_method_generic.rs:5:18
+  |
+5 |     async fn call<T>(&self, value: T) -> String;
+  |                  ^^^

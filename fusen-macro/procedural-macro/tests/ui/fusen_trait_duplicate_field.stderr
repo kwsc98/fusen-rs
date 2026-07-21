@@ -1,0 +1,5 @@
+error: duplicate attribute field `id`
+ --> tests/ui/fusen_trait_duplicate_field.rs:3:27
+  |
+3 | #[fusen_trait(id = "one", id = "two")]
+  |                           ^^^^^^^^^^

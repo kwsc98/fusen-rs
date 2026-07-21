@@ -1,7 +1,7 @@
-use crate::{FusenAttr, fusen_crate_path};
+use crate::{FusenAttr, fusen_crate_path, is_asset_attr, trait_macro::validate_signature};
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{FnArg, ImplItem, ItemImpl, Meta, parse_macro_input};
+use quote::{format_ident, quote};
+use syn::{FnArg, ImplItem, ItemImpl, parse_macro_input};
 
 pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
     let runtime = fusen_crate_path();
@@ -19,9 +19,9 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
             .into_compile_error()
             .into();
     };
-    if contains_asset(&input.attrs)
+    if input.attrs.iter().any(is_asset_attr)
         || input.items.iter().any(|item| match item {
-            ImplItem::Fn(method) => contains_asset(&method.attrs),
+            ImplItem::Fn(method) => method.attrs.iter().any(is_asset_attr),
             _ => false,
         })
     {
@@ -33,8 +33,50 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
         .into();
     }
 
+    let dispatch = match build_dispatch(&runtime, trait_path, &input) {
+        Ok(dispatch) => dispatch,
+        Err(error) => return error.into_compile_error().into(),
+    };
     let self_type = &input.self_ty;
-    let dispatch = input
+    let (impl_generics, _, where_clause) = input.generics.split_for_impl();
+
+    quote! {
+        #[allow(non_snake_case)]
+        #input
+
+        impl #impl_generics #runtime::filter::FusenFilter for #self_type #where_clause {
+            fn call<'a>(
+                &'a self,
+                join_point: #runtime::filter::ProceedingJoinPoint,
+            ) -> #runtime::fusen_internal_common::BoxFutureV2<
+                'a,
+                Result<#runtime::protocol::fusen::context::FusenContext, #runtime::error::FusenError>,
+            > {
+                Box::pin(async move {
+                    let mut context = join_point.context;
+                    #(#dispatch)*
+                    Err(#runtime::error::FusenError::RouteNotFound(
+                        context.method_info.method_name.clone(),
+                    ))
+                })
+            }
+        }
+
+        impl #impl_generics #runtime::server::rpc::RpcService for #self_type #where_clause {
+            fn get_service_info(&self) -> #runtime::protocol::fusen::service::ServiceInfo {
+                <Self as #trait_path>::__fusen_service_info()
+            }
+        }
+    }
+    .into()
+}
+
+fn build_dispatch(
+    runtime: &proc_macro2::TokenStream,
+    trait_path: &syn::Path,
+    input: &ItemImpl,
+) -> Result<Vec<proc_macro2::TokenStream>, syn::Error> {
+    input
         .items
         .iter()
         .filter_map(|item| match item {
@@ -42,14 +84,22 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
             _ => None,
         })
         .map(|method| {
+            validate_signature(&method.sig)?;
             let ident = &method.sig.ident;
-            let parameters = method.sig.inputs.iter().filter_map(|input| match input {
-                FnArg::Typed(input) => Some((&input.pat, &input.ty)),
-                FnArg::Receiver(_) => None,
-            });
-            let declarations = parameters.clone().map(|(pattern, kind)| {
+            let parameters = method
+                .sig
+                .inputs
+                .iter()
+                .filter_map(|input| match input {
+                    FnArg::Typed(input) => Some(&input.ty),
+                    FnArg::Receiver(_) => None,
+                })
+                .enumerate()
+                .map(|(index, kind)| (format_ident!("__fusen_argument_{index}"), kind))
+                .collect::<Vec<_>>();
+            let declarations = parameters.iter().map(|(argument, kind)| {
                 quote! {
-                    let #pattern: #kind = arguments
+                    let #argument: #kind = arguments
                         .next()
                         .ok_or_else(|| #runtime::error::FusenError::InvalidRequest(
                             "request argument count mismatch".into(),
@@ -57,8 +107,8 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                         .deserialize()?;
                 }
             });
-            let arguments = parameters.map(|(pattern, _)| pattern);
-            quote! {
+            let arguments = parameters.iter().map(|(argument, _)| argument);
+            Ok(quote! {
                 if context.method_info.method_name == stringify!(#ident) {
                     let mut arguments = context
                         .request
@@ -70,58 +120,14 @@ pub fn fusen_service(attr: FusenAttr, item: TokenStream) -> TokenStream {
                             "request argument count mismatch".into(),
                         ));
                     }
-                    let result = self.#ident(#(#arguments),*).await;
+                    let result = <Self as #trait_path>::#ident(self #(, #arguments)*).await;
                     let mut response = #runtime::protocol::fusen::response::FusenResponse::default();
                     response.protocol = context.request.protocol;
                     response.init_response(result)?;
                     context.response = Some(response);
                     return Ok(context);
                 }
-            }
+            })
         })
-        .collect::<Vec<_>>();
-
-    quote! {
-        #[allow(non_snake_case)]
-        #input
-
-        impl #runtime::filter::FusenFilter for #self_type {
-            fn call<'a>(
-                &'a self,
-                join_point: #runtime::filter::ProceedingJoinPoint,
-            ) -> #runtime::fusen_internal_common::BoxFutureV2<
-                'a,
-                Result<#runtime::protocol::fusen::context::FusenContext, #runtime::error::FusenError>,
-            > {
-                Box::pin(async move { self.__fusen_invoke(join_point.context).await })
-            }
-        }
-
-        impl #runtime::server::rpc::RpcService for #self_type {
-            fn get_service_info(&self) -> #runtime::protocol::fusen::service::ServiceInfo {
-                <Self as #trait_path>::__fusen_service_info()
-            }
-        }
-
-        impl #self_type {
-            async fn __fusen_invoke(
-                &self,
-                mut context: #runtime::protocol::fusen::context::FusenContext,
-            ) -> Result<#runtime::protocol::fusen::context::FusenContext, #runtime::error::FusenError> {
-                #(#dispatch)*
-                Err(#runtime::error::FusenError::RouteNotFound(
-                    context.method_info.method_name.clone(),
-                ))
-            }
-        }
-    }
-    .into()
-}
-
-fn contains_asset(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| match &attr.meta {
-        Meta::Path(path) => path.is_ident("asset"),
-        Meta::List(list) => list.path.is_ident("asset"),
-        Meta::NameValue(value) => value.path.is_ident("asset"),
-    })
+        .collect()
 }

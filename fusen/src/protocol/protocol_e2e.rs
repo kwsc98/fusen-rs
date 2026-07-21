@@ -1,16 +1,16 @@
 use crate::{
     client::{ClientOptions, FusenClientContextBuilder},
     error::FusenError,
-    fusen_procedural_macro::{asset, fusen_service, fusen_trait},
+    fusen_procedural_macro::{fusen_service, fusen_trait},
     server::FusenServerBuilder,
 };
 use std::{net::SocketAddr, time::Duration};
 use tokio::{net::TcpStream, sync::oneshot};
 
 #[fusen_trait(id = "protocol-e2e")]
-#[asset(path = "/rpc", method = POST)]
+#[crate::fusen_procedural_macro::asset(path = "/rpc", method = POST)]
 trait ProtocolService {
-    #[asset(path = "/items/{id}")]
+    #[crate::fusen_procedural_macro::asset(path = "/items/{id}")]
     async fn echo(&self, id: String, values: Vec<i32>) -> Vec<i32>;
 }
 

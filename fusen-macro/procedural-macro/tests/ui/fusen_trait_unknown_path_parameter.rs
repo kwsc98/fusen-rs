@@ -1,8 +1,8 @@
-use fusen_procedural_macro::{asset, fusen_trait};
+use fusen_procedural_macro::fusen_trait;
 
 #[fusen_trait]
 trait Demo {
-    #[asset(path = "/users/{id}", method = GET)]
+    #[fusen_procedural_macro::asset(path = "/users/{id}", method = GET)]
     async fn get(&self, name: String) -> String;
 }
 

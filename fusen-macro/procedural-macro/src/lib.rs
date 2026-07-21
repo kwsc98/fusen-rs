@@ -5,7 +5,7 @@ use fusen_derive_macro::fusen_attr;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
-use syn::{Attribute, Meta};
+use syn::{Attribute, Meta, Path};
 
 mod handler_macro;
 mod service_macro;
@@ -58,37 +58,98 @@ pub fn asset(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-fn get_asset_by_attrs(attrs: &Vec<Attribute>) -> Result<ResourceAttr, syn::Error> {
+fn get_asset_by_attrs(attrs: &[Attribute]) -> Result<ResourceAttr, syn::Error> {
+    let mut resource = None;
     for attr in attrs {
-        if let Meta::List(list) = &attr.meta
-            && let Some(segment) = list.path.segments.first()
-            && segment.ident == "asset"
-        {
-            return ResourceAttr::from_attr(list.tokens.clone().into());
+        if !is_asset_attr(attr) {
+            continue;
         }
+        if resource.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "only one `asset` attribute is allowed",
+            ));
+        }
+        let Meta::List(list) = &attr.meta else {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "`asset` requires `path = ...` and/or `method = ...` arguments",
+            ));
+        };
+        resource = Some(ResourceAttr::from_tokens(list.tokens.clone())?);
     }
-    Ok(ResourceAttr::default())
+    Ok(resource.unwrap_or_default())
+}
+
+fn is_asset_attr(attr: &Attribute) -> bool {
+    match &attr.meta {
+        Meta::Path(path) => is_asset_path(path),
+        Meta::List(list) => is_asset_path(&list.path),
+        Meta::NameValue(value) => is_asset_path(&value.path),
+    }
+}
+
+fn is_asset_path(path: &Path) -> bool {
+    path.segments
+        .last()
+        .is_some_and(|segment| segment.ident == "asset")
 }
 
 fusen_attr! {
-    ResourceAttr,
-    path,
-    method
+    ResourceAttr {
+        path: string,
+        method: ident_or_string,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+    use syn::{ItemTrait, parse::Parser};
+
+    #[test]
+    fn qualified_asset_is_parsed() {
+        let item: ItemTrait = syn::parse_quote! {
+            #[renamed::asset(path = r#"/quoted/\"value"#, method = "get")]
+            trait Demo {
+                async fn call(&self);
+            }
+        };
+        let resource = get_asset_by_attrs(&item.attrs).unwrap();
+        assert_eq!(resource.path.as_deref(), Some("/quoted/\\\"value"));
+        assert_eq!(resource.method.as_deref(), Some("get"));
+    }
+
+    #[test]
+    fn duplicate_fields_and_assets_are_rejected() {
+        let args = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+            .parse2(quote!(path = "/one", path = "/two"))
+            .unwrap();
+        assert!(ResourceAttr::build_attr(args).is_err());
+
+        let item: ItemTrait = syn::parse_quote! {
+            #[asset(path = "/one")]
+            #[renamed::asset(path = "/two")]
+            trait Demo {
+                async fn call(&self);
+            }
+        };
+        assert!(get_asset_by_attrs(&item.attrs).is_err());
+    }
 }
 
 fusen_attr! {
-    UrlConfigAttr,
-    attr
+    FusenAttr {
+        id: string,
+        version: string,
+        group: string,
+    }
 }
 
 fusen_attr! {
-    FusenAttr,
-    id,
-    version,
-    group
-}
-
-fusen_attr! {
-    HandlerAttr,
-    id
+    HandlerAttr {
+        id: string,
+        kind: ident_or_string,
+    }
 }

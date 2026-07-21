@@ -1,0 +1,5 @@
+error: RPC methods must have an immutable `&self` receiver without an explicit lifetime
+ --> tests/ui/fusen_trait_mut_receiver.rs:5:19
+  |
+5 |     async fn call(&mut self) -> String;
+  |                   ^^^^^^^^^
