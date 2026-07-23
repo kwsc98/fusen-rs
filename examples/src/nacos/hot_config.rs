@@ -19,23 +19,23 @@ pub struct CloudConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config: CloudConfig = CloudConfig {
+    let config = CloudConfig {
         config: "config".to_string(),
         username: "kwsc98".to_string(),
         phone: "18687987678".to_string(),
         password: "xxyynnzzjj@123".to_string(),
     };
-    //字段过滤
     println!("{config:?}");
-    //nacos热配置
+
     let config = NacosConfig {
-        server_addr: std::env::var("NACOS_ADDR")?,
+        server_addr: std::env::var("NACOS_ADDR").unwrap_or_else(|_| "127.0.0.1:8848".to_owned()),
         namespace: None,
         username: None,
         password: None,
     };
     let config = NacosConfiguration::init_nacos_configuration(Arc::new(config)).await?;
-    //可直接导入nacos : examples/resource/nacos_config_export_20250928160704.zip
+    // This archive can be imported directly into Nacos:
+    // examples/resource/nacos_config_export_20250928160704.zip
     let cloud_config: ConfigManager<CloudConfig> = config
         .get_config_manager("application-config1", "DEFAULT_GROUP")
         .await?;

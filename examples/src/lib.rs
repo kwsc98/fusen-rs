@@ -1,6 +1,7 @@
 use fusen_rs::fusen_procedural_macro::fusen_trait;
 use serde::{Deserialize, Serialize};
 pub mod handler;
+pub mod service;
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub struct RequestDto {

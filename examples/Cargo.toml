@@ -9,20 +9,32 @@ publish = false
 
 
 [[bin]]
-name = "server"
-path = "src/server.rs"
+name = "host-server"
+path = "src/host/server.rs"
 
 [[bin]]
-name = "client"
-path = "src/client.rs"
+name = "host-client"
+path = "src/host/client.rs"
 
 [[bin]]
-name = "client-pt"
-path = "src/client_pt.rs"
+name = "host-client-pt"
+path = "src/host/client_pt.rs"
 
 [[bin]]
-name = "hot-config"
-path = "src/hot_config.rs"
+name = "host-server-pt"
+path = "src/host/server_pt.rs"
+
+[[bin]]
+name = "nacos-server"
+path = "src/nacos/server.rs"
+
+[[bin]]
+name = "nacos-client"
+path = "src/nacos/client.rs"
+
+[[bin]]
+name = "nacos-hot-config"
+path = "src/nacos/hot_config.rs"
 
 
 [dependencies]
