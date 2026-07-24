@@ -1,14 +1,12 @@
 use std::{env, io, time::Instant};
 
 use examples::{DemoServiceClient, RequestDto};
-use fusen_rs::{
-    client::{ClientOptions, FusenClientContextBuilder},
-    contract::WireProtocol,
-};
+use fusen_rs::{ClientRuntime, contract::WireProtocol};
 use tokio::task::JoinSet;
 
-const DEFAULT_CONCURRENCY: usize = 100;
+const DEFAULT_CONCURRENCIES: &[usize] = &[1, 100];
 const DEFAULT_REQUESTS_PER_TASK: usize = 10_000;
+const DEFAULT_ROUNDS: usize = 5;
 const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8081";
 const REQUEST_VALUE: &str = "benchmark";
 
@@ -57,6 +55,14 @@ struct BenchmarkResult {
     request_body_bytes: u64,
 }
 
+struct BenchmarkSummary {
+    protocol: BenchmarkProtocol,
+    concurrency: usize,
+    median_qps: f64,
+    median_successful_qps: f64,
+    median_throughput_mib: f64,
+}
+
 impl BenchmarkResult {
     fn completed(&self) -> u64 {
         self.stats.succeeded + self.stats.failed
@@ -86,46 +92,54 @@ impl BenchmarkResult {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let concurrency = env_usize("PT_CONCURRENCY", DEFAULT_CONCURRENCY)?;
+    let concurrencies = env_usize_list("PT_CONCURRENCY", DEFAULT_CONCURRENCIES)?;
     let requests_per_task = env_usize("PT_REQUESTS_PER_TASK", DEFAULT_REQUESTS_PER_TASK)?;
-    let planned_requests = concurrency
-        .checked_mul(requests_per_task)
-        .ok_or_else(|| invalid_input("压测请求总数溢出"))?;
+    let rounds = env_usize("PT_ROUNDS", DEFAULT_ROUNDS)?;
     let server_url = env::var("PT_SERVER_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_owned());
     let request_body_bytes = serde_json::to_vec(&RequestDto {
         str: REQUEST_VALUE.to_owned(),
     })?
     .len() as u64;
     let protocols = benchmark_protocols()?;
-    let config = BenchmarkConfig {
-        concurrency,
-        requests_per_task,
-        planned_requests,
-        server_url,
-        request_body_bytes,
-    };
+    let mut summaries = Vec::with_capacity(protocols.len() * concurrencies.len());
+    let mut failures = 0_u64;
+    for concurrency in concurrencies {
+        let planned_requests = concurrency
+            .checked_mul(requests_per_task)
+            .ok_or_else(|| invalid_input("压测请求总数溢出"))?;
+        let config = BenchmarkConfig {
+            concurrency,
+            requests_per_task,
+            planned_requests,
+            server_url: server_url.clone(),
+            request_body_bytes,
+        };
+        for protocol in protocols.iter().copied() {
+            let runtime = ClientRuntime::builder().build()?;
+            let client = DemoServiceClient::builder(&runtime)
+                .direct(&config.server_url)
+                .protocol(protocol.wire_protocol())
+                .connect()
+                .await?;
 
-    let mut results = Vec::with_capacity(protocols.len());
-    for protocol in protocols {
-        let mut context = FusenClientContextBuilder::new().build()?;
-        let mut options = ClientOptions::direct(config.server_url.parse()?);
-        options.protocol = protocol.wire_protocol();
-        let client = DemoServiceClient::init(&mut context, options).await?;
+            // Warm each protocol at benchmark concurrency before timing steady-state RPCs.
+            warm_up(&client, config.concurrency).await?;
 
-        // Warm each protocol at benchmark concurrency before timing steady-state RPCs.
-        warm_up(&client, config.concurrency).await?;
-
-        let result = run_benchmark(&client, protocol, &config).await?;
-        client.close().await?;
-        print_result(&config, &result);
-        results.push(result);
+            let mut results = Vec::with_capacity(rounds);
+            for round in 1..=rounds {
+                let result = run_benchmark(&client, protocol, &config).await?;
+                failures = failures.saturating_add(result.stats.failed);
+                print_result(&config, &result, round, rounds);
+                results.push(result);
+            }
+            runtime.shutdown().await?;
+            let summary = summarize(&results, concurrency);
+            print_summary(&summary, rounds);
+            summaries.push(summary);
+        }
     }
 
-    print_comparison(&results);
-    let failures = results
-        .iter()
-        .map(|result| result.stats.failed)
-        .sum::<u64>();
+    print_comparisons(&summaries);
     if failures > 0 {
         return Err(invalid_input(format!("{failures} 个压测请求失败")).into());
     }
@@ -209,7 +223,7 @@ async fn run_benchmark(
     })
 }
 
-fn print_result(config: &BenchmarkConfig, result: &BenchmarkResult) {
+fn print_result(config: &BenchmarkConfig, result: &BenchmarkResult, round: usize, rounds: usize) {
     let request_bytes = result.request_bytes();
     let total_bytes = result.total_bytes();
     let average_response_bytes = if result.stats.succeeded == 0 {
@@ -219,8 +233,8 @@ fn print_result(config: &BenchmarkConfig, result: &BenchmarkResult) {
     };
 
     println!(
-        "\n{} 压测结果（不包含并发预热请求）",
-        result.protocol.label()
+        "\n{} 压测结果，第 {round}/{rounds} 轮（不包含并发预热请求）",
+        result.protocol.label(),
     );
     println!("  服务地址:             {}", config.server_url);
     println!("  并发任务数:           {}", config.concurrency);
@@ -259,35 +273,98 @@ fn print_result(config: &BenchmarkConfig, result: &BenchmarkResult) {
     }
 }
 
-fn print_comparison(results: &[BenchmarkResult]) {
-    let http1 = results
+fn summarize(results: &[BenchmarkResult], concurrency: usize) -> BenchmarkSummary {
+    let protocol = results
+        .first()
+        .expect("at least one benchmark round is required")
+        .protocol;
+    BenchmarkSummary {
+        protocol,
+        concurrency,
+        median_qps: median(results.iter().map(BenchmarkResult::qps)),
+        median_successful_qps: median(results.iter().map(BenchmarkResult::successful_qps)),
+        median_throughput_mib: median(results.iter().map(BenchmarkResult::throughput_mib)),
+    }
+}
+
+fn print_summary(summary: &BenchmarkSummary, rounds: usize) {
+    println!(
+        "\n{} 汇总（并发 {}，{rounds} 轮中位数）",
+        summary.protocol.label(),
+        summary.concurrency
+    );
+    println!("  总 QPS:               {:.2}", summary.median_qps);
+    println!(
+        "  成功 QPS:             {:.2}",
+        summary.median_successful_qps
+    );
+    println!(
+        "  JSON body 吞吐率:    {:.2} MiB/s",
+        summary.median_throughput_mib
+    );
+}
+
+fn print_comparisons(summaries: &[BenchmarkSummary]) {
+    let mut concurrencies = summaries
         .iter()
-        .find(|result| result.protocol == BenchmarkProtocol::Http1);
-    let http2 = results
-        .iter()
-        .find(|result| result.protocol == BenchmarkProtocol::Http2);
-    let (Some(http1), Some(http2)) = (http1, http2) else {
-        return;
-    };
-    let qps_ratio = if http1.successful_qps() == 0.0 {
+        .map(|summary| summary.concurrency)
+        .collect::<Vec<_>>();
+    concurrencies.sort_unstable();
+    concurrencies.dedup();
+    for concurrency in concurrencies {
+        let http1 = summaries.iter().find(|summary| {
+            summary.concurrency == concurrency && summary.protocol == BenchmarkProtocol::Http1
+        });
+        let http2 = summaries.iter().find(|summary| {
+            summary.concurrency == concurrency && summary.protocol == BenchmarkProtocol::Http2
+        });
+        let (Some(http1), Some(http2)) = (http1, http2) else {
+            continue;
+        };
+        print_comparison(http1, http2);
+    }
+}
+
+fn print_comparison(http1: &BenchmarkSummary, http2: &BenchmarkSummary) {
+    let qps_ratio = if http1.median_successful_qps == 0.0 {
         0.0
     } else {
-        http2.successful_qps() / http1.successful_qps()
+        http2.median_successful_qps / http1.median_successful_qps
     };
-    let throughput_ratio = if http1.throughput_mib() == 0.0 {
+    let throughput_ratio = if http1.median_throughput_mib == 0.0 {
         0.0
     } else {
-        http2.throughput_mib() / http1.throughput_mib()
+        http2.median_throughput_mib / http1.median_throughput_mib
     };
 
-    println!("\nHTTP/1.1 与 HTTP/2 对比（相同负载、顺序执行）");
-    println!("  HTTP/1.1 成功 QPS:    {:.2}", http1.successful_qps());
-    println!("  HTTP/2 成功 QPS:      {:.2}", http2.successful_qps());
+    println!(
+        "\nHTTP/1.1 与 HTTP/2 对比（并发 {}，相同负载、顺序执行）",
+        http1.concurrency
+    );
+    println!("  HTTP/1.1 成功 QPS:    {:.2}", http1.median_successful_qps);
+    println!("  HTTP/2 成功 QPS:      {:.2}", http2.median_successful_qps);
     println!("  HTTP/2 / HTTP/1.1:    {qps_ratio:.3}x QPS");
-    println!("  HTTP/1.1 JSON 吞吐:  {:.2} MiB/s", http1.throughput_mib());
-    println!("  HTTP/2 JSON 吞吐:    {:.2} MiB/s", http2.throughput_mib());
+    println!(
+        "  HTTP/1.1 JSON 吞吐:  {:.2} MiB/s",
+        http1.median_throughput_mib
+    );
+    println!(
+        "  HTTP/2 JSON 吞吐:    {:.2} MiB/s",
+        http2.median_throughput_mib
+    );
     println!("  HTTP/2 / HTTP/1.1:    {throughput_ratio:.3}x JSON 吞吐");
-    println!("  注: 两轮顺序执行，正式比较应重复多轮并关注系统噪声");
+    println!("  注: 使用各轮中位数，协议仍为顺序执行，应关注系统噪声");
+}
+
+fn median(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    }
 }
 
 fn benchmark_protocols() -> Result<Vec<BenchmarkProtocol>, io::Error> {
@@ -314,6 +391,28 @@ fn env_usize(name: &str, default: usize) -> Result<usize, io::Error> {
         return Err(invalid_input(format!("{name} 必须大于 0")));
     }
     Ok(value)
+}
+
+fn env_usize_list(name: &str, default: &[usize]) -> Result<Vec<usize>, io::Error> {
+    let mut values = match env::var(name) {
+        Ok(value) => value
+            .split(',')
+            .map(str::trim)
+            .map(|value| {
+                value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!("{name} 必须是逗号分隔的正整数: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Err(env::VarError::NotPresent) => default.to_vec(),
+        Err(error) => return Err(invalid_input(format!("无法读取 {name}: {error}"))),
+    };
+    if values.is_empty() || values.contains(&0) {
+        return Err(invalid_input(format!("{name} 中的值必须大于 0")));
+    }
+    values.sort_unstable();
+    values.dedup();
+    Ok(values)
 }
 
 fn format_bytes(bytes: u64) -> String {

@@ -6,8 +6,9 @@ mod service;
 
 pub use protocol::WireProtocol;
 pub use service::{
-    ContractError, Metadata, MethodDescriptor, ParameterDescriptor, ParameterSource,
-    ServiceEndpoint, ServiceInstance, ServiceRegistration, ServiceSelector, ServiceWeight,
+    ContractError, Metadata, MethodDescriptor, MethodId, ParameterDescriptor, ParameterSource,
+    ServiceDescriptor, ServiceEndpoint, ServiceInstance, ServiceRegistration, ServiceSelector,
+    ServiceWeight,
 };
 
 /// Borrowing, sendable future used by object-safe asynchronous contracts.

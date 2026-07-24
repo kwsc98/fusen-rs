@@ -1,16 +1,16 @@
-use crate::{
-    error::FusenError,
-    protocol::fusen::service::{MethodInfo, ParameterSource},
-};
-use fusen_contract::WireProtocol;
+use crate::error::FusenError;
+use fusen_contract::{MethodDescriptor, ParameterSource, ServiceEndpoint, WireProtocol};
 use http::{HeaderMap, Method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[derive(Debug, Clone)]
+/// Internal HTTP method and route template for one RPC request.
 pub struct Path {
+    /// HTTP method used by the request.
     pub method: Method,
+    /// Relative service route or decoded request path.
     pub path: String,
 }
 
@@ -35,25 +35,34 @@ impl ArgumentValue {
 }
 
 #[derive(Debug)]
+/// Internal mutable request representation shared by middleware and transports.
 pub struct FusenRequest {
+    /// Wire protocol selected for this request.
     pub protocol: WireProtocol,
+    /// HTTP method and route.
     pub path: Path,
-    pub endpoint: Option<String>,
+    /// Endpoint selected by the client cluster, when available.
+    pub endpoint: Option<ServiceEndpoint>,
+    /// Path arguments keyed by descriptor parameter name.
     pub path_parameters: HashMap<String, String>,
+    /// Query arguments keyed by descriptor parameter name.
     pub query_parameters: QueryParameters,
+    /// Request headers.
     pub headers: HeaderMap,
+    /// Optional JSON request body.
     pub body: Option<Value>,
 }
 
 impl FusenRequest {
+    /// Removes and orders decoded arguments according to a method descriptor.
     pub fn take_arguments(
         &mut self,
-        method: &MethodInfo,
+        method: &MethodDescriptor,
     ) -> Result<Vec<ArgumentValue>, FusenError> {
         let body_count = method
-            .parameters
+            .parameters()
             .iter()
-            .filter(|parameter| parameter.source == ParameterSource::Body)
+            .filter(|parameter| parameter.source() == ParameterSource::Body)
             .count();
         let mut body_values = match (body_count, self.body.take()) {
             (0, None) => VecDeque::new(),
@@ -87,34 +96,34 @@ impl FusenRequest {
             }
         };
 
-        let mut arguments = Vec::with_capacity(method.parameters.len());
-        for parameter in &method.parameters {
-            let argument = match parameter.source {
+        let mut arguments = Vec::with_capacity(method.parameters().len());
+        for parameter in method.parameters() {
+            let argument = match parameter.source() {
                 ParameterSource::Path => self
                     .path_parameters
-                    .remove(&parameter.name)
+                    .remove(parameter.name())
                     .map(ArgumentValue::Text)
                     .ok_or_else(|| {
                         FusenError::InvalidRequest(format!(
                             "path parameter {} is missing",
-                            parameter.name
+                            parameter.name()
                         ))
                     })?,
                 ParameterSource::Query => {
-                    let Some(values) = self.query_parameters.remove(&parameter.name) else {
+                    let Some(values) = self.query_parameters.remove(parameter.name()) else {
                         arguments.push(ArgumentValue::Json(Value::Null));
                         continue;
                     };
                     if values.len() != 1 {
                         return Err(FusenError::InvalidRequest(format!(
                             "query parameter {} must appear exactly once",
-                            parameter.name
+                            parameter.name()
                         )));
                     }
                     ArgumentValue::Text(values.into_iter().next().ok_or_else(|| {
                         FusenError::InvalidRequest(format!(
                             "query parameter {} is missing",
-                            parameter.name
+                            parameter.name()
                         ))
                     })?)
                 }
@@ -127,7 +136,7 @@ impl FusenRequest {
                 _ => {
                     return Err(FusenError::InvalidRequest(format!(
                         "parameter {} uses an unsupported source",
-                        parameter.name
+                        parameter.name()
                     )));
                 }
             };
@@ -151,15 +160,16 @@ impl FusenRequest {
         Ok(arguments)
     }
 
+    /// Builds a request from ordered client arguments and a method descriptor.
     pub fn init_request(
         protocol: WireProtocol,
-        method: &MethodInfo,
+        method: &MethodDescriptor,
         arguments: Vec<Value>,
     ) -> Result<Self, FusenError> {
-        if arguments.len() != method.parameters.len() {
+        if arguments.len() != method.parameters().len() {
             return Err(FusenError::InvalidRequest(format!(
                 "request argument count mismatch: expected {}, got {}",
-                method.parameters.len(),
+                method.parameters().len(),
                 arguments.len()
             )));
         }
@@ -167,21 +177,21 @@ impl FusenRequest {
         let mut path_parameters = HashMap::new();
         let mut query_parameters = QueryParameters::new();
         let mut body_values = Vec::new();
-        for (parameter, value) in method.parameters.iter().zip(arguments) {
-            match parameter.source {
+        for (parameter, value) in method.parameters().iter().zip(arguments) {
+            match parameter.source() {
                 ParameterSource::Path => {
                     if value.is_null() {
                         return Err(FusenError::InvalidRequest(format!(
                             "path parameter {} must not be null",
-                            parameter.name
+                            parameter.name()
                         )));
                     }
-                    path_parameters.insert(parameter.name.clone(), value_to_text(value)?);
+                    path_parameters.insert(parameter.name().to_owned(), value_to_text(value)?);
                 }
                 ParameterSource::Query => {
                     if !value.is_null() {
                         query_parameters
-                            .entry(parameter.name.clone())
+                            .entry(parameter.name().to_owned())
                             .or_default()
                             .push(value_to_text(value)?);
                     }
@@ -190,7 +200,7 @@ impl FusenRequest {
                 _ => {
                     return Err(FusenError::InvalidRequest(format!(
                         "parameter {} uses an unsupported source",
-                        parameter.name
+                        parameter.name()
                     )));
                 }
             }
@@ -209,8 +219,8 @@ impl FusenRequest {
         Ok(Self {
             protocol,
             path: Path {
-                method: method.method.clone(),
-                path: method.path.clone(),
+                method: method.method().clone(),
+                path: method.path().to_owned(),
             },
             endpoint: None,
             path_parameters,
@@ -232,21 +242,32 @@ fn value_to_text(value: Value) -> Result<String, FusenError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::fusen::service::{ParameterInfo, ServiceDesc};
+    use fusen_contract::{MethodId, ParameterDescriptor};
 
-    fn method(parameters: Vec<ParameterInfo>) -> MethodInfo {
-        MethodInfo::new(
-            ServiceDesc::new("demo", None, None),
-            "call".into(),
-            Method::POST,
-            "/demo".into(),
+    fn parameter(name: &str, source: ParameterSource) -> ParameterDescriptor {
+        ParameterDescriptor::__new(name, source).unwrap()
+    }
+
+    fn method(parameters: Vec<ParameterDescriptor>) -> MethodDescriptor {
+        let query = parameters
+            .iter()
+            .any(|parameter| parameter.source() == ParameterSource::Query);
+        let has_id_path = parameters.iter().any(|parameter| {
+            parameter.name() == "id" && parameter.source() == ParameterSource::Path
+        });
+        MethodDescriptor::__new(
+            MethodId::__new(0),
+            "call",
+            if query { Method::GET } else { Method::POST },
+            if has_id_path { "/demo/{id}" } else { "/demo" },
             parameters,
         )
+        .unwrap()
     }
 
     #[test]
     fn one_array_argument_keeps_its_boundary() {
-        let method = method(vec![ParameterInfo::new("items", ParameterSource::Body)]);
+        let method = method(vec![parameter("items", ParameterSource::Body)]);
         let mut request = FusenRequest::init_request(
             WireProtocol::Fusen,
             &method,
@@ -260,7 +281,7 @@ mod tests {
 
     #[test]
     fn one_tuple_argument_keeps_its_boundary() {
-        let method = method(vec![ParameterInfo::new("pair", ParameterSource::Body)]);
+        let method = method(vec![parameter("pair", ParameterSource::Body)]);
         let mut request = FusenRequest::init_request(
             WireProtocol::Fusen,
             &method,
@@ -274,7 +295,7 @@ mod tests {
 
     #[test]
     fn one_fixed_array_argument_keeps_its_boundary() {
-        let method = method(vec![ParameterInfo::new("items", ParameterSource::Body)]);
+        let method = method(vec![parameter("items", ParameterSource::Body)]);
         let mut request = FusenRequest::init_request(
             WireProtocol::Fusen,
             &method,
@@ -297,8 +318,8 @@ mod tests {
     #[test]
     fn multiple_body_arguments_require_exact_array_length() {
         let method = method(vec![
-            ParameterInfo::new("left", ParameterSource::Body),
-            ParameterInfo::new("right", ParameterSource::Body),
+            parameter("left", ParameterSource::Body),
+            parameter("right", ParameterSource::Body),
         ]);
         let mut request = FusenRequest::init_request(
             WireProtocol::Fusen,
@@ -327,8 +348,8 @@ mod tests {
     #[test]
     fn missing_and_extra_parameters_are_rejected() {
         let method = method(vec![
-            ParameterInfo::new("id", ParameterSource::Path),
-            ParameterInfo::new("filter", ParameterSource::Query),
+            parameter("id", ParameterSource::Path),
+            parameter("filter", ParameterSource::Query),
         ]);
         let arguments = vec![serde_json::json!("one"), serde_json::json!(null)];
 
@@ -353,7 +374,7 @@ mod tests {
 
     #[test]
     fn absent_optional_query_round_trips_as_none() {
-        let method = method(vec![ParameterInfo::new("filter", ParameterSource::Query)]);
+        let method = method(vec![parameter("filter", ParameterSource::Query)]);
         let mut request =
             FusenRequest::init_request(WireProtocol::Fusen, &method, vec![serde_json::json!(null)])
                 .unwrap();
@@ -364,7 +385,7 @@ mod tests {
 
     #[test]
     fn absent_required_query_is_rejected_during_deserialization() {
-        let method = method(vec![ParameterInfo::new("filter", ParameterSource::Query)]);
+        let method = method(vec![parameter("filter", ParameterSource::Query)]);
         let mut request =
             FusenRequest::init_request(WireProtocol::Fusen, &method, vec![serde_json::json!(null)])
                 .unwrap();
@@ -374,7 +395,7 @@ mod tests {
 
     #[test]
     fn null_path_parameter_is_rejected() {
-        let method = method(vec![ParameterInfo::new("id", ParameterSource::Path)]);
+        let method = method(vec![parameter("id", ParameterSource::Path)]);
         assert!(matches!(
             FusenRequest::init_request(WireProtocol::Fusen, &method, vec![serde_json::json!(null)]),
             Err(FusenError::InvalidRequest(_))
@@ -383,7 +404,7 @@ mod tests {
 
     #[test]
     fn missing_single_body_is_rejected() {
-        let method = method(vec![ParameterInfo::new("value", ParameterSource::Body)]);
+        let method = method(vec![parameter("value", ParameterSource::Body)]);
         let mut request =
             FusenRequest::init_request(WireProtocol::Fusen, &method, vec![serde_json::json!(null)])
                 .unwrap();

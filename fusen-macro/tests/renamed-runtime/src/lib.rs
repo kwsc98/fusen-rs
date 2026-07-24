@@ -1,7 +1,7 @@
-use rpc::fusen_procedural_macro::fusen_trait;
+use rpc::fusen_trait;
 
 #[fusen_trait]
-#[rpc::fusen_procedural_macro::asset(path = "/renamed", method = get)]
+#[rpc::asset(path = "/renamed", method = get)]
 pub trait RenamedRuntimeService {
     async fn lookup(&self, id: String) -> String;
 }
@@ -10,16 +10,15 @@ pub trait RenamedRuntimeService {
 mod tests {
     use super::*;
     use rpc::{
+        Middleware, Next, RpcContext, RpcResult,
+        client::cluster::{InstanceSnapshot, LoadBalancer},
         error::FusenError,
-        filter::ProceedingJoinPoint,
-        fusen_procedural_macro::{fusen_service, handler},
-        handler::{HandlerLoad, aspect::Aspect as AspectAlias, loadbalance::LoadBalance},
-        protocol::fusen::context::FusenContext,
+        fusen_service,
     };
-    use std::{marker::PhantomData, sync::Arc};
+    use std::marker::PhantomData;
 
     #[fusen_trait]
-    #[rpc::fusen_procedural_macro::asset(path = "/generic", method = "post")]
+    #[rpc::asset(path = "/generic", method = "post")]
     trait GenericService: Send + Sync
     where
         Self: 'static,
@@ -44,51 +43,48 @@ mod tests {
         }
     }
 
-    struct GenericAspect<T>(PhantomData<T>);
+    struct GenericMiddleware<T>(PhantomData<T>);
 
-    #[handler(kind = Aspect)]
-    impl<T> AspectAlias for GenericAspect<T>
+    impl<T> Middleware for GenericMiddleware<T>
     where
         T: Send + Sync + 'static,
     {
-        async fn around(
-            &self,
-            join_point: ProceedingJoinPoint,
-        ) -> Result<FusenContext, FusenError> {
-            join_point.proceed().await
+        async fn handle<'a>(&'a self, context: RpcContext, next: Next<'a>) -> RpcResult {
+            next.run(context).await
         }
     }
 
     struct GenericLoadBalance<T>(PhantomData<T>);
 
-    #[handler(kind = "LoadBalance")]
-    impl<T> LoadBalance for GenericLoadBalance<T>
+    impl<T> LoadBalancer for GenericLoadBalance<T>
     where
         T: Send + Sync + 'static,
     {
-        async fn select<'a>(
-            &'a self,
-            _context: &'a FusenContext,
-            invokers: Arc<Vec<Arc<rpc::contract::ServiceInstance>>>,
-        ) -> Result<Option<Arc<rpc::contract::ServiceInstance>>, FusenError> {
-            Ok(invokers.first().cloned())
+        fn select(
+            &self,
+            _context: &RpcContext,
+            invokers: &InstanceSnapshot,
+        ) -> Result<usize, FusenError> {
+            (!invokers.is_empty()).then_some(0).ok_or_else(|| {
+                FusenError::ServiceUnavailable("no healthy service instances".into())
+            })
         }
     }
 
     #[test]
     fn renamed_runtime_and_qualified_asset_preserve_metadata() {
-        let info = RenamedRuntimeServiceClient::get_service_info();
-        assert_eq!(info.method_infos[0].path, "/renamed/lookup");
-        assert_eq!(info.method_infos[0].method, rpc::http::Method::GET);
+        let info = RenamedRuntimeServiceClient::service_descriptor();
+        assert_eq!(info.methods()[0].path(), "/renamed/lookup");
+        assert_eq!(info.methods()[0].method(), &http::Method::GET);
     }
 
     #[test]
-    fn generic_service_and_handlers_load() {
+    fn generic_service_and_extensions_compile() {
         let _service = GenericServiceImpl::<u8>(PhantomData);
-        let _aspect = GenericAspect::<u8>(PhantomData).load();
-        let _load_balance = GenericLoadBalance::<u8>(PhantomData).load();
-        let info = GenericServiceClient::get_service_info();
-        assert_eq!(info.method_infos[0].path, "/generic/echo");
-        assert_eq!(info.method_infos[0].method, rpc::http::Method::POST);
+        let _middleware = GenericMiddleware::<u8>(PhantomData);
+        let _load_balance = GenericLoadBalance::<u8>(PhantomData);
+        let info = GenericServiceClient::service_descriptor();
+        assert_eq!(info.methods()[0].path(), "/generic/echo");
+        assert_eq!(info.methods()[0].method(), &http::Method::POST);
     }
 }

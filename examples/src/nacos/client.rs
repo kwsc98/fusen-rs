@@ -1,28 +1,23 @@
 use std::sync::Arc;
 
-use examples::handler::aspect::{log::LogAspect, tracing::TraceAspect};
-use examples::handler::loadbalance::custom::CustomLoadBalance;
+use examples::middleware::{
+    load_balancer::RandomLoadBalancer, log::LogObserver, tracing::TracingMiddleware,
+};
 use examples::{DemoServiceClient, DemoServiceV2Client, RequestDto};
-use fusen_common::{
-    log::LogConfig,
-    nacos::{NacosConfig, register::NacosRegister},
-};
-use fusen_rs::{
-    client::{ClientOptions, FusenClientContextBuilder},
-    contract::WireProtocol,
-    handler::HandlerLoad,
-};
+use fusen_nacos::{NacosConfig, NacosRegister};
+use fusen_observability::LogConfig;
+use fusen_rs::ClientRuntime;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _log_work = fusen_common::log::init_log(
+    let _log_work = fusen_observability::init_log(
         "fusen-nacos-client",
         LogConfig {
             level: "debug".to_string(),
             path: None,
             endpoint: None,
             env_filter: Some(
-                "nacos_client={level},examples::handler={level},fusen_rs={level},fusen_common={level}"
+                "nacos_client={level},examples::middleware={level},fusen_rs={level},fusen_nacos={level}"
                     .to_string(),
             ),
         },
@@ -34,27 +29,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|_| "127.0.0.1:8848".to_owned()),
             ..Default::default()
         }),
-    )?;
-    let mut context = FusenClientContextBuilder::new()
-        .register(register)
-        .handler(LogAspect.load())?
-        .handler(TraceAspect::default().load())?
-        .handler(CustomLoadBalance.load())?
+    )
+    .await?;
+    let runtime = ClientRuntime::builder()
+        .registry(register)
+        .observer(LogObserver)
         .build()?;
-    let client = DemoServiceClient::init(
-        &mut context,
-        ClientOptions::discovery(WireProtocol::Fusen).handlers([
-            "CustomLoadBalance",
-            "TraceAspect",
-            "LogAspect",
-        ]),
-    )
-    .await?;
-    let client_v2 = DemoServiceV2Client::init(
-        &mut context,
-        ClientOptions::discovery(WireProtocol::Fusen).handlers(["TraceAspect", "LogAspect"]),
-    )
-    .await?;
+    let client = DemoServiceClient::builder(&runtime)
+        .discover()
+        .middleware(TracingMiddleware::default())
+        .load_balancer(RandomLoadBalancer)
+        .connect()
+        .await?;
+    let client_v2 = DemoServiceV2Client::builder(&runtime)
+        .discover()
+        .middleware(TracingMiddleware::default())
+        .connect()
+        .await?;
 
     println!("{}", client.sayHelloV4().await?);
     println!("{}", client.divideV2(6, 2).await?);
@@ -76,7 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?
     );
 
-    client.close().await?;
-    client_v2.close().await?;
+    runtime.shutdown().await?;
     Ok(())
 }

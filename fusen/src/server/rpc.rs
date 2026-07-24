@@ -1,57 +1,63 @@
 use crate::{
-    error::FusenError,
-    filter::{FusenFilter, ProceedingJoinPoint},
-    protocol::fusen::{context::FusenContext, service::ServiceInfo},
+    filter::{MiddlewareDyn, Next, RpcResult, Terminal},
+    invocation::{InvocationPhase, PhaseTracker},
+    protocol::fusen::context::RpcContext,
 };
-use std::{collections::HashMap, sync::Arc};
+use fusen_contract::{BoxFuture, ServiceDescriptor};
+use std::sync::Arc;
 
-pub trait RpcService: Send + Sync + FusenFilter {
-    fn get_service_info(&self) -> ServiceInfo;
+/// Generated declaration-order dispatch implemented by one service object.
+pub trait RpcService: Send + Sync {
+    /// Dispatches the [`RpcContext::method_id`](crate::protocol::fusen::context::RpcContext::method_id).
+    fn call<'a>(&'a self, context: RpcContext) -> BoxFuture<'a, RpcResult>;
 }
 
-#[derive(Clone, Default)]
-pub struct RpcServerHandler {
-    cache: HashMap<String, Arc<RpcServiceFilter>>,
+/// Static service metadata generated alongside [`RpcService`].
+pub trait RpcServiceInfo: Send + Sync {
+    /// Returns the process-lifetime service descriptor.
+    fn service_descriptor(&self) -> &'static ServiceDescriptor;
 }
 
-struct RpcServiceFilter(Box<dyn RpcService>);
+/// A service that can be registered by [`Server`](crate::server::Server).
+pub trait RegisteredRpcService: RpcService + RpcServiceInfo {}
 
-impl FusenFilter for RpcServiceFilter {
-    fn call<'a>(
-        &'a self,
-        join_point: ProceedingJoinPoint,
-    ) -> fusen_contract::BoxFuture<'a, Result<FusenContext, FusenError>> {
-        self.0.call(join_point)
+impl<T> RegisteredRpcService for T where T: RpcService + RpcServiceInfo {}
+
+#[derive(Clone)]
+pub(crate) struct RouteDispatch {
+    middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
+    service: Arc<dyn RegisteredRpcService>,
+}
+
+impl RouteDispatch {
+    pub(crate) fn new(
+        middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
+        service: Arc<dyn RegisteredRpcService>,
+    ) -> Self {
+        Self {
+            middleware,
+            service,
+        }
+    }
+
+    pub(crate) async fn call(&self, context: RpcContext, tracker: PhaseTracker) -> RpcResult {
+        tracker.set(InvocationPhase::Middleware);
+        let terminal = ServiceInvoker {
+            service: self.service.as_ref(),
+            tracker,
+        };
+        Next::new(&self.middleware, &terminal).run(context).await
     }
 }
 
-impl RpcServerHandler {
-    pub fn new(cache: HashMap<String, Box<dyn RpcService>>) -> Self {
-        let mut leak_cache = HashMap::default();
-        for (key, value) in cache {
-            leak_cache.insert(key, Arc::new(RpcServiceFilter(value)));
-        }
-        Self { cache: leak_cache }
-    }
+struct ServiceInvoker<'a> {
+    service: &'a dyn RegisteredRpcService,
+    tracker: PhaseTracker,
+}
 
-    pub async fn call(
-        &self,
-        link: Arc<Vec<Arc<dyn FusenFilter>>>,
-        context: FusenContext,
-    ) -> Result<FusenContext, FusenError> {
-        let service = self
-            .cache
-            .get(context.method_info.service_desc.get_tag())
-            .cloned();
-        match service {
-            Some(service) => {
-                let base_filter: Arc<dyn FusenFilter> = service;
-                let join_point = ProceedingJoinPoint::new(link, base_filter, context);
-                join_point.proceed().await
-            }
-            None => Err(FusenError::RouteNotFound(
-                context.method_info.service_desc.get_tag().to_owned(),
-            )),
-        }
+impl Terminal for ServiceInvoker<'_> {
+    fn call<'a>(&'a self, context: RpcContext) -> BoxFuture<'a, RpcResult> {
+        self.tracker.set(InvocationPhase::Service);
+        self.service.call(context)
     }
 }

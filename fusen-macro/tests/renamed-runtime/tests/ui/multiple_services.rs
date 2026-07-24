@@ -1,6 +1,6 @@
 use rpc::{
     error::FusenError,
-    fusen_procedural_macro::{fusen_service, fusen_trait},
+    fusen_service, fusen_trait,
 };
 
 #[fusen_trait]

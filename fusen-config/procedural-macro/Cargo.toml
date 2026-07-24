@@ -1,0 +1,21 @@
+[package]
+name = "fusen-config-macro"
+version = "0.9.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Configuration derive macros for fusen-rs"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/fusen-config-macro"
+readme.workspace = true
+license-file.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote.workspace = true
+syn = { workspace = true, features = ["full"] }
+proc-macro2.workspace = true
+proc-macro-crate.workspace = true

@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 rpc = { package = "fusen-rs", path = "../../../fusen" }
+http.workspace = true
 
 [dev-dependencies]
-trybuild = "1.0.101"
+trybuild.workspace = true

@@ -47,16 +47,15 @@ tokio = { workspace = true, features = [
 ] }
 serde.workspace = true
 serde_json.workspace = true
+http.workspace = true
 
 fusen-rs.workspace = true
-fusen-common = { workspace = true, features = ["nacos", "otel", "yaml"] }
-rand = "0.9.2"
-tracing = "0.1.41"
-tracing-opentelemetry = "0.32.0"
-opentelemetry = "0.31.0"
-opentelemetry_sdk = { version = "0.31.0", features = [
-    "rt-tokio",
-    "rt-tokio-current-thread",
-    "experimental_trace_batch_span_processor_with_async_runtime",
-] }
-opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+fusen-config = { workspace = true, features = ["yaml"] }
+fusen-nacos = { workspace = true, features = ["yaml"] }
+fusen-observability = { workspace = true, features = ["otel"] }
+rand.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true

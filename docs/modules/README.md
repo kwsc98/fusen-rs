@@ -12,3 +12,4 @@
 - [错误契约](errors.md)
 - [停机](shutdown.md)
 - [配置](configuration.md)
+- [性能基线](../performance-baseline.md)

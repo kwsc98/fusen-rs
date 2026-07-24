@@ -1,12 +1,26 @@
-# 中间件与宏行为
+# Middleware 与宏行为
 
-> English summary: generated adapters serialize arguments and compose a
-> deterministic aspect chain around transport or service execution.
+## Middleware
 
-handler ID 在同一 context 中必须唯一，引用未知 ID 会失败。每个服务最多选择一个 load balancer，多个配置时以最后一个为准；Aspect 保持声明顺序并允许调用 `proceed`。`handler` 默认从实现的 trait 名推断 `Aspect` 或 `LoadBalance`；trait 使用别名时通过 `kind = Aspect` 或 `kind = LoadBalance` 明确类型。泛型 handler 实现会保留原有 generics 和 where clause。
+用户直接实现统一的 `Middleware` trait，并可使用 `async fn handle`；runtime 的 blanket adapter 在内部完成对象擦除，不要求宏或 `BoxFuture`。
 
-`fusen_trait` 是 id/group/version/path/method/参数来源的唯一元数据来源，并生成返回 `Result<_, FusenError>` 的客户端。RPC trait 必须是非泛型安全 trait，只包含没有默认实现的 `async fn(&self, ...)`；参数和返回值必须是拥有所有权的具体类型，不能包含引用、生命周期、`impl Trait`、关联项或方法泛型。普通 supertrait 和仅约束 `Self` 的非泛型 where clause 会被保留。
+`RpcContext` 只表示请求，提供 request ID、静态 service/method、`MethodId`、deadline/remaining、headers、metadata 和类型化 extensions。成功返回 `RpcResponse`，错误返回 `FusenError`。Middleware 可以短路，也可以调用消费型 `Next::run`；`Next` 不可克隆，下游和框架私有 terminal 最多执行一次。
 
-`id/version/group/path` 使用非空字符串字面量；`method` 接受 `GET` 或 `"GET"` 并统一为大写。推荐使用限定形式 `#[fusen_rs::fusen_procedural_macro::asset(...)]`，依赖重命名时替换为实际 crate 名。重复字段、重复 `asset`、query/fragment route 和不匹配的 placeholder 均在宏展开阶段失败。
+客户端 Middleware 位于 Cluster 之前；服务端 Middleware 位于 route 之后。全局配置先进入，服务局部配置后进入。完整日志、指标、timeout 和 cancellation 应由 `InvocationObserver` 观察。
 
-`fusen_service` 只接受对应 trait impl 并复用隐藏元数据入口。实现侧重复 `asset` 或 service 元数据会生成编译错误；实现参数可以使用 `_`、`mut` 或解构 pattern。泛型实现类型会保留 generics 和 where clause。一个具体类型只能标注一个 `fusen_service`；多个 RPC trait 应使用不同实现类型。宏通过 `proc-macro-crate` 支持运行时依赖重命名。
+## fusen_trait
+
+`fusen_trait` 是 id/group/version/path/method/参数来源的唯一元数据来源。它生成：
+
+- 唯一静态 `ServiceDescriptor` 与声明顺序 `MethodId`；
+- 类型安全的 `ServiceNameClient` 和专属 Builder；
+- `ServiceNameServer<T>` 局部 Middleware wrapper；
+- 隐藏的 O(1) service dispatch。
+
+RPC trait 必须非泛型，只包含无默认实现的 `async fn(&self, ...)`；参数和返回值必须是拥有所有权的具体类型。方法 future 在生成契约中要求 `Send`。route、placeholder、HTTP method 和参数来源在宏展开及启动校验阶段验证。
+
+## fusen_service
+
+`fusen_service` 只绑定实现类型到 trait 生成的静态描述和 dispatch。实现方法顺序不影响 `MethodId`；实现侧不得重复 service 或 asset 元数据。泛型实现保留 generics 与 where clause，一个具体类型只能绑定一个 RPC service。
+
+运行时依赖重命名由 `proc-macro-crate` 解析。旧 `handler` 宏、字符串 ID、Aspect、HandlerLoad 和动态 handler controller 不存在。

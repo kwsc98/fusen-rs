@@ -1,5 +1,5 @@
 use crate::{DemoService, DemoServiceV2, RequestDto, ResponseDto};
-use fusen_rs::{error::FusenError, fusen_procedural_macro::fusen_service};
+use fusen_rs::{FusenError, fusen_service};
 
 #[derive(Debug, Default)]
 pub struct DemoServiceImpl;

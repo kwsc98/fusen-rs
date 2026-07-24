@@ -3,39 +3,40 @@ use fusen_contract::WireProtocol;
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
-use std::fmt::Display;
 
-#[derive(Debug, Default)]
-pub struct FusenResponse {
-    pub protocol: WireProtocol,
-    pub http_status: HttpStatus,
-    pub headers: HeaderMap,
-    pub body: Option<Value>,
-}
-
+/// Complete typed RPC response returned by middleware and framework terminals.
 #[derive(Debug)]
-pub struct HttpStatus {
+pub struct RpcResponse {
+    /// HTTP status associated with the RPC response.
     pub status: StatusCode,
-    pub message: Option<String>,
+    /// Response headers safe for middleware to inspect or modify.
+    pub headers: HeaderMap,
+    /// JSON response value, when the method returned a body.
+    pub body: Option<Value>,
+    pub(crate) protocol: WireProtocol,
 }
 
-impl Default for HttpStatus {
+impl Default for RpcResponse {
     fn default() -> Self {
         Self {
             status: StatusCode::OK,
-            message: None,
+            headers: HeaderMap::new(),
+            body: None,
+            protocol: WireProtocol::default(),
         }
     }
 }
 
-impl Display for HttpStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(status:{}, message:{:?})", self.status, self.message)
+impl RpcResponse {
+    /// Creates a response with the supplied HTTP status and no body.
+    pub fn new(status: StatusCode) -> Self {
+        Self {
+            status,
+            ..Self::default()
+        }
     }
-}
 
-impl FusenResponse {
-    pub fn init_response<T: Serialize>(
+    pub(crate) fn init_response<T: Serialize>(
         &mut self,
         result: Result<T, FusenError>,
     ) -> Result<(), FusenError> {
@@ -44,7 +45,21 @@ impl FusenResponse {
             serde_json::to_value(value)
                 .map_err(|error| FusenError::internal("failed to serialize response", error))?,
         );
-        self.http_status = HttpStatus::default();
+        self.status = StatusCode::OK;
         Ok(())
+    }
+
+    /// Framework entry used by generated service dispatch.
+    #[doc(hidden)]
+    pub fn __from_result<T: Serialize>(
+        result: Result<T, FusenError>,
+        protocol: WireProtocol,
+    ) -> Result<Self, FusenError> {
+        let mut response = Self {
+            protocol,
+            ..Self::default()
+        };
+        response.init_response(result)?;
+        Ok(response)
     }
 }

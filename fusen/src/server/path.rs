@@ -1,12 +1,7 @@
-use crate::{
-    error::FusenError,
-    protocol::fusen::{
-        request::Path,
-        service::{MethodInfo, ParameterSource},
-    },
-};
+use crate::{error::FusenError, protocol::fusen::request::Path};
+use fusen_contract::{MethodDescriptor, ParameterSource, ServiceDescriptor};
 use http::Method;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct PathCache {
@@ -22,28 +17,39 @@ struct RouteNode {
 
 #[derive(Debug)]
 struct RouteTarget {
-    method_info: Arc<MethodInfo>,
+    route_index: usize,
+    service: &'static ServiceDescriptor,
+    method: &'static MethodDescriptor,
     path_parameters: Vec<(usize, String)>,
 }
 
 #[derive(Debug)]
 pub struct QueryResult {
-    pub method_info: Arc<MethodInfo>,
+    pub route_index: usize,
+    pub service: &'static ServiceDescriptor,
+    pub method: &'static MethodDescriptor,
     pub path_parameters: HashMap<String, String>,
 }
 
 impl PathCache {
-    pub fn build(method_infos: Vec<Arc<MethodInfo>>) -> Result<Self, FusenError> {
+    pub fn build(
+        methods: Vec<(&'static ServiceDescriptor, &'static MethodDescriptor)>,
+    ) -> Result<Self, FusenError> {
         let mut cache = Self::default();
-        for method_info in method_infos {
-            cache.insert(method_info)?;
+        for (route_index, (service, method)) in methods.into_iter().enumerate() {
+            cache.insert(route_index, service, method)?;
         }
         Ok(cache)
     }
 
-    fn insert(&mut self, method_info: Arc<MethodInfo>) -> Result<(), FusenError> {
-        let (segments, path_parameters) = parse_template(&method_info)?;
-        let mut node = self.methods.entry(method_info.method.clone()).or_default();
+    fn insert(
+        &mut self,
+        route_index: usize,
+        service: &'static ServiceDescriptor,
+        method: &'static MethodDescriptor,
+    ) -> Result<(), FusenError> {
+        let (segments, path_parameters) = parse_template(method)?;
+        let mut node = self.methods.entry(method.method().clone()).or_default();
         for segment in segments {
             node = match segment {
                 TemplateSegment::Literal(value) => node.literals.entry(value).or_default(),
@@ -55,11 +61,14 @@ impl PathCache {
         if let Some(existing) = &node.target {
             return Err(FusenError::InvalidRequest(format!(
                 "ambiguous routes {} and {}",
-                existing.method_info.path, method_info.path
+                existing.method.path(),
+                method.path()
             )));
         }
         node.target = Some(RouteTarget {
-            method_info,
+            route_index,
+            service,
+            method,
             path_parameters,
         });
         Ok(())
@@ -78,7 +87,9 @@ impl PathCache {
             path_parameters.insert(name.clone(), segments[*index].clone());
         }
         Ok(Some(QueryResult {
-            method_info: target.method_info.clone(),
+            route_index: target.route_index,
+            service: target.service,
+            method: target.method,
             path_parameters,
         }))
     }
@@ -92,14 +103,14 @@ enum TemplateSegment {
 
 type ParsedTemplate = (Vec<TemplateSegment>, Vec<(usize, String)>);
 
-fn parse_template(method: &MethodInfo) -> Result<ParsedTemplate, FusenError> {
-    if !method.path.starts_with('/') {
+fn parse_template(method: &MethodDescriptor) -> Result<ParsedTemplate, FusenError> {
+    if !method.path().starts_with('/') {
         return Err(FusenError::InvalidRequest(format!(
             "route must start with '/': {}",
-            method.path
+            method.path()
         )));
     }
-    let raw_segments = split_path(&method.path);
+    let raw_segments = split_path(method.path());
     let mut segments = Vec::with_capacity(raw_segments.len());
     let mut names = Vec::new();
     for (index, raw) in raw_segments.into_iter().enumerate() {
@@ -110,13 +121,13 @@ fn parse_template(method: &MethodInfo) -> Result<ParsedTemplate, FusenError> {
             if name.is_empty() || name.contains(['{', '}']) {
                 return Err(FusenError::InvalidRequest(format!(
                     "invalid route parameter in {}",
-                    method.path
+                    method.path()
                 )));
             }
             if names.iter().any(|(_, existing)| existing == name) {
                 return Err(FusenError::InvalidRequest(format!(
                     "duplicate route parameter {name} in {}",
-                    method.path
+                    method.path()
                 )));
             }
             names.push((index, name.to_owned()));
@@ -124,7 +135,7 @@ fn parse_template(method: &MethodInfo) -> Result<ParsedTemplate, FusenError> {
         } else if raw.contains(['{', '}']) {
             return Err(FusenError::InvalidRequest(format!(
                 "invalid route parameter in {}",
-                method.path
+                method.path()
             )));
         } else {
             segments.push(TemplateSegment::Literal(raw.to_owned()));
@@ -132,25 +143,24 @@ fn parse_template(method: &MethodInfo) -> Result<ParsedTemplate, FusenError> {
     }
 
     for (_, name) in &names {
-        if !method
-            .parameters
-            .iter()
-            .any(|parameter| parameter.name == *name && parameter.source == ParameterSource::Path)
-        {
+        if !method.parameters().iter().any(|parameter| {
+            parameter.name() == name && parameter.source() == ParameterSource::Path
+        }) {
             return Err(FusenError::InvalidRequest(format!(
                 "route parameter {name} has no matching Path parameter"
             )));
         }
     }
     for parameter in method
-        .parameters
+        .parameters()
         .iter()
-        .filter(|parameter| parameter.source == ParameterSource::Path)
+        .filter(|parameter| parameter.source() == ParameterSource::Path)
     {
-        if !names.iter().any(|(_, name)| *name == parameter.name) {
+        if !names.iter().any(|(_, name)| name == parameter.name()) {
             return Err(FusenError::InvalidRequest(format!(
                 "Path parameter {} is not present in route {}",
-                parameter.name, method.path
+                parameter.name(),
+                method.path()
             )));
         }
     }
@@ -218,9 +228,9 @@ fn find_target<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::fusen::service::{ParameterInfo, ServiceDesc};
+    use fusen_contract::{MethodId, ParameterDescriptor};
 
-    fn method(name: &str, path: &str) -> Arc<MethodInfo> {
+    fn method(name: &str, path: &str) -> (&'static ServiceDescriptor, &'static MethodDescriptor) {
         let parameters = path
             .trim_matches('/')
             .split('/')
@@ -228,16 +238,28 @@ mod tests {
                 segment
                     .strip_prefix('{')
                     .and_then(|value| value.strip_suffix('}'))
-                    .map(|name| ParameterInfo::new(name, ParameterSource::Path))
+                    .map(|name| ParameterDescriptor::__new(name, ParameterSource::Path).unwrap())
             })
             .collect();
-        Arc::new(MethodInfo::new(
-            ServiceDesc::new("demo", None, None),
-            name.into(),
-            Method::GET,
-            path.into(),
-            parameters,
-        ))
+        let service = Box::leak(Box::new(
+            ServiceDescriptor::__new(
+                format!("demo-{name}"),
+                None,
+                None,
+                vec![
+                    MethodDescriptor::__new(
+                        MethodId::__new(0),
+                        name,
+                        Method::GET,
+                        path,
+                        parameters,
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+        ));
+        (service, &service.methods()[0])
     }
 
     #[test]
@@ -264,7 +286,7 @@ mod tests {
                 })
                 .unwrap()
                 .unwrap();
-            assert_eq!(result.method_info.method_name, "static");
+            assert_eq!(result.method.name(), "static");
         }
     }
 
@@ -291,7 +313,7 @@ mod tests {
             })
             .unwrap()
             .unwrap();
-        assert_eq!(result.method_info.method_name, "literal");
+        assert_eq!(result.method.name(), "literal");
     }
 
     #[test]
@@ -322,6 +344,6 @@ mod tests {
             })
             .unwrap()
             .unwrap();
-        assert_eq!(result.method_info.method_name, "static");
+        assert_eq!(result.method.name(), "static");
     }
 }

@@ -30,12 +30,34 @@ pub enum ContractError {
 }
 
 /// Identifies the service watched by one discovery subscription.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ServiceSelector {
     service_id: String,
     group: Option<String>,
     version: Option<String>,
     metadata: Metadata,
+}
+
+/// Declaration-order identifier for one RPC method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MethodId(u16);
+
+impl MethodId {
+    /// Creates a method identifier from its declaration-order value.
+    #[doc(hidden)]
+    pub const fn __new(value: u16) -> Self {
+        Self(value)
+    }
+
+    /// Returns the declaration-order value.
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+
+    /// Returns the identifier as an index into a descriptor method slice.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 impl ServiceSelector {
@@ -189,7 +211,8 @@ pub struct ParameterDescriptor {
 
 impl ParameterDescriptor {
     /// Creates a parameter descriptor.
-    pub fn new(name: impl Into<String>, source: ParameterSource) -> Result<Self, ContractError> {
+    #[doc(hidden)]
+    pub fn __new(name: impl Into<String>, source: ParameterSource) -> Result<Self, ContractError> {
         Ok(Self {
             name: validate_identifier(name.into(), "parameter name")?,
             source,
@@ -210,6 +233,7 @@ impl ParameterDescriptor {
 /// Validated HTTP route metadata for one RPC method.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodDescriptor {
+    id: MethodId,
     name: String,
     path: String,
     method: Method,
@@ -218,7 +242,9 @@ pub struct MethodDescriptor {
 
 impl MethodDescriptor {
     /// Creates and validates a method descriptor.
-    pub fn new(
+    #[doc(hidden)]
+    pub fn __new(
+        id: MethodId,
         name: impl Into<String>,
         method: Method,
         path: impl Into<String>,
@@ -228,11 +254,17 @@ impl MethodDescriptor {
         let path = path.into();
         validate_method(&method, &path, &parameters)?;
         Ok(Self {
+            id,
             name,
             path,
             method,
             parameters,
         })
+    }
+
+    /// Returns the declaration-order method identifier.
+    pub const fn id(&self) -> MethodId {
+        self.id
     }
 
     /// Returns the generated method name.
@@ -256,47 +288,123 @@ impl MethodDescriptor {
     }
 }
 
-/// A validated service registration submitted to a registry provider.
-#[derive(Clone, Debug)]
-pub struct ServiceRegistration {
+/// The single immutable description shared by generated clients, servers, and registries.
+#[derive(Debug)]
+pub struct ServiceDescriptor {
     selector: ServiceSelector,
-    endpoint: ServiceEndpoint,
     methods: Vec<MethodDescriptor>,
-    weight: ServiceWeight,
+    identity: String,
 }
 
-impl ServiceRegistration {
-    /// Creates a complete service registration.
-    pub fn new(
-        selector: ServiceSelector,
-        endpoint: ServiceEndpoint,
+impl ServiceDescriptor {
+    /// Creates and validates one complete service contract.
+    #[doc(hidden)]
+    pub fn __new(
+        service_id: impl Into<String>,
+        version: Option<&str>,
+        group: Option<&str>,
         methods: Vec<MethodDescriptor>,
-        weight: ServiceWeight,
+    ) -> Result<Self, ContractError> {
+        let selector = ServiceSelector::new(
+            service_id,
+            group.map(str::to_owned),
+            version.map(str::to_owned),
+        )?;
+        Self::__from_selector(selector, methods)
+    }
+
+    /// Creates a service descriptor from an already validated selector.
+    #[doc(hidden)]
+    pub fn __from_selector(
+        selector: ServiceSelector,
+        methods: Vec<MethodDescriptor>,
     ) -> Result<Self, ContractError> {
         if methods.is_empty() {
             return Err(ContractError::EmptyMethods);
         }
         let mut method_names = BTreeSet::new();
-        if let Some(method) = methods
-            .iter()
-            .find(|method| !method_names.insert(method.name()))
-        {
-            return Err(ContractError::InvalidMethod(format!(
-                "duplicate method {}",
-                method.name()
-            )));
+        for (index, method) in methods.iter().enumerate() {
+            if method.id().index() != index {
+                return Err(ContractError::InvalidMethod(format!(
+                    "method {} has non-contiguous id {}",
+                    method.name(),
+                    method.id().get()
+                )));
+            }
+            if !method_names.insert(method.name()) {
+                return Err(ContractError::InvalidMethod(format!(
+                    "duplicate method {}",
+                    method.name()
+                )));
+            }
         }
+        let identity = format!(
+            "{}:{:?}:{:?}",
+            selector.service_id(),
+            selector.version(),
+            selector.group()
+        );
         Ok(Self {
             selector,
-            endpoint,
             methods,
+            identity,
+        })
+    }
+
+    /// Returns the service selector used by discovery and registration.
+    pub const fn selector(&self) -> &ServiceSelector {
+        &self.selector
+    }
+
+    /// Returns the methods in declaration order.
+    pub fn methods(&self) -> &[MethodDescriptor] {
+        &self.methods
+    }
+
+    /// Returns a method by its declaration-order identifier.
+    pub fn method(&self, id: MethodId) -> Option<&MethodDescriptor> {
+        self.methods
+            .get(id.index())
+            .filter(|method| method.id() == id)
+    }
+
+    /// Returns a stable identity used for duplicate-service detection.
+    pub fn identity(&self) -> &str {
+        &self.identity
+    }
+}
+
+/// A validated service registration submitted to a registry provider.
+#[derive(Clone, Debug)]
+pub struct ServiceRegistration {
+    descriptor: &'static ServiceDescriptor,
+    endpoint: ServiceEndpoint,
+    weight: ServiceWeight,
+}
+
+impl ServiceRegistration {
+    /// Creates a complete service registration.
+    #[doc(hidden)]
+    pub fn __new(
+        descriptor: &'static ServiceDescriptor,
+        endpoint: ServiceEndpoint,
+        weight: ServiceWeight,
+    ) -> Result<Self, ContractError> {
+        Ok(Self {
+            descriptor,
+            endpoint,
             weight,
         })
     }
 
+    /// Returns the shared service descriptor.
+    pub const fn descriptor(&self) -> &'static ServiceDescriptor {
+        self.descriptor
+    }
+
     /// Returns the registered service selector.
     pub fn selector(&self) -> &ServiceSelector {
-        &self.selector
+        self.descriptor.selector()
     }
 
     /// Returns the advertised endpoint.
@@ -306,7 +414,7 @@ impl ServiceRegistration {
 
     /// Returns registered method metadata.
     pub fn methods(&self) -> &[MethodDescriptor] {
-        &self.methods
+        self.descriptor.methods()
     }
 
     /// Returns the service weight.
@@ -521,34 +629,55 @@ mod tests {
 
     #[test]
     fn method_validates_parameter_sources_and_placeholders() {
-        let valid = MethodDescriptor::new(
+        let valid = MethodDescriptor::__new(
+            MethodId::__new(0),
             "find",
             Method::GET,
             "/users/{id}",
             vec![
-                ParameterDescriptor::new("id", ParameterSource::Path).unwrap(),
-                ParameterDescriptor::new("filter", ParameterSource::Query).unwrap(),
+                ParameterDescriptor::__new("id", ParameterSource::Path).unwrap(),
+                ParameterDescriptor::__new("filter", ParameterSource::Query).unwrap(),
             ],
         );
         assert!(valid.is_ok());
-        let invalid = MethodDescriptor::new(
+        let invalid = MethodDescriptor::__new(
+            MethodId::__new(0),
             "find",
             Method::GET,
             "/users/{id}",
-            vec![ParameterDescriptor::new("id", ParameterSource::Body).unwrap()],
+            vec![ParameterDescriptor::__new("id", ParameterSource::Body).unwrap()],
         );
         assert!(invalid.is_err());
     }
 
     #[test]
-    fn registration_rejects_duplicate_method_names() {
-        let method = MethodDescriptor::new("find", Method::GET, "/users", Vec::new()).unwrap();
-        let registration = ServiceRegistration::new(
-            ServiceSelector::new("users", None, None).unwrap(),
-            "http://localhost:8080".parse().unwrap(),
-            vec![method.clone(), method],
-            ServiceWeight::default(),
-        );
-        assert!(registration.is_err());
+    fn descriptor_rejects_duplicate_method_names_and_non_contiguous_ids() {
+        let first = MethodDescriptor::__new(
+            MethodId::__new(0),
+            "find",
+            Method::GET,
+            "/users",
+            Vec::new(),
+        )
+        .unwrap();
+        let duplicate = MethodDescriptor::__new(
+            MethodId::__new(1),
+            "find",
+            Method::GET,
+            "/users/duplicate",
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(ServiceDescriptor::__new("users", None, None, vec![first, duplicate]).is_err());
+
+        let skipped = MethodDescriptor::__new(
+            MethodId::__new(1),
+            "find",
+            Method::GET,
+            "/users",
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(ServiceDescriptor::__new("users", None, None, vec![skipped]).is_err());
     }
 }

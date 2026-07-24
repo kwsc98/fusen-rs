@@ -1,275 +1,203 @@
 # fusen-rs 0.9
 
-`fusen-rs` is an asynchronous RPC framework for Rust microservices. Procedural macros generate the client and server adapters at compile time, so services can be called through typed Rust traits without maintaining an IDL, running a code generator, or adding project scaffolding.
+`fusen-rs` is an asynchronous JSON RPC framework for Rust microservices. `#[fusen_trait]` generates a typed client, a service-specific client builder, static method descriptors, and a server wrapper. `#[fusen_service]` binds a Rust implementation to declaration-order `MethodId` dispatch.
 
-The framework transports JSON over HTTP/1.1 and HTTP/2 and supports direct Host addressing, Nacos registration and discovery, load balancing, Aspect middleware, configuration management, structured errors, and graceful shutdown. Version 0.9 focuses on explicit reliability contracts for deadlines, resource limits, registration rollback, and discovery cleanup.
+The runtime supports HTTP/1.1, HTTP/2, direct endpoints, Nacos registration and discovery, pluggable cluster selection, typed middleware, complete lifecycle observation, bounded bodies, deadlines, Problem Details, and graceful shutdown.
 
 [中文文档](README_CN.md)
 
-## Features
+## Core Model
 
-- Type-safe generated clients from shared `#[fusen_trait]` interfaces
-- Server adapters generated from `#[fusen_service]` implementations
-- JSON services over HTTP/1.1 and HTTP/2
-- Direct HTTP(S) endpoints and Nacos-based registration and discovery
-- Service groups and versions plus HTTP method, path, query, and body mapping
-- Pluggable load balancing and nestable Aspect middleware
-- Local-file and Nacos configuration with live updates
-- End-to-end client deadlines and bounded request/response bodies
-- Request, connection, and HTTP/2 stream concurrency limits
-- RFC 9457 Problem Details with typed remote errors
-- Transactional startup registration and deadline-bounded graceful shutdown
+```text
+ClientRuntime -> Middleware -> Router -> LoadBalancer -> HTTP
+Server        -> admission/decode/route -> Middleware -> MethodId dispatch -> encode
+```
 
-> Dubbo Triple is intentionally unavailable in 0.9. Requests with `application/grpc` receive an RFC 9457 `415 Unsupported Media Type` response.
+- One logical RPC performs one HTTP attempt by default. There is no implicit retry.
+- `Next` is consuming and cannot be cloned, so downstream executes at most once.
+- `InvocationObserver` covers errors, timeouts, and cancellation outside middleware.
+- Nacos publishes immutable snapshots. The no-Router path reuses the current snapshot allocation.
+- JSON HTTP wire behavior remains identical for Fusen HTTP/2 and SpringCloud HTTP/1.1.
 
-## Define a Service
+## Define And Implement
 
-Clients and servers share normal Rust data types and traits. `#[fusen_trait]` generates `DemoServiceClient`, while `#[asset]` can override the default route and HTTP method.
-
-```rust
-use fusen_rs::fusen_procedural_macro::fusen_trait;
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct RequestDto {
-    pub name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ResponseDto {
-    pub message: String,
-}
+```rust,no_run
+use fusen_rs::{FusenError, fusen_service, fusen_trait};
 
 #[fusen_trait]
 pub trait DemoService {
     async fn say_hello(&self, name: String) -> String;
-
-    #[fusen_rs::fusen_procedural_macro::asset(path = "/hello")]
-    async fn hello(&self, request: RequestDto) -> ResponseDto;
-
-    #[fusen_rs::fusen_procedural_macro::asset(path = "/divide", method = GET)]
-    async fn divide(&self, a: i32, b: i32) -> String;
 }
-```
 
-Server implementations return `Result<T, FusenError>`. Errors are serialized as structured remote errors that clients can handle consistently.
-
-```rust
-use fusen_rs::{error::FusenError, fusen_procedural_macro::fusen_service};
-
-#[derive(Default)]
-struct DemoServiceImpl;
+pub struct DemoServiceImpl;
 
 #[fusen_service]
 impl DemoService for DemoServiceImpl {
     async fn say_hello(&self, name: String) -> Result<String, FusenError> {
         Ok(format!("Hello {name}"))
     }
+}
+```
 
-    async fn hello(&self, request: RequestDto) -> Result<ResponseDto, FusenError> {
-        Ok(ResponseDto {
-            message: format!("Hello {}", request.name),
-        })
+Trait declaration order assigns stable `MethodId(u16)` values. Service implementation methods may be written in any order; generated dispatch remains O(1) and does not compare method-name strings.
+
+## Client
+
+One `ClientRuntime` owns connection pools, global middleware, observers, discovery subscriptions, and shutdown state. Generated clients contain only service-local configuration and shared runtime ownership.
+
+```rust,no_run
+use fusen_rs::{ClientRuntime, FusenError, fusen_trait};
+
+#[fusen_trait]
+trait DemoService {
+    async fn say_hello(&self, name: String) -> String;
+}
+
+async fn example() -> Result<(), FusenError> {
+let runtime = ClientRuntime::builder()
+    .build()?;
+
+let client = DemoServiceClient::builder(&runtime)
+    .direct("http://127.0.0.1:8081")
+    .connect()
+    .await?;
+
+let value = client.say_hello("fusen".into()).await?;
+runtime.shutdown().await?;
+Ok(())
+}
+```
+
+Discovery uses the same generated builder:
+
+```rust,no_run
+use fusen_rs::{ClientRuntime, FusenError, fusen_trait};
+
+#[fusen_trait]
+trait DemoService {
+    async fn say_hello(&self, name: String) -> String;
+}
+
+async fn example() -> Result<(), FusenError> {
+let runtime = ClientRuntime::builder().build()?;
+let client = DemoServiceClient::builder(&runtime)
+    .discover()
+    .connect()
+    .await?;
+runtime.shutdown().await?;
+Ok(())
+}
+```
+
+`shutdown()` is idempotent, closes all runtime-owned subscriptions, and rejects new clients and RPCs. Drop provides best-effort background cleanup, but explicit shutdown is the application contract.
+
+HTTP/1.1 and HTTP/2 pools can be tuned independently on the runtime:
+
+```rust,no_run
+use fusen_rs::{ClientRuntime, FusenError, Http1PoolConfig, Http2PoolConfig};
+
+fn example() -> Result<(), FusenError> {
+let runtime = ClientRuntime::builder()
+    .http1_pool(Http1PoolConfig {
+        max_idle_per_host: 256,
+        ..Http1PoolConfig::default()
+    })
+    .http2_pool(Http2PoolConfig {
+        connections_per_host: 4,
+        ..Http2PoolConfig::default()
+    })
+    .build()?;
+Ok(())
+}
+```
+
+`max_idle_per_host` limits retained idle HTTP/1.1 connections, not concurrent in-use connections; zero disables HTTP/1.1 reuse. HTTP/2 connection shards are opened lazily per endpoint and selected by a lock-free stable hash of the endpoint and request ID.
+
+## Server
+
+Register an implementation directly. Use the generated `*Server` wrapper only when a service needs local middleware.
+
+```rust,no_run
+use fusen_rs::{FusenError, Server, fusen_service, fusen_trait};
+
+#[fusen_trait]
+trait DemoService {
+    async fn ping(&self) -> String;
+}
+
+struct DemoServiceImpl;
+
+#[fusen_service]
+impl DemoService for DemoServiceImpl {
+    async fn ping(&self) -> Result<String, FusenError> {
+        Ok("pong".into())
     }
+}
 
-    async fn divide(&self, a: i32, b: i32) -> Result<String, FusenError> {
-        if b == 0 {
-            return Err(FusenError::InvalidRequest(
-                "divisor must not be zero".to_owned(),
-            ));
-        }
-        Ok(format!("a / b = {}", a / b))
+async fn example() -> Result<(), FusenError> {
+Server::bind("0.0.0.0:8081")
+    .service(DemoServiceImpl)
+    .run()
+    .await?;
+Ok(())
+}
+```
+
+Server startup validates services and routes, binds the listener, then registers providers transactionally. Routes are pre-bound to a static descriptor, immutable middleware slice, and service invoker. Admission is fail-fast and one absolute deadline covers decode, route, middleware, service dispatch, and response encode.
+
+## Middleware
+
+Users implement one trait on both sides. No registration macro, string ID, boxed future, or terminal implementation is required.
+
+```rust,no_run
+use fusen_rs::{Middleware, Next, RpcContext, RpcResult};
+
+struct AuthMiddleware;
+
+impl Middleware for AuthMiddleware {
+    async fn handle<'a>(&'a self, mut context: RpcContext, next: Next<'a>) -> RpcResult {
+        context.metadata_mut().insert("tenant".into(), "acme".into());
+        next.run(context).await
     }
 }
 ```
 
-## Direct Host Addressing
+Global middleware executes before service-local middleware and unwinds after it. Client middleware runs before routing and load balancing, so it can set tenant, gray-release, or consistent-hash metadata. Provider middleware runs after HTTP route matching. Middleware may return an error or an explicit `RpcResponse` without calling `next`.
 
-Direct addressing requires no registry and is useful for local development, tests, and fixed upstream services.
+Use `InvocationObserver` for complete request logs and metrics. Observer callbacks are synchronous, ordered, exactly-once at finish, and intentionally omit bodies, credentials, and complete headers. Middleware post-processing is not guaranteed after cancellation; use RAII for resource cleanup.
 
-```rust,no_run
-use fusen_rs::server::FusenServerBuilder;
+## Cluster Extensions
 
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let bind_addr = "0.0.0.0:8081".parse()?;
-FusenServerBuilder::new(bind_addr)
-    .service((Box::new(DemoServiceImpl), None))?
-    .run()
-    .await?;
-# Ok(())
-# }
-```
+Advanced client extensions live under `client::cluster`:
 
-Create a generated client with `ClientOptions::direct`. A direct URL may contain a base path, but it must be an HTTP(S) URL without a query or fragment.
+- `Router` filters or reorders an `InstanceSnapshot`.
+- `LoadBalancer` returns one validated snapshot index.
+- The default load balancer uses validated provider weights.
 
-```rust,no_run
-use fusen_rs::client::{ClientOptions, FusenClientContextBuilder};
+Empty snapshots, Router results with no instances, and invalid selected indexes return `FusenError::ServiceUnavailable`. This phase intentionally provides no retry, backoff, circuit breaker, or multi-attempt API.
 
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let mut context = FusenClientContextBuilder::new().build()?;
-let client = DemoServiceClient::init(
-    &mut context,
-    ClientOptions::direct("http://127.0.0.1:8081".parse()?),
-)
-.await?;
+## Defaults
 
-println!("{}", client.say_hello("fusen".to_owned()).await?);
-client.close().await?;
-# Ok(())
-# }
-```
-
-## Nacos Registration and Discovery
-
-In discovery mode, servers publish each service after binding their socket. Clients subscribe using the service, group, and version declared by the trait. Directory updates are atomic snapshots containing only healthy, enabled instances with positive weights.
-
-The server must configure both Nacos and an externally reachable `advertised_base_url`. Route validation and socket binding happen before registration. If any registration fails, completed registrations are rolled back in reverse order.
-
-```rust,no_run
-use std::sync::Arc;
-use fusen_common::nacos::{NacosConfig, register::NacosRegister};
-use fusen_rs::server::{FusenServerBuilder, ServerConfig};
-
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let bind_addr = "0.0.0.0:8081".parse()?;
-let mut config = ServerConfig::new(bind_addr);
-config.advertised_base_url = Some("http://10.0.0.8:8081".to_owned());
-let register = NacosRegister::init_nacos_register(
-    "demo-server",
-    Arc::new(NacosConfig {
-        server_addr: "127.0.0.1:8848".to_owned(),
-        ..Default::default()
-    }),
-)?;
-
-FusenServerBuilder::new(bind_addr)
-    .config(config)
-    .register(register)
-    .service((Box::new(DemoServiceImpl), None))?
-    .run()
-    .await?;
-# Ok(())
-# }
-```
-
-Install a `NacosRegister` in the client context and select discovery addressing. Discovery clients should be closed explicitly to unsubscribe and release the provider listener.
-
-```rust,no_run
-use std::sync::Arc;
-use fusen_common::nacos::{NacosConfig, register::NacosRegister};
-use fusen_rs::{
-    client::{ClientOptions, FusenClientContextBuilder},
-    contract::WireProtocol,
-};
-
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let register = NacosRegister::init_nacos_register(
-    "demo-client",
-    Arc::new(NacosConfig {
-        server_addr: "127.0.0.1:8848".to_owned(),
-        ..Default::default()
-    }),
-)?;
-let mut context = FusenClientContextBuilder::new()
-    .register(register)
-    .build()?;
-let client = DemoServiceClient::init(
-    &mut context,
-    ClientOptions::discovery(WireProtocol::Fusen),
-)
-.await?;
-
-println!("{}", client.say_hello("nacos".to_owned()).await?);
-client.close().await?;
-# Ok(())
-# }
-```
-
-## Middleware
-
-Clients and servers can extend their invocation pipelines with handlers. Register handlers on a context or server first, then attach their string IDs to individual services in execution order.
-
-`LoadBalance` selects an instance from the current discovery snapshot. It can implement random, round-robin, consistent-hash, or application-specific routing. `Aspect` wraps an invocation and is suitable for logging, authorization, limits, circuit breaking, metrics, and tracing. Multiple Aspects may be nested.
-
-The repository includes complete [logging and tracing Aspects](examples/src/handler/aspect) and a [custom load balancer](examples/src/handler/loadbalance/custom.rs).
-
-## Reliability Defaults
-
-- Client connect timeout: 3 seconds
-- End-to-end client invocation timeout: 10 seconds
-- Discovery and subscription-close timeouts: 5 seconds
-- Maximum response body: 2 MiB
+- Client connect timeout: 3 seconds; invocation timeout: 10 seconds
+- Discovery and subscription cleanup timeout: 5 seconds
+- HTTP/1.1: 128 idle connections per host; 90-second idle eviction
+- HTTP/2: one connection per host; 90-second idle eviction; keep-alive pings disabled
+- Maximum request and response body: 2 MiB
 - Server request timeout: 30 seconds
-- Maximum concurrent requests: 1024
-- Maximum connections: 2048
-- Maximum HTTP/2 streams per connection: 128
-- Maximum request body: 2 MiB
-- Total graceful-shutdown timeout: 30 seconds
+- Maximum requests: 1024; connections: 2048; HTTP/2 streams per connection: 128
+- Graceful shutdown: 30 seconds; registry operation: 5 seconds
 
-These defaults can be changed through `ClientConfig` and `ServerConfig`. All limits and timeouts must be greater than zero. Non-2xx Problem Details responses are restored as `FusenError::Remote`; server registration operations are bounded and shutdown deregisters services before draining connections.
+Configure these through `ClientConfig` and `ServerConfig`. Configured durations and required pool sizes must be greater than zero; HTTP/1.1 `max_idle_per_host` may be zero to disable reuse. Non-2xx Problem Details responses become `FusenError::Remote`.
 
-## Run the Examples
-
-Examples are separated by addressing mode:
-
-```text
-examples/src/
-├── host/
-│   ├── server.rs
-│   ├── client.rs
-│   ├── server_pt.rs
-│   └── client_pt.rs
-└── nacos/
-    ├── server.rs
-    ├── client.rs
-    └── hot_config.rs
-```
-
-Run the direct Host example in two terminals:
+## Examples And Benchmarks
 
 ```bash
 cargo run -p examples --bin host-server
 cargo run -p examples --bin host-client
-```
 
-For a benchmark without per-request logging or tracing, run the dedicated release-mode server and client. Set `PT_PROTOCOL=both` to run HTTP/1.1 and HTTP/2 sequentially with the same workload and report their QPS and throughput ratio:
-
-```bash
 cargo run --release -p examples --bin host-server-pt
-PT_PROTOCOL=both PT_CONCURRENCY=100 PT_REQUESTS_PER_TASK=10000 \
+PT_PROTOCOL=both PT_CONCURRENCY=1,100 PT_ROUNDS=5 \
 cargo run --release -p examples --bin host-client-pt
 ```
 
-HTTP/1.1 scales concurrent work through the connection pool, while HTTP/2 multiplexes streams on a connection and compresses headers with HPACK. Byte counts cover serialized JSON bodies, excluding HTTP framing, TCP/IP, and TLS overhead. See [examples/README.md](examples/README.md) for all benchmark settings and protocol details.
-
-For Nacos, start a Nacos server and then run. `NACOS_ADDR` defaults to `127.0.0.1:8848`, and `FUSEN_ADVERTISED_URL` defaults to `http://127.0.0.1:8081`; the environment variables below override those defaults:
-
-```bash
-NACOS_ADDR=127.0.0.1:8848 \
-FUSEN_ADVERTISED_URL=http://127.0.0.1:8081 \
-cargo run -p examples --bin nacos-server
-
-NACOS_ADDR=127.0.0.1:8848 \
-cargo run -p examples --bin nacos-client
-```
-
-`FUSEN_ADVERTISED_URL` must be reachable by clients in container or multi-host deployments. See [examples/README.md](examples/README.md) for all example commands.
-
-## Documentation
-
-- [Architecture and invocation pipeline](docs/architecture.md)
-- [Module behavior index](docs/modules/README.md)
-- [Client behavior](docs/modules/client.md)
-- [Server behavior](docs/modules/server.md)
-- [Nacos registration and discovery](docs/modules/registry-nacos.md)
-- [Middleware and macros](docs/modules/middleware-macros.md)
-- [Configuration](docs/modules/configuration.md)
-- [Routing](docs/modules/routing.md)
-- [Error model](docs/modules/errors.md)
-- [Graceful shutdown](docs/modules/shutdown.md)
-- [0.8 to 0.9 migration guide](docs/migration-0.9.md)
-- [Compatibility policy](docs/compatibility.md)
-- [Contributing](CONTRIBUTING.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security policy](SECURITY.md)
-- [Release process](docs/releasing.md)
+Nacos examples use `NACOS_ADDR`; the server also uses `FUSEN_ADVERTISED_URL`. See [examples/README.md](examples/README.md) and [the performance baseline](docs/performance-baseline.md).

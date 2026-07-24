@@ -1,34 +1,24 @@
 #![warn(missing_docs)]
-//! Procedural macros for declaring fusen-rs services and handlers.
+//! Procedural macros for declaring fusen-rs services.
 
-use fusen_derive_macro::fusen_attr;
+use fusen_macro_support::fusen_attr;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use syn::{Attribute, Meta, Path};
 
-mod handler_macro;
 mod service_macro;
 mod trait_macro;
+mod validate;
 
 fn fusen_crate_path() -> proc_macro2::TokenStream {
     match crate_name("fusen-rs") {
-        Ok(FoundCrate::Itself) => quote!(crate),
+        Ok(FoundCrate::Itself) => quote!(::fusen_rs),
         Ok(FoundCrate::Name(name)) => {
             let ident = format_ident!("{}", name.replace('-', "_"));
             quote!(::#ident)
         }
         Err(_) => quote!(::fusen_rs),
-    }
-}
-
-#[proc_macro_attribute]
-/// Generates an internal adapter for an Aspect or LoadBalance implementation.
-pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = HandlerAttr::from_attr(attr);
-    match attr {
-        Ok(attr) => handler_macro::fusen_handler(attr, item),
-        Err(err) => err.into_compile_error().into(),
     }
 }
 
@@ -144,12 +134,5 @@ fusen_attr! {
         id: string,
         version: string,
         group: string,
-    }
-}
-
-fusen_attr! {
-    HandlerAttr {
-        id: string,
-        kind: ident_or_string,
     }
 }

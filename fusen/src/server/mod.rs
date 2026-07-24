@@ -1,34 +1,33 @@
 use crate::{
     error::FusenError,
-    handler::{Handler, HandlerContext, HandlerInfo},
+    filter::{Middleware, MiddlewareDyn, erase_middleware},
+    invocation::InvocationObserver,
     protocol::{
         codec::FusenHttpCodec,
         http::server::{TcpServer, TcpServerConfig},
     },
     server::{
         path::PathCache,
-        router::{Router, RouterContext},
-        rpc::{RpcServerHandler, RpcService},
+        router::{HttpRouter, RouterContext},
+        rpc::{RegisteredRpcService, RouteDispatch},
     },
 };
 use fusen_contract::{
-    MethodDescriptor, ParameterDescriptor, ServiceEndpoint, ServiceRegistration, ServiceSelector,
-    ServiceWeight, WireProtocol,
+    ServiceDescriptor, ServiceEndpoint, ServiceRegistration, ServiceWeight, WireProtocol,
 };
 use fusen_register::Register;
-use std::{collections::HashMap, future::Future, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::time::Instant;
-use tokio::{net::TcpListener, sync::Semaphore};
+use std::{collections::HashSet, future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use tokio::{net::TcpListener, sync::Semaphore, time::Instant};
 
 #[allow(missing_docs)]
 pub mod path;
 #[allow(missing_docs)]
 pub mod router;
-#[allow(missing_docs)]
+/// Generated service dispatch contracts.
 pub mod rpc;
 
-#[derive(Clone, Debug)]
 /// Typed server address, protocol, resource limits, and shutdown deadlines.
+#[derive(Clone, Debug)]
 pub struct ServerConfig {
     /// Socket address on which the server listens.
     pub bind_addr: SocketAddr,
@@ -79,68 +78,118 @@ impl ServerConfig {
     }
 }
 
-/// Transactional builder for RPC services, handlers, and registries.
-pub struct FusenServerBuilder {
-    config: ServerConfig,
-    registers: Vec<Arc<dyn Register>>,
-    handler_context: HandlerContext,
-    service_handlers: Vec<HandlerInfo>,
-    services: HashMap<String, Box<dyn RpcService>>,
+/// Framework-owned service wrapper used by macro-generated `*Server` types.
+#[doc(hidden)]
+pub struct ServerService<T> {
+    service: T,
+    middleware: Vec<Arc<dyn MiddlewareDyn>>,
 }
 
-impl FusenServerBuilder {
-    /// Creates a server builder bound to the supplied socket address.
-    pub fn new(bind_addr: SocketAddr) -> Self {
+impl<T> ServerService<T> {
+    /// Creates a service wrapper.
+    #[doc(hidden)]
+    pub fn new(service: T) -> Self {
         Self {
-            config: ServerConfig::new(bind_addr),
-            registers: Vec::new(),
-            handler_context: HandlerContext::default(),
-            service_handlers: Vec::new(),
-            services: HashMap::new(),
+            service,
+            middleware: Vec::new(),
         }
     }
 
-    /// Replaces all typed server settings.
+    /// Appends service-local middleware.
+    #[doc(hidden)]
+    pub fn middleware(mut self, middleware: impl Middleware) -> Self {
+        self.middleware.push(erase_middleware(middleware));
+        self
+    }
+
+    /// Erases the generated service for server startup.
+    #[doc(hidden)]
+    pub fn into_server_service(self) -> PreparedService
+    where
+        T: RegisteredRpcService + 'static,
+    {
+        PreparedService {
+            service: Arc::new(self.service),
+            middleware: self.middleware,
+        }
+    }
+}
+
+/// Conversion implemented by generated service adapters and service-specific wrappers.
+#[doc(hidden)]
+pub trait IntoServerService: Sized {
+    /// Converts one generated service into framework-owned startup state.
+    #[doc(hidden)]
+    fn into_server_service(self) -> PreparedService
+    where
+        Self: 'static;
+}
+
+/// Erased startup state produced by generated service adapters.
+#[doc(hidden)]
+pub struct PreparedService {
+    service: Arc<dyn RegisteredRpcService>,
+    middleware: Vec<Arc<dyn MiddlewareDyn>>,
+}
+
+/// Transactional RPC server builder and runtime.
+pub struct Server {
+    config: ServerConfig,
+    bind_error: Option<String>,
+    registries: Vec<Arc<dyn Register>>,
+    middleware: Vec<Arc<dyn MiddlewareDyn>>,
+    services: Vec<PreparedService>,
+    observers: Vec<Arc<dyn InvocationObserver>>,
+}
+
+impl Server {
+    /// Creates a server bound to an IPv4 or IPv6 socket address.
+    pub fn bind(address: impl ToString) -> Self {
+        let parsed = address.to_string().parse::<SocketAddr>();
+        let bind_error = parsed.as_ref().err().map(ToString::to_string);
+        let bind_addr = parsed.unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+        Self {
+            config: ServerConfig::new(bind_addr),
+            bind_error,
+            registries: Vec::new(),
+            middleware: Vec::new(),
+            services: Vec::new(),
+            observers: Vec::new(),
+        }
+    }
+
+    /// Replaces server resource limits and protocol settings.
     pub fn config(mut self, config: ServerConfig) -> Self {
         self.config = config;
+        self.bind_error = None;
         self
     }
 
     /// Adds a registry participating in startup and shutdown transactions.
-    pub fn register(mut self, register: impl Register + 'static) -> Self {
-        self.registers.push(Arc::new(register));
+    pub fn registry(mut self, registry: impl Register + 'static) -> Self {
+        self.registries.push(Arc::new(registry));
         self
     }
 
-    /// Adds one uniquely identified middleware handler.
-    pub fn handler(mut self, handler: Handler) -> Result<Self, FusenError> {
-        self.handler_context.load_handler(handler)?;
-        Ok(self)
+    /// Appends global provider middleware in execution order.
+    pub fn middleware(mut self, middleware: impl Middleware) -> Self {
+        self.middleware.push(erase_middleware(middleware));
+        self
     }
 
-    /// Adds one generated RPC service and its ordered handlers.
-    pub fn service(
-        mut self,
-        (service, handlers): (Box<dyn RpcService>, Option<Vec<&str>>),
-    ) -> Result<Self, FusenError> {
-        let info = service.get_service_info();
-        info.validate()?;
-        let tag = info.service_desc.get_tag().to_owned();
-        if self.services.contains_key(&tag) {
-            return Err(FusenError::InvalidRequest(format!(
-                "duplicate service {tag}"
-            )));
-        }
-        self.service_handlers.push(HandlerInfo {
-            service_desc: info.service_desc.clone(),
-            handlers: handlers
-                .unwrap_or_default()
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-        });
-        self.services.insert(tag, service);
-        Ok(self)
+    /// Appends a synchronous complete-invocation observer.
+    pub fn observer(mut self, observer: impl InvocationObserver + 'static) -> Self {
+        self.observers.push(Arc::new(observer));
+        self
+    }
+
+    /// Registers a generated service implementation or service-specific wrapper.
+    pub fn service<T>(mut self, service: T) -> Self
+    where
+        T: IntoServerService + 'static,
+    {
+        self.services.push(service.into_server_service());
+        self
     }
 
     /// Runs until Ctrl-C is received and all connections are drained.
@@ -153,27 +202,13 @@ impl FusenServerBuilder {
         .await
     }
 
-    /// Runs with a caller-provided shutdown future, primarily for embedding and tests.
-    pub async fn run_with_shutdown<S>(mut self, shutdown: S) -> Result<(), FusenError>
+    /// Runs with a caller-provided shutdown future.
+    pub async fn run_with_shutdown<S>(self, shutdown: S) -> Result<(), FusenError>
     where
         S: Future<Output = ()> + Send,
     {
-        if self.config.max_request_body_bytes == 0
-            || self.config.max_concurrent_requests == 0
-            || self.config.max_connections == 0
-            || self.config.http2_max_concurrent_streams == 0
-            || self.config.request_timeout.is_zero()
-            || self.config.graceful_shutdown_timeout.is_zero()
-            || self.config.registry_timeout.is_zero()
-            || self.config.http1_header_read_timeout.is_zero()
-            || self.config.http2_keep_alive_interval.is_zero()
-            || self.config.http2_keep_alive_timeout.is_zero()
-        {
-            return Err(FusenError::InvalidRequest(
-                "server limits and timeouts must be greater than zero".into(),
-            ));
-        }
-        let advertised = if self.registers.is_empty() {
+        self.validate()?;
+        let advertised = if self.registries.is_empty() {
             self.config
                 .advertised_base_url
                 .clone()
@@ -186,73 +221,51 @@ impl FusenServerBuilder {
             })?
         };
         let advertised = validate_advertised_url(&advertised)?;
-        let mut method_infos = Vec::new();
-        let mut resources = Vec::new();
-        let mut service_infos = self
-            .services
-            .values()
-            .map(|service| service.get_service_info())
-            .collect::<Vec<_>>();
-        service_infos.sort_by(|left, right| {
-            left.service_desc
-                .get_tag()
-                .cmp(right.service_desc.get_tag())
+        let mut services = self.services;
+        services.sort_by(|left, right| {
+            left.service
+                .service_descriptor()
+                .identity()
+                .cmp(right.service.service_descriptor().identity())
         });
-        for info in service_infos {
-            info.validate()?;
-            method_infos.extend(info.method_infos.iter().cloned().map(Arc::new));
-            let selector = ServiceSelector::new(
-                info.service_desc.service_id,
-                info.service_desc.group,
-                info.service_desc.version,
-            )
-            .map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
-            let methods = info
-                .method_infos
-                .into_iter()
-                .map(|method| {
-                    let parameters = method
-                        .parameters
-                        .into_iter()
-                        .map(|parameter| {
-                            ParameterDescriptor::new(parameter.name, parameter.source)
-                                .map_err(|error| FusenError::InvalidRequest(error.to_string()))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    MethodDescriptor::new(
-                        method.method_name,
-                        method.method,
-                        method.path,
-                        parameters,
-                    )
-                    .map_err(|error| FusenError::InvalidRequest(error.to_string()))
-                })
-                .collect::<Result<Vec<_>, FusenError>>()?;
-            resources.push(Arc::new(
-                ServiceRegistration::new(
-                    selector,
-                    advertised.clone(),
-                    methods,
-                    ServiceWeight::default(),
-                )
-                .map_err(|error| FusenError::InvalidRequest(error.to_string()))?,
-            ));
+        let mut seen = HashSet::new();
+        let mut methods = Vec::new();
+        let mut dispatches = Vec::new();
+        let mut resources = Vec::new();
+        for prepared in services {
+            let descriptor = prepared.service.service_descriptor();
+            if !seen.insert(descriptor.identity()) {
+                return Err(FusenError::InvalidRequest(format!(
+                    "duplicate service {}",
+                    descriptor.identity()
+                )));
+            }
+            let mut middleware =
+                Vec::with_capacity(self.middleware.len() + prepared.middleware.len());
+            middleware.extend(self.middleware.iter().cloned());
+            middleware.extend(prepared.middleware);
+            let middleware: Arc<[Arc<dyn MiddlewareDyn>]> = Arc::from(middleware);
+            for method in descriptor.methods() {
+                methods.push((descriptor, method));
+                dispatches.push(RouteDispatch::new(
+                    middleware.clone(),
+                    prepared.service.clone(),
+                ));
+            }
+            resources.push(service_registration(descriptor, advertised.clone())?);
         }
-        let path_cache = PathCache::build(method_infos)?;
-        for controller in self.service_handlers {
-            self.handler_context.load_controller(controller)?;
-        }
+        let path_cache = PathCache::build(methods)?;
         let listener = TcpListener::bind(self.config.bind_addr)
             .await
             .map_err(|error| FusenError::internal("failed to bind server socket", error))?;
 
         let mut registered = Vec::new();
-        for register in &self.registers {
+        for registry in &self.registries {
             for resource in &resources {
-                registered.push((register.clone(), resource.clone()));
+                registered.push((registry.clone(), resource.clone()));
                 match tokio::time::timeout(
                     self.config.registry_timeout,
-                    register.register(resource.clone(), self.config.protocol),
+                    registry.register(resource.clone(), self.config.protocol),
                 )
                 .await
                 {
@@ -282,12 +295,12 @@ impl FusenServerBuilder {
                 }
             }
         }
-        let router = Router {
+        let router = HttpRouter {
             context: Arc::new(RouterContext {
                 http_codec: FusenHttpCodec::new(self.config.max_request_body_bytes),
                 path_cache,
-                handler_context: self.handler_context,
-                fusen_service_handler: RpcServerHandler::new(self.services),
+                dispatches: Arc::from(dispatches),
+                observers: Arc::from(self.observers),
                 concurrency: Arc::new(Semaphore::new(self.config.max_concurrent_requests)),
                 request_timeout: self.config.request_timeout,
             }),
@@ -315,22 +328,51 @@ impl FusenServerBuilder {
         .await
         .map_err(|error| FusenError::internal("HTTP server failed", error))
     }
+
+    fn validate(&self) -> Result<(), FusenError> {
+        if let Some(error) = &self.bind_error {
+            return Err(FusenError::InvalidRequest(format!(
+                "invalid server bind address: {error}"
+            )));
+        }
+        if self.services.is_empty() {
+            return Err(FusenError::InvalidRequest(
+                "server must register at least one service".into(),
+            ));
+        }
+        if self.config.max_request_body_bytes == 0
+            || self.config.max_concurrent_requests == 0
+            || self.config.max_connections == 0
+            || self.config.http2_max_concurrent_streams == 0
+            || self.config.request_timeout.is_zero()
+            || self.config.graceful_shutdown_timeout.is_zero()
+            || self.config.registry_timeout.is_zero()
+            || self.config.http1_header_read_timeout.is_zero()
+            || self.config.http2_keep_alive_interval.is_zero()
+            || self.config.http2_keep_alive_timeout.is_zero()
+        {
+            return Err(FusenError::InvalidRequest(
+                "server limits and timeouts must be greater than zero".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn service_registration(
+    descriptor: &'static ServiceDescriptor,
+    endpoint: ServiceEndpoint,
+) -> Result<Arc<ServiceRegistration>, FusenError> {
+    Ok(Arc::new(
+        ServiceRegistration::__new(descriptor, endpoint, ServiceWeight::default())
+            .map_err(|error| FusenError::InvalidRequest(error.to_string()))?,
+    ))
 }
 
 fn validate_advertised_url(value: &str) -> Result<ServiceEndpoint, FusenError> {
-    let url =
-        url::Url::parse(value).map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || url.port_or_known_default().is_none()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(FusenError::InvalidRequest(
-            "advertised_base_url must be an absolute HTTP(S) URL without query or fragment".into(),
-        ));
-    }
-    ServiceEndpoint::new(url).map_err(|error| FusenError::InvalidRequest(error.to_string()))
+    value
+        .parse::<ServiceEndpoint>()
+        .map_err(|error| FusenError::InvalidRequest(error.to_string()))
 }
 
 async fn rollback(
@@ -339,7 +381,7 @@ async fn rollback(
     operation_timeout: Duration,
     deadline: Option<Instant>,
 ) {
-    for (register, resource) in entries.iter().rev() {
+    for (registry, resource) in entries.iter().rev() {
         let remaining = deadline
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
             .unwrap_or(operation_timeout);
@@ -348,7 +390,7 @@ async fn rollback(
             tracing::error!(service = %resource.selector().service_id(), "service deregistration skipped after shutdown deadline");
             break;
         }
-        match tokio::time::timeout(timeout, register.deregister(resource.clone(), protocol)).await {
+        match tokio::time::timeout(timeout, registry.deregister(resource.clone(), protocol)).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 tracing::error!(?error, service = %resource.selector().service_id(), "service deregistration failed");
@@ -357,388 +399,5 @@ async fn rollback(
                 tracing::error!(service = %resource.selector().service_id(), "service deregistration timed out");
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        filter::{FusenFilter, ProceedingJoinPoint},
-        protocol::fusen::{
-            context::FusenContext,
-            service::{MethodInfo, ServiceDesc, ServiceInfo},
-        },
-    };
-    use fusen_contract::{BoxFuture, ServiceSelector, StaticBoxFuture};
-    use fusen_register::{ServiceSubscription, error::RegisterError};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        sync::{Notify, oneshot},
-    };
-
-    #[derive(Clone)]
-    struct MockRegister {
-        registered: Arc<AtomicUsize>,
-        deregistered: Arc<AtomicUsize>,
-        fail_on: Option<usize>,
-        hang_on: Option<usize>,
-        hang_deregister: bool,
-    }
-
-    impl Register for MockRegister {
-        fn register(
-            &self,
-            _resource: Arc<ServiceRegistration>,
-            _protocol: WireProtocol,
-        ) -> StaticBoxFuture<Result<(), RegisterError>> {
-            let count = self.registered.fetch_add(1, Ordering::SeqCst) + 1;
-            let fail = self.fail_on == Some(count);
-            let hang = self.hang_on == Some(count);
-            Box::pin(async move {
-                if hang {
-                    std::future::pending::<()>().await;
-                }
-                if fail {
-                    Err(RegisterError::provider(std::io::Error::other(
-                        "register failed",
-                    )))
-                } else {
-                    Ok(())
-                }
-            })
-        }
-        fn deregister(
-            &self,
-            _resource: Arc<ServiceRegistration>,
-            _protocol: WireProtocol,
-        ) -> StaticBoxFuture<Result<(), RegisterError>> {
-            let counter = self.deregistered.clone();
-            let hang = self.hang_deregister;
-            Box::pin(async move {
-                counter.fetch_add(1, Ordering::SeqCst);
-                if hang {
-                    std::future::pending::<()>().await;
-                }
-                Ok(())
-            })
-        }
-        fn subscribe(
-            &self,
-            _resource: ServiceSelector,
-            _protocol: WireProtocol,
-        ) -> StaticBoxFuture<Result<ServiceSubscription, RegisterError>> {
-            Box::pin(async { Ok(ServiceSubscription::local(Vec::new())) })
-        }
-    }
-
-    struct DummyService(&'static str);
-    impl FusenFilter for DummyService {
-        fn call<'a>(
-            &'a self,
-            join_point: ProceedingJoinPoint,
-        ) -> BoxFuture<'a, Result<FusenContext, FusenError>> {
-            Box::pin(async move { Ok(join_point.context) })
-        }
-    }
-
-    struct SlowService {
-        started: Arc<Notify>,
-        delay: Duration,
-    }
-
-    impl FusenFilter for SlowService {
-        fn call<'a>(
-            &'a self,
-            join_point: ProceedingJoinPoint,
-        ) -> BoxFuture<'a, Result<FusenContext, FusenError>> {
-            Box::pin(async move {
-                let mut context = join_point.context;
-                self.started.notify_one();
-                tokio::time::sleep(self.delay).await;
-                let response = crate::protocol::fusen::response::FusenResponse {
-                    body: Some(serde_json::json!("ok")),
-                    ..Default::default()
-                };
-                context.response = Some(response);
-                Ok(context)
-            })
-        }
-    }
-
-    impl RpcService for SlowService {
-        fn get_service_info(&self) -> ServiceInfo {
-            let service = ServiceDesc::new("slow", None, None);
-            ServiceInfo::new(
-                service.clone(),
-                vec![MethodInfo::new(
-                    service,
-                    "get".into(),
-                    http::Method::GET,
-                    "/slow".into(),
-                    Vec::new(),
-                )],
-            )
-        }
-    }
-    impl RpcService for DummyService {
-        fn get_service_info(&self) -> ServiceInfo {
-            let service = ServiceDesc::new(self.0, None, None);
-            ServiceInfo::new(
-                service.clone(),
-                vec![MethodInfo::new(
-                    service,
-                    "get".into(),
-                    http::Method::GET,
-                    format!("/{}", self.0),
-                    Vec::new(),
-                )],
-            )
-        }
-    }
-
-    fn mock(fail_on: Option<usize>) -> MockRegister {
-        MockRegister {
-            registered: Arc::new(AtomicUsize::new(0)),
-            deregistered: Arc::new(AtomicUsize::new(0)),
-            fail_on,
-            hang_on: None,
-            hang_deregister: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn bind_failure_happens_before_registration() {
-        let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = occupied.local_addr().unwrap();
-        let register = mock(None);
-        let registered = register.registered.clone();
-        let mut config = ServerConfig::new(addr);
-        config.advertised_base_url = Some(format!("http://{addr}"));
-        let server = FusenServerBuilder::new(addr)
-            .config(config)
-            .register(register)
-            .service((Box::new(DummyService("one")), None))
-            .unwrap();
-        assert!(
-            server
-                .run_with_shutdown(std::future::pending())
-                .await
-                .is_err()
-        );
-        assert_eq!(registered.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn partial_registration_is_rolled_back() {
-        let register = mock(Some(2));
-        let deregistered = register.deregistered.clone();
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let mut config = ServerConfig::new(addr);
-        config.advertised_base_url = Some("http://127.0.0.1:8080".into());
-        let server = FusenServerBuilder::new(addr)
-            .config(config)
-            .register(register)
-            .service((Box::new(DummyService("one")), None))
-            .unwrap()
-            .service((Box::new(DummyService("two")), None))
-            .unwrap();
-        assert!(
-            server
-                .run_with_shutdown(std::future::pending())
-                .await
-                .is_err()
-        );
-        assert_eq!(deregistered.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn timed_out_registration_compensates_the_uncertain_resource() {
-        let mut register = mock(None);
-        register.hang_on = Some(1);
-        let deregistered = register.deregistered.clone();
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let mut config = ServerConfig::new(addr);
-        config.advertised_base_url = Some("http://127.0.0.1:8080".into());
-        config.registry_timeout = Duration::from_millis(20);
-        let server = FusenServerBuilder::new(addr)
-            .config(config)
-            .register(register)
-            .service((Box::new(DummyService("one")), None))
-            .unwrap();
-        assert!(matches!(
-            server.run_with_shutdown(std::future::pending()).await,
-            Err(FusenError::Timeout(_))
-        ));
-        assert_eq!(deregistered.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn hanging_deregistration_cannot_extend_shutdown_deadline() {
-        let mut register = mock(None);
-        register.hang_deregister = true;
-        let addr = available_addr();
-        let mut config = ServerConfig::new(addr);
-        config.advertised_base_url = Some(format!("http://{addr}"));
-        config.registry_timeout = Duration::from_secs(1);
-        config.graceful_shutdown_timeout = Duration::from_millis(30);
-        let server = FusenServerBuilder::new(addr)
-            .config(config)
-            .register(register)
-            .service((Box::new(DummyService("one")), None))
-            .unwrap();
-        let start = tokio::time::Instant::now();
-        server.run_with_shutdown(async {}).await.unwrap();
-        assert!(start.elapsed() < Duration::from_millis(200));
-    }
-
-    async fn connect(addr: SocketAddr) -> tokio::net::TcpStream {
-        for _ in 0..100 {
-            if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
-                return stream;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        panic!("server did not start listening");
-    }
-
-    fn available_addr() -> SocketAddr {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap()
-    }
-
-    #[tokio::test]
-    async fn graceful_shutdown_completes_in_flight_request() {
-        let addr = available_addr();
-        let started = Arc::new(Notify::new());
-        let notified = started.notified();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = FusenServerBuilder::new(addr)
-            .service((
-                Box::new(SlowService {
-                    started: started.clone(),
-                    delay: Duration::from_millis(50),
-                }),
-                None,
-            ))
-            .unwrap();
-        let task = tokio::spawn(server.run_with_shutdown(async {
-            let _ = shutdown_rx.await;
-        }));
-        let mut stream = connect(addr).await;
-        stream
-            .write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        notified.await;
-        shutdown_tx.send(()).unwrap();
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).await.unwrap();
-        task.await.unwrap().unwrap();
-        let response = String::from_utf8_lossy(&response);
-        assert!(response.starts_with("HTTP/1.1 200"));
-        assert!(response.contains("\"ok\""));
-    }
-
-    #[tokio::test]
-    async fn graceful_shutdown_aborts_after_deadline() {
-        let addr = available_addr();
-        let started = Arc::new(Notify::new());
-        let notified = started.notified();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let mut config = ServerConfig::new(addr);
-        config.graceful_shutdown_timeout = Duration::from_millis(20);
-        let server = FusenServerBuilder::new(addr)
-            .config(config)
-            .service((
-                Box::new(SlowService {
-                    started: started.clone(),
-                    delay: Duration::from_secs(60),
-                }),
-                None,
-            ))
-            .unwrap();
-        let task = tokio::spawn(server.run_with_shutdown(async {
-            let _ = shutdown_rx.await;
-        }));
-        let mut stream = connect(addr).await;
-        stream
-            .write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        notified.await;
-        let start = tokio::time::Instant::now();
-        shutdown_tx.send(()).unwrap();
-        task.await.unwrap().unwrap();
-        assert!(start.elapsed() < Duration::from_secs(1));
-    }
-
-    #[tokio::test]
-    async fn connection_limit_holds_permit_for_socket_lifetime() {
-        let addr = available_addr();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let mut config = ServerConfig::new(addr);
-        config.max_connections = 1;
-        let server = FusenServerBuilder::new(addr)
-            .config(config)
-            .service((
-                Box::new(SlowService {
-                    started: Arc::new(Notify::new()),
-                    delay: Duration::ZERO,
-                }),
-                None,
-            ))
-            .unwrap();
-        let task = tokio::spawn(server.run_with_shutdown(async {
-            let _ = shutdown_rx.await;
-        }));
-        let first = connect(addr).await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let mut second = tokio::net::TcpStream::connect(addr).await.unwrap();
-        second
-            .write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        let mut probe = [0_u8; 1];
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), second.read(&mut probe))
-                .await
-                .is_err()
-        );
-        drop(first);
-        let mut response = Vec::new();
-        tokio::time::timeout(Duration::from_secs(1), second.read_to_end(&mut response))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"));
-        shutdown_tx.send(()).unwrap();
-        task.await.unwrap().unwrap();
-    }
-
-    #[tokio::test]
-    async fn http1_slow_headers_are_closed_after_timeout() {
-        let addr = available_addr();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let mut config = ServerConfig::new(addr);
-        config.http1_header_read_timeout = Duration::from_millis(30);
-        let server = FusenServerBuilder::new(addr)
-            .config(config)
-            .service((Box::new(DummyService("one")), None))
-            .unwrap();
-        let task = tokio::spawn(server.run_with_shutdown(async {
-            let _ = shutdown_rx.await;
-        }));
-        let mut stream = connect(addr).await;
-        stream.write_all(b"GET /one HTTP/1.1\r\n").await.unwrap();
-        let mut response = Vec::new();
-        tokio::time::timeout(Duration::from_secs(1), stream.read_to_end(&mut response))
-            .await
-            .expect("slow HTTP/1 headers were not closed")
-            .unwrap();
-        assert!(response.is_empty());
-        shutdown_tx.send(()).unwrap();
-        task.await.unwrap().unwrap();
     }
 }

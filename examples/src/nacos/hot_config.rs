@@ -1,10 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use fusen_common::{
-    config::ConfigManager,
-    fusen_common_procedural_macro::StrategyDebug,
-    nacos::{NacosConfig, config::NacosConfiguration},
-};
+use fusen_config::{ConfigManager, StrategyDebug};
+use fusen_nacos::{NacosConfig, NacosConfiguration};
 
 #[derive(serde::Deserialize, StrategyDebug)]
 pub struct CloudConfig {

@@ -1,6 +1,6 @@
 # fusen-rs examples
 
-示例按寻址方式分为 Host 直连和 Nacos 注册发现，两组示例使用相同的 `DemoService` 接口与服务实现，便于直接比较 context、server 和 `ClientOptions` 的配置差异。
+示例按寻址方式分为 Host 直连和 Nacos 注册发现，两组示例使用相同的 `DemoService` 接口与服务实现，便于比较生成式 Client Builder、`ClientRuntime` 和 `Server` 的配置差异。
 
 ## Host 直连
 
@@ -16,7 +16,7 @@ cargo run -p examples --bin host-server
 cargo run -p examples --bin host-client
 ```
 
-压测使用独立的无日志服务端，避免逐请求日志和 tracing 影响结果。默认使用 HTTP/2，启动 100 个并发任务，每个任务请求 10,000 次：
+压测使用独立的无日志服务端，避免逐请求日志和 tracing 影响结果。默认使用 HTTP/2，分别执行并发 1 和 100，每组运行 5 轮，每个任务请求 10,000 次：
 
 ```bash
 cargo run --release -p examples --bin host-server-pt
@@ -27,7 +27,8 @@ cargo run --release -p examples --bin host-client-pt
 
 ```bash
 PT_PROTOCOL=both \
-PT_CONCURRENCY=100 \
+PT_CONCURRENCY=1,100 \
+PT_ROUNDS=5 \
 PT_REQUESTS_PER_TASK=10000 \
 cargo run --release -p examples --bin host-client-pt
 ```
@@ -45,7 +46,7 @@ PT_REQUESTS_PER_TASK=5000 \
 cargo run --release -p examples --bin host-client-pt
 ```
 
-结果会输出完成数、成功/失败数、总耗时、总 QPS、成功 QPS、请求与响应 JSON body 字节数及吞吐率。字节统计是应用层 JSON body 的实际序列化长度，不包含 HTTP/2 帧头、TCP/IP 和 TLS 开销；每种协议在计时前都会按配置并发度完成一轮预热，预热请求不计入结果。
+结果会逐轮输出完成数、成功/失败数、总耗时、总 QPS、成功 QPS、请求与响应 JSON body 字节数及吞吐率，并汇总 QPS 与吞吐中位数。字节统计是应用层 JSON body 的实际序列化长度，不包含 HTTP/2 帧头、TCP/IP 和 TLS 开销；每种协议在计时前都会按配置并发度完成一轮预热，预热请求不计入结果。`PT_CONCURRENCY` 接受逗号分隔的多个正整数，`PT_ROUNDS` 默认 5。
 
 `PT_PROTOCOL` 支持 `h1`、`h2` 和 `both`，默认值为 `h2`。在这个框架中，H1 使用 `WireProtocol::SpringCloud` 的 HTTP/1.1 transport，H2 使用 `WireProtocol::Fusen` 的 HTTP/2 transport。
 
@@ -94,14 +95,14 @@ cargo run -p examples --bin nacos-hot-config
 src/
 ├── lib.rs                 # DTO 与共享 RPC trait
 ├── service.rs             # Host/Nacos 共用的服务实现
-├── handler/               # Aspect 与负载均衡扩展示例
+├── middleware/            # Middleware、Observer 与负载均衡扩展示例
 ├── host/
 │   ├── server.rs          # 无注册中心的服务端
-│   ├── client.rs          # ClientOptions::direct
+│   ├── client.rs          # 生成 Builder 的 direct 模式
 │   ├── server_pt.rs       # 无日志的 Host 压测服务端
 │   └── client_pt.rs       # 可配置并发和统计指标的压测客户端
 └── nacos/
     ├── server.rs          # 注册服务并在停机时摘除
-    ├── client.rs          # ClientOptions::discovery
+    ├── client.rs          # 生成 Builder 的 discover 模式
     └── hot_config.rs      # Nacos 配置热更新
 ```

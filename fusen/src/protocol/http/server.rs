@@ -1,4 +1,4 @@
-use crate::server::router::Router;
+use crate::server::router::HttpRouter;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto::Builder,
@@ -12,7 +12,7 @@ use tokio::{
 };
 
 #[derive(Clone, Debug)]
-pub struct TcpServerConfig {
+pub(crate) struct TcpServerConfig {
     pub max_connections: usize,
     pub http1_header_read_timeout: Duration,
     pub http2_max_concurrent_streams: u32,
@@ -20,12 +20,12 @@ pub struct TcpServerConfig {
     pub http2_keep_alive_timeout: Duration,
 }
 
-pub struct TcpServer;
+pub(crate) struct TcpServer;
 
 impl TcpServer {
-    pub async fn run<S, H, F>(
+    pub(crate) async fn run<S, H, F>(
         listener: TcpListener,
-        router: Router,
+        router: HttpRouter,
         shutdown: S,
         on_shutdown: H,
         graceful_timeout: Duration,

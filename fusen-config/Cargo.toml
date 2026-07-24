@@ -1,0 +1,28 @@
+[package]
+name = "fusen-config"
+version = "0.9.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Typed static and hot configuration for fusen-rs"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/fusen-config"
+readme.workspace = true
+license-file.workspace = true
+
+[features]
+default = []
+yaml = ["dep:serde_yaml_ng"]
+
+[dependencies]
+fusen-config-macro.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+serde.workspace = true
+serde_yaml_ng = { workspace = true, optional = true }
+toml.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

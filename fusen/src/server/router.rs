@@ -1,13 +1,16 @@
 use crate::{
     error::FusenError,
-    handler::HandlerContext,
+    invocation::{
+        InvocationGuard, InvocationObserver, InvocationPhase, InvocationSide, PhaseTracker,
+        TargetTracker,
+    },
     protocol::{
         codec::{FusenHttpCodec, RequestCodec, ResponseCodec},
-        fusen::{context::FusenContext, metadata::MetaData, request::FusenRequest},
+        fusen::{context::RpcContext, request::FusenRequest},
     },
     server::{
         path::{PathCache, QueryResult},
-        rpc::RpcServerHandler,
+        rpc::RouteDispatch,
     },
 };
 use bytes::Bytes;
@@ -19,20 +22,20 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
 #[derive(Clone)]
-pub struct Router {
-    pub context: Arc<RouterContext>,
+pub(crate) struct HttpRouter {
+    pub(crate) context: Arc<RouterContext>,
 }
 
-pub struct RouterContext {
-    pub http_codec: FusenHttpCodec,
-    pub path_cache: PathCache,
-    pub handler_context: HandlerContext,
-    pub fusen_service_handler: RpcServerHandler,
-    pub concurrency: Arc<Semaphore>,
-    pub request_timeout: Duration,
+pub(crate) struct RouterContext {
+    pub(crate) http_codec: FusenHttpCodec,
+    pub(crate) path_cache: PathCache,
+    pub(crate) dispatches: Arc<[RouteDispatch]>,
+    pub(crate) observers: Arc<[Arc<dyn InvocationObserver>]>,
+    pub(crate) concurrency: Arc<Semaphore>,
+    pub(crate) request_timeout: Duration,
 }
 
-impl Service<Request<hyper::body::Incoming>> for Router {
+impl Service<Request<hyper::body::Incoming>> for HttpRouter {
     type Response = Response<BoxBody<Bytes, Infallible>>;
     type Error = Infallible;
     type Future = StaticBoxFuture<Result<Self::Response, Self::Error>>;
@@ -42,30 +45,55 @@ impl Service<Request<hyper::body::Incoming>> for Router {
         Box::pin(async move {
             let request_id = request_identifier(&request);
             let instance = Some(request.uri().path().to_owned());
+            let deadline = tokio::time::Instant::now() + router.request_timeout;
+            let mut guard = InvocationGuard::start(
+                &router.observers,
+                InvocationSide::Server,
+                &request_id,
+                None,
+                None,
+            );
+            let tracker = guard.tracker();
+            let target = guard.target_tracker();
             let permit = match router.concurrency.clone().try_acquire_owned() {
                 Ok(permit) => permit,
                 Err(_) => {
-                    return Ok(problem_response(
-                        FusenError::ServiceUnavailable("server concurrency limit reached".into()),
-                        request_id,
-                        instance,
-                    ));
+                    let error =
+                        FusenError::ServiceUnavailable("server concurrency limit reached".into());
+                    guard.finish_error(&error);
+                    return Ok(problem_response(error, request_id, instance));
                 }
             };
-            let result = tokio::time::timeout(
-                router.request_timeout,
-                route(request, router, request_id.clone()),
+            let result = tokio::time::timeout_at(
+                deadline,
+                route(
+                    request,
+                    router.clone(),
+                    &request_id,
+                    deadline,
+                    tracker,
+                    target,
+                ),
             )
             .await;
             drop(permit);
             Ok(match result {
-                Ok(Ok(response)) => response,
-                Ok(Err(error)) => problem_response(error, request_id, instance),
-                Err(_) => problem_response(
-                    FusenError::Timeout("server request deadline exceeded".into()),
-                    request_id,
-                    instance,
-                ),
+                Ok(Ok(response)) => {
+                    guard.finish_response(response.status());
+                    response
+                }
+                Ok(Err(error)) => {
+                    guard.finish_error(&error);
+                    problem_response(error, request_id, instance)
+                }
+                Err(_) => {
+                    guard.finish_timeout();
+                    problem_response(
+                        FusenError::Timeout("server request deadline exceeded".into()),
+                        request_id,
+                        instance,
+                    )
+                }
             })
         })
     }
@@ -74,12 +102,19 @@ impl Service<Request<hyper::body::Incoming>> for Router {
 async fn route(
     request: Request<hyper::body::Incoming>,
     router: Arc<RouterContext>,
-    request_id: String,
+    request_id: &str,
+    deadline: tokio::time::Instant,
+    tracker: PhaseTracker,
+    target: TargetTracker,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, FusenError> {
+    tracker.set(InvocationPhase::Decode);
     let mut request: FusenRequest =
         RequestCodec::decode(&router.http_codec, request.map(|body| body.boxed())).await?;
+    tracker.set(InvocationPhase::Route);
     let QueryResult {
-        method_info,
+        route_index,
+        service,
+        method,
         path_parameters,
     } = router
         .path_cache
@@ -87,30 +122,22 @@ async fn route(
         .ok_or_else(|| FusenError::RouteNotFound(request.path.path.clone()))?;
     request.path_parameters = path_parameters;
     let protocol = request.protocol;
-    let context = FusenContext {
-        unique_identifier: request_id.clone(),
-        metadata: MetaData::default(),
-        method_info,
-        request,
-        response: None,
-    };
-    let controller = router
-        .handler_context
-        .get_controller(&context.method_info.service_desc)?;
-    let context = router
-        .fusen_service_handler
-        .call(controller.aspect.clone(), context)
-        .await?;
-    let mut response = context.response.ok_or_else(|| FusenError::Internal {
-        message: "service handler returned no response",
-        source: Box::new(std::io::Error::other("missing response invariant")),
+    target.set(service.selector().service_id(), method.name());
+    let context = RpcContext::new(request_id.to_owned(), service, method, request, deadline);
+    let dispatch = router.dispatches.get(route_index).ok_or_else(|| {
+        FusenError::internal(
+            "route dispatch is missing",
+            std::io::Error::other("invalid route dispatch index"),
+        )
     })?;
+    let mut response = dispatch.call(context, tracker.clone()).await?;
     response.protocol = protocol;
     response.headers.insert(
         "x-request-id",
-        HeaderValue::from_str(&request_id)
+        HeaderValue::from_str(request_id)
             .map_err(|error| FusenError::internal("failed to create request ID header", error))?,
     );
+    tracker.set(InvocationPhase::Encode);
     ResponseCodec::encode(&router.http_codec, &mut response)
 }
 

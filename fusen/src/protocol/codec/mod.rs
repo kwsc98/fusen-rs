@@ -4,7 +4,7 @@ use crate::{
         codec::body::{RequestBodyCodec, ResponseBodyCodec, json::JsonCodec},
         fusen::{
             request::{FusenRequest, Path, QueryParameters},
-            response::{FusenResponse, HttpStatus},
+            response::RpcResponse,
         },
     },
 };
@@ -12,6 +12,7 @@ use bytes::{Bytes, BytesMut};
 use fusen_contract::WireProtocol;
 use http::{Request, Response, Uri, Version, header::CONTENT_TYPE};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use hyper::body::Body;
 use mime::Mime;
 use std::{convert::Infallible, str::FromStr};
 
@@ -19,6 +20,7 @@ pub mod body;
 
 pub const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
+/// Internal HTTP codec shared by the client and server transports.
 pub struct FusenHttpCodec {
     json_codec: JsonCodec,
     max_body_bytes: usize,
@@ -31,6 +33,7 @@ impl Default for FusenHttpCodec {
 }
 
 impl FusenHttpCodec {
+    /// Creates a codec with a hard limit for decoded request and response bodies.
     pub fn new(max_body_bytes: usize) -> Self {
         Self {
             json_codec: JsonCodec,
@@ -58,14 +61,15 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
                 ));
             }
         };
+        let has_body = !body.is_empty();
         let mut request = Request::builder()
             .version(version)
             .method(fusen_request.path.method.clone())
             .uri(uri)
-            .body(Full::new(body.clone()).boxed())
+            .body(Full::new(body).boxed())
             .map_err(|error| FusenError::internal("failed to build HTTP request", error))?;
         *request.headers_mut() = std::mem::take(&mut fusen_request.headers);
-        if !body.is_empty() {
+        if has_body {
             request.headers_mut().insert(
                 CONTENT_TYPE,
                 http::HeaderValue::from_static("application/json"),
@@ -123,18 +127,19 @@ impl RequestCodec<Bytes, hyper::Error> for FusenHttpCodec {
 impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
     fn encode(
         &self,
-        fusen_response: &mut FusenResponse,
+        fusen_response: &mut RpcResponse,
     ) -> Result<Response<BoxBody<Bytes, Infallible>>, FusenError> {
         let body = match fusen_response.body.take() {
             Some(value) => ResponseBodyCodec::encode(&self.json_codec, value)?,
             None => Bytes::new(),
         };
+        let has_body = !body.is_empty();
         let mut response = Response::builder()
-            .status(fusen_response.http_status.status)
-            .body(Full::new(body.clone()).boxed())
+            .status(fusen_response.status)
+            .body(Full::new(body).boxed())
             .map_err(|error| FusenError::internal("failed to build HTTP response", error))?;
         *response.headers_mut() = std::mem::take(&mut fusen_response.headers);
-        if !body.is_empty() {
+        if has_body {
             response.headers_mut().insert(
                 CONTENT_TYPE,
                 http::HeaderValue::from_static("application/json"),
@@ -146,7 +151,7 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
     async fn decode(
         &self,
         mut response: Response<BoxBody<Bytes, hyper::Error>>,
-    ) -> Result<FusenResponse, FusenError> {
+    ) -> Result<RpcResponse, FusenError> {
         let headers = std::mem::take(response.headers_mut());
         let bytes = read_body(response.body_mut(), self.max_body_bytes, true).await?;
         let content_type = parse_content_type(&headers, true)?;
@@ -166,16 +171,13 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
                 "a non-empty response body requires a JSON content type".into(),
             ));
         };
-        Ok(FusenResponse {
+        Ok(RpcResponse {
             protocol: if response.version() == Version::HTTP_2 {
                 WireProtocol::Fusen
             } else {
                 WireProtocol::SpringCloud
             },
-            http_status: HttpStatus {
-                status: response.status(),
-                message: None,
-            },
+            status: response.status(),
             headers,
             body,
         })
@@ -185,20 +187,9 @@ impl ResponseCodec<Bytes, hyper::Error> for FusenHttpCodec {
 fn build_uri(request: &mut FusenRequest) -> Result<Uri, FusenError> {
     let endpoint = request
         .endpoint
-        .as_deref()
+        .as_ref()
         .ok_or_else(|| FusenError::ServiceUnavailable("request endpoint is missing".into()))?;
-    let mut url =
-        url::Url::parse(endpoint).map_err(|error| FusenError::InvalidRequest(error.to_string()))?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err(FusenError::InvalidRequest(
-            "request endpoint must be an absolute HTTP(S) URL".into(),
-        ));
-    }
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err(FusenError::InvalidRequest(
-            "request endpoint must not contain a query or fragment".into(),
-        ));
-    }
+    let mut url = endpoint.as_url().clone();
     {
         let mut segments = url.path_segments_mut().map_err(|_| {
             FusenError::InvalidRequest("request endpoint cannot be a base URL".into())
@@ -292,11 +283,14 @@ fn is_grpc(value: &Mime) -> bool {
 }
 
 #[allow(async_fn_in_trait)]
+/// Internal request encoder and decoder contract used by HTTP transports.
 pub trait RequestCodec<T, E> {
+    /// Encodes a typed RPC request into an HTTP request.
     fn encode(
         &self,
         request: &mut FusenRequest,
     ) -> Result<Request<BoxBody<T, Infallible>>, FusenError>;
+    /// Decodes an HTTP request into the framework request representation.
     async fn decode(&self, request: Request<BoxBody<T, E>>) -> Result<FusenRequest, FusenError>;
 }
 
@@ -304,9 +298,9 @@ pub trait RequestCodec<T, E> {
 pub trait ResponseCodec<T, E> {
     fn encode(
         &self,
-        response: &mut FusenResponse,
+        response: &mut RpcResponse,
     ) -> Result<Response<BoxBody<T, Infallible>>, FusenError>;
-    async fn decode(&self, response: Response<BoxBody<T, E>>) -> Result<FusenResponse, FusenError>;
+    async fn decode(&self, response: Response<BoxBody<T, E>>) -> Result<RpcResponse, FusenError>;
 }
 
 async fn read_body(
@@ -314,7 +308,12 @@ async fn read_body(
     limit: usize,
     response: bool,
 ) -> Result<Bytes, FusenError> {
-    let mut bytes = BytesMut::new();
+    let size_hint = body.size_hint();
+    let estimated = size_hint
+        .upper()
+        .unwrap_or_else(|| size_hint.lower())
+        .min(limit as u64) as usize;
+    let mut bytes = BytesMut::with_capacity(estimated);
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|error| {
             if response {
@@ -486,7 +485,7 @@ mod tests {
                 method: Method::GET,
                 path: "/users/{id}".into(),
             },
-            endpoint: Some("http://[::1]:8080/api".into()),
+            endpoint: Some("http://[::1]:8080/api".parse().unwrap()),
             path_parameters: HashMap::from([("id".into(), "a/b c".into())]),
             query_parameters: QueryParameters::from([("filter".into(), vec!["x y".into()])]),
             headers: Default::default(),
@@ -507,7 +506,7 @@ mod tests {
                 method: Method::GET,
                 path: "/users".into(),
             },
-            endpoint: Some("http://localhost/api%20v1".into()),
+            endpoint: Some("http://localhost/api%20v1".parse().unwrap()),
             path_parameters: HashMap::new(),
             query_parameters: QueryParameters::new(),
             headers: Default::default(),
