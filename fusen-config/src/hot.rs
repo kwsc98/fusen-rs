@@ -169,16 +169,11 @@ fn validate_key_component(value: &str, field: &'static str) -> Result<(), Config
 /// Owned, sendable future returned by configuration lifecycle APIs.
 pub type ConfigFuture<T> = Pin<Box<dyn Future<Output = Result<T, ConfigError>> + Send + 'static>>;
 
-/// Pluggable source that prepares ownership before any remote side effect starts.
-pub trait ConfigSource: Send + Sync {
-    /// Prepares one resource without fetching it or installing a listener yet.
-    fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError>;
-}
-
 /// Provider-owned publication access for a prepared hot configuration.
 ///
 /// This type exposes replacement operations only. Its Tokio channel and lifecycle state remain
 /// private to `fusen-config`.
+#[doc(hidden)]
 #[derive(Clone)]
 pub struct ConfigPublisher {
     inner: Arc<PublisherInner>,
@@ -197,6 +192,7 @@ impl fmt::Debug for ConfigPublisher {
 /// The factory runs synchronously and must only construct owned state. Neither returned future is
 /// polled before [`ConfigHandle::activate`]. The publisher may be cloned into a provider callback;
 /// publications after close are rejected.
+#[doc(hidden)]
 pub fn prepare_config<P, A, C, CF>(prepare: P) -> ConfigHandle
 where
     P: FnOnce(ConfigPublisher) -> (A, C),

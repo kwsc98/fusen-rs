@@ -35,6 +35,7 @@ REMOVED_ITEMS = {
     "ConfigLifecycle",
     "ConfigManager",
     "ConfigResponse",
+    "ConfigSource",
     "DirectoryWriter",
     "FusenError",
     "FusenHttpCodec",
@@ -102,6 +103,18 @@ REMOVED_ROOT_ITEMS = {
 }
 REMOVED_CRATE_ITEMS = {
     "fusen_rs": {"Path"},
+}
+ALLOWED_PUBLIC_TRAITS = {
+    "fusen_observability": {"MetricsRecorder"},
+    "fusen_register": {"Registry"},
+    "fusen_rs": {
+        "LoadBalancer",
+        "MetricsRecorder",
+        "Middleware",
+        "Registry",
+        "RetryPolicy",
+        "Router",
+    },
 }
 
 REMOVED_METHODS = {
@@ -180,6 +193,10 @@ def main() -> int:
                 name = match.group("name")
                 if name in REMOVED_ITEMS:
                     failures.append(f"{relative}: removed public item {name}")
+                if html.name.startswith("trait.") and name not in ALLOWED_PUBLIC_TRAITS.get(
+                    crate, set()
+                ):
+                    failures.append(f"{relative}: unexpected public extension trait {name}")
                 if html.parent == crate_root and (crate, name) in REMOVED_ROOT_ITEMS:
                     failures.append(f"{relative}: removed root public item {name}")
                 if name in REMOVED_CRATE_ITEMS.get(crate, set()):

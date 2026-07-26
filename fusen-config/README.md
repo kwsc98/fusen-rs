@@ -17,14 +17,17 @@ let settings: Settings = fusen_config::load("settings.toml")?;
 Enable the `yaml` feature for YAML parsing and `.yaml`/`.yml` files. Without
 that feature, YAML entry points return a classified unsupported-format error.
 
-Hot configuration sources implement `ConfigSource` and return a prepared
-`ConfigHandle` before starting remote work:
+Provider adapters return a prepared `ConfigHandle` before starting remote
+work. The supported Nacos adapter exposes this as an inherent method; custom
+configuration providers are intentionally not a stable extension point:
 
 ```rust
-use fusen_config::{ConfigKey, ConfigSource};
+use fusen_config::ConfigKey;
+use fusen_nacos::{NacosConfig, NacosConfigSource};
 
+let nacos_source = NacosConfigSource::connect("orders-api", NacosConfig::default()).await?;
 let key = ConfigKey::builder("service.toml").group("prod").build()?;
-let handle = source.prepare(key)?;
+let handle = nacos_source.prepare(key)?;
 handle.activate().await?;
 
 let mut settings = handle.typed::<Settings>()?;

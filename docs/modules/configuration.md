@@ -13,7 +13,7 @@ Queue 只有通过 `QueueConfig::bounded(capacity)` 才启用，默认 max wait 
 
 ## 静态与热配置
 
-`fusen-config` 支持 TOML 静态解析，并在 `yaml` feature 下支持 YAML。`ConfigSource` 同步 prepare `ConfigHandle`；调用方先持有 handle，再等待 `activate()`。Provider 发布带 revision 的文档，`HotConfig<T>` 只在反序列化成功时替换当前 typed snapshot，非法更新被报告但保留上一份合法值。
+`fusen-config` 支持 TOML 静态解析，并在 `yaml` feature 下支持 YAML。具体 provider adapter（当前为 `NacosConfigSource`）同步 prepare `ConfigHandle`；调用方先持有 handle，再等待 `activate()`。`fusen-config` 不公开自定义 provider SPI。Provider 发布带 revision 的文档，`HotConfig<T>` 只在反序列化成功时替换当前 typed snapshot，非法更新被报告但保留上一份合法值。
 
 Activation/close waiter 的 timeout 或 drop 不取消 provider worker；late success 自动补偿。`ConfigHandle::close()` 幂等并共享终态，Drop 只请求关闭。`fusen-nacos` adapter 保持 SDK listener/channel 私有，并使用 listener-first 初始化防止丢更新。
 

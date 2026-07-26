@@ -199,9 +199,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit,cargo-deny
+      - run: cargo +1.97.0 fetch --locked
+      - run: cargo +1.97.0 fetch --locked --manifest-path fuzz-support/Cargo.toml
+      - run: cargo +1.97.0 fetch --locked --manifest-path fuzz/Cargo.toml
       - run: bash .github/scripts/check-dependency-policy.sh
       - run: cargo deny check advisories bans licenses sources
       - run: cargo audit

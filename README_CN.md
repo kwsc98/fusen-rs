@@ -136,7 +136,7 @@ Byte budget 覆盖 runtime 持有的 decoded/encoded payload，以及 Hyper 消�
 | `fusen-contract` | Service、Method、Protocol、Endpoint、Instance 等纯值对象 |
 | `fusen-register` | Registry SPI、生命周期 handle、Directory snapshot |
 | `fusen-config` | 静态解析与 last-good 热配置 |
-| `fusen-nacos` | Nacos Registry 和 ConfigSource adapter |
+| `fusen-nacos` | Nacos Registry 和热配置 adapter |
 | `fusen-observability` | Metrics SPI 与可选 telemetry adapter |
 | `fusen-procedural-macro` | 服务声明及客户端/服务端 wrapper 生成 |
 | `fusen-rs` | Client/Server runtime、Middleware、策略与明文 HTTP |

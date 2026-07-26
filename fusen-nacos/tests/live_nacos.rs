@@ -1,6 +1,6 @@
 //! Live Nacos release-gate coverage for registration, discovery, config, and cleanup.
 
-use fusen_config::{ConfigHandle, ConfigKey, ConfigSource};
+use fusen_config::{ConfigHandle, ConfigKey};
 use fusen_contract::{
     Idempotency, InstanceId, MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor,
     ServiceRegistration, ServiceSelector, ServiceWeight, WireProtocol,

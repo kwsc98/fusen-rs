@@ -1,6 +1,6 @@
 //! Nacos last-good hot-configuration example.
 
-use fusen_config::{ConfigKey, ConfigSource};
+use fusen_config::ConfigKey;
 use fusen_nacos::{NacosConfig, NacosConfigSource};
 
 #[derive(serde::Deserialize)]

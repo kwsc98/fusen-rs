@@ -23,7 +23,7 @@
 
 ## Nacos Adapter
 
-`NacosRegistry` 实现 Registry SPI，`NacosConfigSource` 实现热配置 SPI。Adapter 将 provider SDK 类型、listener 和执行器保持私有，并把 `FusenV1`/`SpringCloudV1`、稳定 `InstanceId`、明文 endpoint、group/version 与 metadata 映射到 Nacos。
+`NacosRegistry` 实现 Registry SPI；`NacosConfigSource` 是内置的具体热配置 adapter，不开放自定义配置 provider SPI。Adapter 将 provider SDK 类型、listener 和执行器保持私有，并把 `FusenV1`/`SpringCloudV1`、稳定 `InstanceId`、明文 endpoint、group/version 与 metadata 映射到 Nacos。
 
 Naming 与 config setup 都先安装 listener，再读取初始值，消除查询与监听之间的丢更新窗口；初始化窗口内采用 latest-wins。Setup waiter 取消后，late success 自动移除 listener。Nacos 只发布 healthy、enabled、正权重实例。
 

@@ -1,7 +1,8 @@
 use crate::{NacosConfig, client_props, validate_application_name};
 use fusen_config::{
+    __adapter::{ConfigPublisher, prepare_config},
     ConfigDocument, ConfigError, ConfigErrorKind, ConfigFormat, ConfigFuture, ConfigHandle,
-    ConfigKey, ConfigOperation, ConfigPublisher, ConfigSource, prepare_config,
+    ConfigKey, ConfigOperation,
 };
 use nacos_sdk::api::config::{
     ConfigChangeListener, ConfigResponse, ConfigService, ConfigServiceBuilder,
@@ -66,8 +67,9 @@ impl std::fmt::Debug for NacosConfigSource {
     }
 }
 
-impl ConfigSource for NacosConfigSource {
-    fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError> {
+impl NacosConfigSource {
+    /// Prepares one Nacos resource without fetching it or installing a listener yet.
+    pub fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError> {
         let data_id = key.name().to_owned();
         let group = key.group().unwrap_or(DEFAULT_GROUP).to_owned();
         let activate_client = self.client.clone();
