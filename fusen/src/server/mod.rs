@@ -4,7 +4,7 @@ use crate::{
     invocation::InvocationObserver,
     protocol::{
         codec::FusenHttpCodec,
-        http::server::{TcpServer, TcpServerConfig},
+        http::server::{ShutdownCompletion, TcpServer, TcpServerConfig, TcpServerOutcome},
     },
     server::{
         path::PathCache,
@@ -15,9 +15,13 @@ use crate::{
 use fusen_contract::{
     ServiceDescriptor, ServiceEndpoint, ServiceRegistration, ServiceWeight, WireProtocol,
 };
-use fusen_register::Register;
+use fusen_register::{Register, error::RegisterError};
 use std::{collections::HashSet, future::Future, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::{net::TcpListener, sync::Semaphore, time::Instant};
+use tokio::{
+    net::TcpListener,
+    sync::{Semaphore, mpsc, oneshot},
+    time::Instant,
+};
 
 #[allow(missing_docs)]
 pub mod path;
@@ -49,7 +53,7 @@ pub struct ServerConfig {
     pub http2_keep_alive_timeout: Duration,
     /// End-to-end server deadline for one request.
     pub request_timeout: Duration,
-    /// Maximum time allowed for active connections to drain.
+    /// Total deadline shared by service deregistration and connection draining.
     pub graceful_shutdown_timeout: Duration,
     /// Maximum time allowed for one registry operation.
     pub registry_timeout: Duration,
@@ -192,17 +196,21 @@ impl Server {
         self
     }
 
-    /// Runs until Ctrl-C is received and all connections are drained.
+    /// Runs until SIGINT or SIGTERM on Unix, or Ctrl-C on other platforms.
     pub async fn run(self) -> Result<(), FusenError> {
-        self.run_with_shutdown(async {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                tracing::error!(?error, "failed to listen for Ctrl-C");
-            }
-        })
-        .await
+        self.run_with_shutdown(default_shutdown_signal()).await
     }
 
-    /// Runs with a caller-provided shutdown future.
+    /// Runs with a caller-provided shutdown future as the only shutdown trigger.
+    ///
+    /// The shutdown future is first polled after listener binding and service
+    /// registration complete; startup registry calls remain bounded by
+    /// [`ServerConfig::registry_timeout`].
+    ///
+    /// Once triggered, service deregistration and connection draining share
+    /// [`ServerConfig::graceful_shutdown_timeout`]. Dropping this future after
+    /// registration starts best-effort background deregistration while the
+    /// Tokio runtime remains available.
     pub async fn run_with_shutdown<S>(self, shutdown: S) -> Result<(), FusenError>
     where
         S: Future<Output = ()> + Send,
@@ -259,10 +267,18 @@ impl Server {
             .await
             .map_err(|error| FusenError::internal("failed to bind server socket", error))?;
 
-        let mut registered = Vec::new();
+        let cleanup = RegistrationCleanup::spawn(
+            self.config.protocol,
+            self.config.registry_timeout,
+            self.config.graceful_shutdown_timeout,
+        );
         for registry in &self.registries {
             for resource in &resources {
-                registered.push((registry.clone(), resource.clone()));
+                cleanup
+                    .track(registry.clone(), resource.clone())
+                    .map_err(|error| {
+                        FusenError::internal("service registration cleanup failed", error)
+                    })?;
                 match tokio::time::timeout(
                     self.config.registry_timeout,
                     registry.register(resource.clone(), self.config.protocol),
@@ -271,23 +287,21 @@ impl Server {
                 {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
-                        rollback(
-                            &registered,
-                            self.config.protocol,
-                            self.config.registry_timeout,
-                            None,
-                        )
-                        .await;
+                        if let Err(cleanup_error) = cleanup.cleanup(None).await {
+                            tracing::error!(
+                                ?cleanup_error,
+                                "registration rollback did not complete cleanly"
+                            );
+                        }
                         return Err(FusenError::internal("service registration failed", error));
                     }
                     Err(_) => {
-                        rollback(
-                            &registered,
-                            self.config.protocol,
-                            self.config.registry_timeout,
-                            None,
-                        )
-                        .await;
+                        if let Err(cleanup_error) = cleanup.cleanup(None).await {
+                            tracing::error!(
+                                ?cleanup_error,
+                                "registration rollback did not complete cleanly"
+                            );
+                        }
                         return Err(FusenError::Timeout(
                             "service registration deadline exceeded".into(),
                         ));
@@ -305,11 +319,7 @@ impl Server {
                 request_timeout: self.config.request_timeout,
             }),
         };
-        let protocol = self.config.protocol;
-        let registry_timeout = self.config.registry_timeout;
-        let on_shutdown = move |deadline| async move {
-            rollback(&registered, protocol, registry_timeout, Some(deadline)).await;
-        };
+        let on_shutdown = move |deadline| cleanup.cleanup(Some(deadline));
         let tcp_config = TcpServerConfig {
             max_connections: self.config.max_connections,
             http1_header_read_timeout: self.config.http1_header_read_timeout,
@@ -317,7 +327,7 @@ impl Server {
             http2_keep_alive_interval: self.config.http2_keep_alive_interval,
             http2_keep_alive_timeout: self.config.http2_keep_alive_timeout,
         };
-        TcpServer::run(
+        let outcome = TcpServer::run(
             listener,
             router,
             shutdown,
@@ -325,8 +335,8 @@ impl Server {
             self.config.graceful_shutdown_timeout,
             tcp_config,
         )
-        .await
-        .map_err(|error| FusenError::internal("HTTP server failed", error))
+        .await;
+        server_result(outcome)
     }
 
     fn validate(&self) -> Result<(), FusenError> {
@@ -359,6 +369,56 @@ impl Server {
     }
 }
 
+#[cfg(unix)]
+async fn default_shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut interrupt = match signal(SignalKind::interrupt()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                signal = "SIGINT",
+                "failed to install shutdown signal"
+            );
+            return;
+        }
+    };
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                signal = "SIGTERM",
+                "failed to install shutdown signal"
+            );
+            return;
+        }
+    };
+    tokio::select! {
+        signal = interrupt.recv() => match signal {
+            Some(()) => tracing::info!(signal = "SIGINT", "received shutdown signal"),
+            None => tracing::error!(signal = "SIGINT", "shutdown signal listener closed"),
+        },
+        signal = terminate.recv() => match signal {
+            Some(()) => tracing::info!(signal = "SIGTERM", "received shutdown signal"),
+            None => tracing::error!(signal = "SIGTERM", "shutdown signal listener closed"),
+        },
+    }
+}
+
+#[cfg(not(unix))]
+async fn default_shutdown_signal() {
+    match tokio::signal::ctrl_c().await {
+        Ok(()) => tracing::info!(signal = "Ctrl-C", "received shutdown signal"),
+        Err(error) => tracing::error!(
+            ?error,
+            signal = "Ctrl-C",
+            "failed to listen for shutdown signal"
+        ),
+    }
+}
+
 fn service_registration(
     descriptor: &'static ServiceDescriptor,
     endpoint: ServiceEndpoint,
@@ -375,29 +435,335 @@ fn validate_advertised_url(value: &str) -> Result<ServiceEndpoint, FusenError> {
         .map_err(|error| FusenError::InvalidRequest(error.to_string()))
 }
 
-async fn rollback(
-    entries: &[(Arc<dyn Register>, Arc<ServiceRegistration>)],
+type RegistrationEntry = (Arc<dyn Register>, Arc<ServiceRegistration>);
+
+enum RegistrationCleanupCommand {
+    Track(RegistrationEntry),
+    Cleanup {
+        deadline: Option<Instant>,
+        completion: oneshot::Sender<Result<(), RegistrationCleanupError>>,
+        waiter_dropped: oneshot::Receiver<()>,
+    },
+}
+
+struct RegistrationCleanup {
+    commands: mpsc::UnboundedSender<RegistrationCleanupCommand>,
+}
+
+impl RegistrationCleanup {
+    fn spawn(
+        protocol: WireProtocol,
+        operation_timeout: Duration,
+        cancellation_timeout: Duration,
+    ) -> Self {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        tokio::spawn(run_registration_cleanup_worker(
+            receiver,
+            protocol,
+            operation_timeout,
+            cancellation_timeout,
+        ));
+        Self { commands }
+    }
+
+    fn track(
+        &self,
+        registry: Arc<dyn Register>,
+        resource: Arc<ServiceRegistration>,
+    ) -> Result<(), RegistrationCleanupError> {
+        self.commands
+            .send(RegistrationCleanupCommand::Track((registry, resource)))
+            .map_err(|_| RegistrationCleanupError::WorkerStopped)
+    }
+
+    fn cleanup(
+        self,
+        deadline: Option<Instant>,
+    ) -> impl Future<Output = Result<(), RegistrationCleanupError>> + Send {
+        let (completion, result) = oneshot::channel();
+        // This sender lives in the waiter so cancellation can tighten startup rollback.
+        let (waiter_alive, waiter_dropped) = oneshot::channel();
+        let sent = self
+            .commands
+            .send(RegistrationCleanupCommand::Cleanup {
+                deadline,
+                completion,
+                waiter_dropped,
+            })
+            .map_err(|_| RegistrationCleanupError::WorkerStopped);
+        drop(self.commands);
+        async move {
+            sent?;
+            let cleanup = result
+                .await
+                .map_err(|_| RegistrationCleanupError::WorkerStopped)?;
+            drop(waiter_alive);
+            cleanup
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum RegistrationCleanupError {
+    #[error("service deregistration deadline exceeded")]
+    Timeout,
+    #[error("service deregistration failed for {service}")]
+    Deregister {
+        service: String,
+        #[source]
+        source: RegisterError,
+    },
+    #[error("registration cleanup worker stopped unexpectedly")]
+    WorkerStopped,
+}
+
+async fn run_registration_cleanup_worker(
+    mut commands: mpsc::UnboundedReceiver<RegistrationCleanupCommand>,
     protocol: WireProtocol,
     operation_timeout: Duration,
-    deadline: Option<Instant>,
+    cancellation_timeout: Duration,
 ) {
-    for (registry, resource) in entries.iter().rev() {
-        let remaining = deadline
-            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-            .unwrap_or(operation_timeout);
-        let timeout = operation_timeout.min(remaining);
-        if timeout.is_zero() {
-            tracing::error!(service = %resource.selector().service_id(), "service deregistration skipped after shutdown deadline");
-            break;
+    let mut entries = Vec::new();
+    while let Some(command) = commands.recv().await {
+        match command {
+            RegistrationCleanupCommand::Track(entry) => entries.push(entry),
+            RegistrationCleanupCommand::Cleanup {
+                deadline,
+                completion,
+                waiter_dropped,
+            } => {
+                let result = deregister_all(
+                    entries,
+                    protocol,
+                    operation_timeout,
+                    deadline,
+                    Some(waiter_dropped),
+                    cancellation_timeout,
+                )
+                .await;
+                let _ = completion.send(result);
+                return;
+            }
         }
-        match tokio::time::timeout(timeout, registry.deregister(resource.clone(), protocol)).await {
+    }
+
+    let deadline = Instant::now() + cancellation_timeout;
+    if let Err(error) = deregister_all(
+        entries,
+        protocol,
+        operation_timeout,
+        Some(deadline),
+        None,
+        cancellation_timeout,
+    )
+    .await
+    {
+        tracing::error!(
+            ?error,
+            "background service deregistration did not complete cleanly"
+        );
+    }
+}
+
+async fn deregister_all(
+    entries: Vec<RegistrationEntry>,
+    protocol: WireProtocol,
+    operation_timeout: Duration,
+    mut deadline: Option<Instant>,
+    mut waiter_dropped: Option<oneshot::Receiver<()>>,
+    cancellation_timeout: Duration,
+) -> Result<(), RegistrationCleanupError> {
+    let mut first_error = None;
+    let mut timed_out = false;
+    for (registry, resource) in entries.into_iter().rev() {
+        let service = resource.selector().service_id().to_string();
+        let now = Instant::now();
+        let operation_deadline = now + operation_timeout;
+        let effective_deadline = deadline
+            .map(|deadline| deadline.min(operation_deadline))
+            .unwrap_or(operation_deadline);
+        if effective_deadline <= now {
+            timed_out = true;
+            tracing::error!(%service, "service deregistration skipped after shutdown deadline");
+            continue;
+        }
+        let deregister = registry.deregister(resource, protocol);
+        tokio::pin!(deregister);
+        let mut operation_result = None;
+        // Startup rollback has no total deadline until its caller is cancelled.
+        let cancellation_started = if deadline.is_none() {
+            if let Some(waiter_dropped) = waiter_dropped.as_mut() {
+                tokio::select! {
+                    biased;
+                    _ = waiter_dropped => true,
+                    result = tokio::time::timeout_at(operation_deadline, &mut deregister) => {
+                        operation_result = Some(result);
+                        false
+                    }
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if cancellation_started {
+            waiter_dropped = None;
+            let cancellation_deadline = Instant::now() + cancellation_timeout;
+            deadline = Some(cancellation_deadline);
+            operation_result = Some(
+                tokio::time::timeout_at(
+                    operation_deadline.min(cancellation_deadline),
+                    &mut deregister,
+                )
+                .await,
+            );
+        } else if operation_result.is_none() {
+            operation_result =
+                Some(tokio::time::timeout_at(effective_deadline, &mut deregister).await);
+        }
+        match operation_result.expect("deregistration operation was polled") {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                tracing::error!(?error, service = %resource.selector().service_id(), "service deregistration failed");
+                tracing::error!(?error, %service, "service deregistration failed");
+                if first_error.is_none() {
+                    first_error = Some(RegistrationCleanupError::Deregister {
+                        service,
+                        source: error,
+                    });
+                }
             }
             Err(_) => {
-                tracing::error!(service = %resource.selector().service_id(), "service deregistration timed out");
+                timed_out = true;
+                tracing::error!(%service, "service deregistration timed out");
             }
+        }
+    }
+
+    if timed_out {
+        Err(RegistrationCleanupError::Timeout)
+    } else if let Some(error) = first_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
+fn server_result(outcome: TcpServerOutcome<RegistrationCleanupError>) -> Result<(), FusenError> {
+    let TcpServerOutcome {
+        accept_error,
+        shutdown,
+    } = outcome;
+    match shutdown {
+        ShutdownCompletion::DeadlineExceeded { cleanup } => {
+            if let Some(Err(cleanup_error)) = cleanup {
+                tracing::error!(
+                    ?cleanup_error,
+                    "service deregistration also failed before the graceful shutdown deadline"
+                );
+            }
+            if let Some(error) = accept_error {
+                tracing::error!(
+                    ?error,
+                    "HTTP accept failed before the graceful shutdown deadline was exceeded"
+                );
+            }
+            Err(FusenError::Timeout(
+                "server graceful shutdown deadline exceeded".into(),
+            ))
+        }
+        ShutdownCompletion::Completed(Err(RegistrationCleanupError::Timeout)) => {
+            if let Some(error) = accept_error {
+                tracing::error!(
+                    ?error,
+                    "HTTP accept failed before service deregistration timed out"
+                );
+            }
+            Err(FusenError::Timeout(
+                "service deregistration deadline exceeded".into(),
+            ))
+        }
+        ShutdownCompletion::Completed(cleanup) => {
+            if let Some(error) = accept_error {
+                if let Err(cleanup_error) = cleanup {
+                    tracing::error!(
+                        ?cleanup_error,
+                        "service deregistration also failed after the HTTP accept error"
+                    );
+                }
+                Err(FusenError::internal("HTTP server failed", error))
+            } else {
+                cleanup
+                    .map_err(|error| FusenError::internal("service deregistration failed", error))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn shutdown_error_priority_is_stable() {
+        assert!(matches!(
+            server_result(TcpServerOutcome {
+                accept_error: Some(accept_error()),
+                shutdown: ShutdownCompletion::DeadlineExceeded {
+                    cleanup: Some(Err(deregister_error())),
+                },
+            }),
+            Err(FusenError::Timeout(_))
+        ));
+
+        assert!(matches!(
+            server_result(TcpServerOutcome {
+                accept_error: Some(accept_error()),
+                shutdown: ShutdownCompletion::Completed(Err(RegistrationCleanupError::Timeout,)),
+            }),
+            Err(FusenError::Timeout(_))
+        ));
+
+        assert!(matches!(
+            server_result(TcpServerOutcome {
+                accept_error: Some(accept_error()),
+                shutdown: ShutdownCompletion::Completed(Err(deregister_error())),
+            }),
+            Err(FusenError::Internal {
+                message: "HTTP server failed",
+                ..
+            })
+        ));
+
+        assert!(matches!(
+            server_result(TcpServerOutcome {
+                accept_error: None,
+                shutdown: ShutdownCompletion::Completed(Err(deregister_error())),
+            }),
+            Err(FusenError::Internal {
+                message: "service deregistration failed",
+                ..
+            })
+        ));
+
+        assert!(
+            server_result(TcpServerOutcome {
+                accept_error: None,
+                shutdown: ShutdownCompletion::Completed(Ok(())),
+            })
+            .is_ok()
+        );
+    }
+
+    fn accept_error() -> io::Error {
+        io::Error::other("accept failed")
+    }
+
+    fn deregister_error() -> RegistrationCleanupError {
+        RegistrationCleanupError::Deregister {
+            service: "test-service".into(),
+            source: RegisterError::InvalidResource("deregister failed".into()),
         }
     }
 }

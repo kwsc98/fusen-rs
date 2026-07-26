@@ -145,6 +145,8 @@ Ok(())
 
 Server startup validates services and routes, binds the listener, then registers providers transactionally. Routes are pre-bound to a static descriptor, immutable middleware slice, and service invoker. Admission is fail-fast and one absolute deadline covers decode, route, middleware, service dispatch, and response encode.
 
+`Server::run` shuts down on SIGINT or SIGTERM on Unix and on Ctrl-C elsewhere. It closes the listener first, then deregisters providers in reverse order while active Hyper connections drain; both operations share the single `graceful_shutdown_timeout` budget. Accept, deregistration, and shutdown timeout failures are returned to the caller. `run_with_shutdown` is controlled only by its supplied future. If that Server future is cancelled after registration is tracked, bounded background deregistration runs while its Tokio runtime remains available.
+
 ## Middleware
 
 Users implement one trait on both sides. No registration macro, string ID, boxed future, or terminal implementation is required.
@@ -185,7 +187,7 @@ Empty snapshots, Router results with no instances, and invalid selected indexes 
 - Maximum request and response body: 2 MiB
 - Server request timeout: 30 seconds
 - Maximum requests: 1024; connections: 2048; HTTP/2 streams per connection: 128
-- Graceful shutdown: 30 seconds; registry operation: 5 seconds
+- Graceful shutdown total shared budget: 30 seconds; registry operation: 5 seconds
 
 Configure these through `ClientConfig` and `ServerConfig`. Configured durations and required pool sizes must be greater than zero; HTTP/1.1 `max_idle_per_host` may be zero to disable reuse. Non-2xx Problem Details responses become `FusenError::Remote`.
 

@@ -36,6 +36,7 @@
 - RPC 宏生成静态描述、服务专属 Client Builder、Server wrapper 和 O(1) dispatch。
 - 服务描述统一为 `fusen-contract::ServiceDescriptor`，客户端、服务端与注册中心复用同一静态对象。
 - 相同 selector/protocol 的 discovery client 复用订阅，Direct client 不再进入 shutdown 清理集合。
+- 服务端优雅停机改为先关闭 listener，再在一个共享 deadline 内并行逆序注销与排空连接；Unix 默认同时响应 SIGINT/SIGTERM，停机失败向调用方返回错误，并为 Server future 取消提供有界的后台注销补偿。
 
 ### Removed
 

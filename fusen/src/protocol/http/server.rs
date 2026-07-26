@@ -22,19 +22,29 @@ pub(crate) struct TcpServerConfig {
 
 pub(crate) struct TcpServer;
 
+pub(crate) enum ShutdownCompletion<E> {
+    Completed(Result<(), E>),
+    DeadlineExceeded { cleanup: Option<Result<(), E>> },
+}
+
+pub(crate) struct TcpServerOutcome<E> {
+    pub accept_error: Option<io::Error>,
+    pub shutdown: ShutdownCompletion<E>,
+}
+
 impl TcpServer {
-    pub(crate) async fn run<S, H, F>(
+    pub(crate) async fn run<S, H, F, E>(
         listener: TcpListener,
         router: HttpRouter,
         shutdown: S,
         on_shutdown: H,
         graceful_timeout: Duration,
         config: TcpServerConfig,
-    ) -> io::Result<()>
+    ) -> TcpServerOutcome<E>
     where
         S: Future<Output = ()> + Send,
         H: FnOnce(Instant) -> F,
-        F: Future<Output = ()> + Send,
+        F: Future<Output = Result<(), E>> + Send,
     {
         let mut builder = Builder::new(TokioExecutor::new());
         builder
@@ -56,6 +66,11 @@ impl TcpServer {
         tokio::pin!(shutdown);
         let accept_error = loop {
             tokio::select! {
+                biased;
+                _ = &mut shutdown => break None,
+                result = connections.join_next(), if !connections.is_empty() => {
+                    if let Some(Err(error)) = result { tracing::error!(?error, "HTTP connection task panicked"); }
+                },
                 accepted = accept_with_permit(&listener, connection_limit.clone()) => match accepted {
                     Ok((stream, permit)) => {
                         let mut shutdown = connection_shutdown.subscribe();
@@ -77,39 +92,82 @@ impl TcpServer {
                         });
                     }
                     Err(error) => break Some(error),
-                },
-                _ = &mut shutdown => break None,
-                result = connections.join_next(), if !connections.is_empty() => {
-                    if let Some(Err(error)) = result { tracing::error!(?error, "HTTP connection task panicked"); }
                 }
             }
         };
 
         let deadline = Instant::now() + graceful_timeout;
-        if tokio::time::timeout_at(deadline, on_shutdown(deadline))
-            .await
-            .is_err()
-        {
-            tracing::error!("service deregistration exceeded the graceful shutdown deadline");
-        }
+        drop(listener);
         if connection_shutdown.send(()).is_err() {
             tracing::debug!("no active HTTP connections to drain");
         }
         drop(connection_shutdown);
-        if tokio::time::timeout_at(deadline, async {
-            while let Some(result) = connections.join_next().await {
-                if let Err(error) = result {
-                    tracing::error!(?error, "HTTP connection task panicked");
+        let cleanup = on_shutdown(deadline);
+        let shutdown = coordinate_shutdown(&mut connections, cleanup, deadline).await;
+        drop(connections);
+        TcpServerOutcome {
+            accept_error,
+            shutdown,
+        }
+    }
+}
+
+async fn coordinate_shutdown<F, E>(
+    connections: &mut JoinSet<()>,
+    cleanup: F,
+    deadline: Instant,
+) -> ShutdownCompletion<E>
+where
+    F: Future<Output = Result<(), E>>,
+{
+    tokio::pin!(cleanup);
+    let mut cleanup_result = None;
+    let mut connections_drained = false;
+    let shutdown_completed = {
+        let drain = drain_connections(connections);
+        tokio::pin!(drain);
+        tokio::time::timeout_at(deadline, async {
+            loop {
+                // timeout_at polls its inner future first, so guard the exact boundary.
+                if Instant::now() >= deadline {
+                    std::future::pending::<()>().await;
+                }
+                tokio::select! {
+                    result = &mut cleanup, if cleanup_result.is_none() => {
+                        cleanup_result = Some(result);
+                        if connections_drained {
+                            break;
+                        }
+                    }
+                    () = &mut drain, if !connections_drained => {
+                        connections_drained = true;
+                        if cleanup_result.is_some() {
+                            break;
+                        }
+                    }
                 }
             }
         })
         .await
-        .is_err()
-        {
-            connections.abort_all();
-            while connections.join_next().await.is_some() {}
+        .is_ok()
+    };
+    if !shutdown_completed {
+        connections.abort_all();
+        ShutdownCompletion::DeadlineExceeded {
+            cleanup: cleanup_result,
         }
-        accept_error.map_or(Ok(()), Err)
+    } else {
+        ShutdownCompletion::Completed(
+            cleanup_result.expect("cleanup completed before shutdown finished"),
+        )
+    }
+}
+
+async fn drain_connections(connections: &mut JoinSet<()>) {
+    while let Some(result) = connections.join_next().await {
+        if let Err(error) = result {
+            tracing::error!(?error, "HTTP connection task panicked");
+        }
     }
 }
 
@@ -123,4 +181,67 @@ async fn accept_with_permit(
         .map_err(|_| io::Error::other("connection semaphore closed"))?;
     let (stream, _) = listener.accept().await?;
     Ok((stream, permit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn deadline_preserves_a_completed_cleanup_error() {
+        let mut connections = JoinSet::new();
+        connections.spawn(std::future::pending());
+
+        let shutdown = coordinate_shutdown(
+            &mut connections,
+            async { Err::<(), _>("cleanup failed") },
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await;
+
+        assert!(matches!(
+            shutdown,
+            ShutdownCompletion::DeadlineExceeded {
+                cleanup: Some(Err("cleanup failed"))
+            }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn completed_cleanup_and_connection_drain_finish_before_deadline() {
+        let mut connections = JoinSet::new();
+        connections.spawn(async {});
+
+        let shutdown = coordinate_shutdown(
+            &mut connections,
+            async { Ok::<_, std::convert::Infallible>(()) },
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await;
+
+        assert!(matches!(shutdown, ShutdownCompletion::Completed(Ok(()))));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deadline_wins_when_shutdown_work_completes_at_the_same_instant() {
+        let mut connections = JoinSet::new();
+        connections.spawn(async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let shutdown = coordinate_shutdown(
+            &mut connections,
+            async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok::<_, std::convert::Infallible>(())
+            },
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await;
+
+        assert!(matches!(
+            shutdown,
+            ShutdownCompletion::DeadlineExceeded { .. }
+        ));
+    }
 }

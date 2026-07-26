@@ -145,6 +145,8 @@ Ok(())
 
 启动过程先校验服务与路由、绑定监听器，再事务化注册 provider。每条路由会预绑定静态方法描述、不可变 Middleware slice 和 service invoker。并发准入保持 fail-fast，同一个绝对 deadline 覆盖 decode、route、Middleware、service dispatch 与 response encode。
 
+`Server::run` 在 Unix 上响应 SIGINT 或 SIGTERM，在其他平台响应 Ctrl-C。停机时先关闭 listener，再并行逆序注销 provider 和排空 Hyper 在途连接，二者共享 `graceful_shutdown_timeout` 的同一份总预算。accept、注销或停机超时会作为错误返回给调用方。`run_with_shutdown` 只受传入的 future 控制；若 Server future 在注册资源被追踪后取消，只要承载它的 Tokio runtime 仍在运行，就会执行一次有界的后台注销补偿。
+
 ## Middleware
 
 客户端和服务端共用一个用户 trait，不需要注册宏、字符串 ID、`BoxFuture` 或自定义 terminal。
@@ -185,7 +187,7 @@ impl Middleware for AuthMiddleware {
 - 请求与响应 body 上限 2 MiB
 - 服务端请求超时 30 秒
 - 请求并发 1024、连接 2048、单连接 HTTP/2 stream 128
-- 优雅停机 30 秒、注册操作 5 秒
+- 优雅停机共享总预算 30 秒、注册操作 5 秒
 
 这些值通过 `ClientConfig` 和 `ServerConfig` 配置。配置的 duration 和必要 pool size 必须大于零；H1 的 `max_idle_per_host` 可以为 0，表示关闭复用。非 2xx Problem Details 会还原为 `FusenError::Remote`。
 

@@ -86,7 +86,7 @@ pub enum FusenError {
     /// Discovery, load balancing, or concurrency could not provide capacity.
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
-    /// A configured request deadline elapsed.
+    /// A configured request or lifecycle deadline elapsed.
     #[error("request timed out: {0}")]
     Timeout(String),
     /// Stable error intentionally returned by application code.
