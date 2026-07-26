@@ -1,0 +1,1 @@
+{"type":"urn:fusen:error:application:user_conflict","title":"Conflict","status":409,"detail":"already exists","instance":"/users/1","code":"user_conflict","request_id":"request-1","retryable":true}

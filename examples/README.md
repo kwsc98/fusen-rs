@@ -1,6 +1,6 @@
 # fusen-rs examples
 
-示例按寻址方式分为 Host 直连和 Nacos 注册发现，两组示例使用相同的 `DemoService` 接口与服务实现，便于比较生成式 Client Builder、`ClientRuntime` 和 `Server` 的配置差异。
+示例按寻址方式分为 Host 直连和 Nacos 注册发现，两组示例使用相同的 `#[service]` 契约与服务实现，便于比较生成式 Client Builder、`ClientRuntime` 和 `Server` 的配置差异。服务端通过 `start()` 完成一次绑定和注册后进入 Ready，收到 Ctrl-C 后再显式执行有界优雅停机。
 
 ## Host 直连
 
@@ -46,9 +46,9 @@ PT_REQUESTS_PER_TASK=5000 \
 cargo run --release -p examples --bin host-client-pt
 ```
 
-结果会逐轮输出完成数、成功/失败数、总耗时、总 QPS、成功 QPS、请求与响应 JSON body 字节数及吞吐率，并汇总 QPS 与吞吐中位数。字节统计是应用层 JSON body 的实际序列化长度，不包含 HTTP/2 帧头、TCP/IP 和 TLS 开销；每种协议在计时前都会按配置并发度完成一轮预热，预热请求不计入结果。`PT_CONCURRENCY` 接受逗号分隔的多个正整数，`PT_ROUNDS` 默认 5。
+结果会逐轮输出完成数、成功/失败数、总耗时、总 QPS、成功 QPS、请求与响应 JSON 值的序列化字节数及吞吐率，并汇总 QPS 与吞吐中位数。字节统计不包含 HTTP framing 或 TCP/IP；两个 transport 都是明文。每种协议在计时前都会按配置并发度完成一轮预热，预热请求不计入结果。`PT_CONCURRENCY` 接受逗号分隔的多个正整数，`PT_ROUNDS` 默认 5。
 
-`PT_PROTOCOL` 支持 `h1`、`h2` 和 `both`，默认值为 `h2`。在这个框架中，H1 使用 `WireProtocol::SpringCloud` 的 HTTP/1.1 transport，H2 使用 `WireProtocol::Fusen` 的 HTTP/2 transport。
+`PT_PROTOCOL` 支持 `h1`、`h2` 和 `both`，默认值为 `h2`。在这个框架中，H1 使用 `WireProtocol::SpringCloudV1` 的 HTTP/1.1 transport，H2 使用 `WireProtocol::FusenV1` 的 h2c transport。
 
 | 对比项 | HTTP/1.1 | HTTP/2 |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ cargo run --release -p examples --bin host-client-pt
 | 队头阻塞 | 同一连接上的后续请求需要等待前一个响应 | stream 之间独立，但底层 TCP 丢包仍会影响同一连接 |
 | 典型场景 | 低并发、传统代理或 Spring Cloud 兼容 | 高并发、连接数受限、长连接 RPC |
 
-两种协议传输相同请求时，JSON body 字节数应当一致。当前统计不包含 HTTP header 和协议帧，因此只能对比业务 payload 吞吐；如需比较真实线速字节，应在 transport 层增加计数或使用抓包工具。
+两种协议的 wire envelope 不同，因此这里的 JSON 字节数只能描述各协议实际应用层 payload，不能作为线速流量或编码效率的等价比较。如需比较真实线速字节，应使用独立 instrumentation 或抓包工具。
 
 ## Nacos 注册发现
 
@@ -87,7 +87,7 @@ NACOS_ADDR=127.0.0.1:8848 \
 cargo run -p examples --bin nacos-hot-config
 ```
 
-程序会读取 `DEFAULT_GROUP` 下的 `application-config1`，随后每秒输出一次当前配置；在 Nacos 修改并发布配置即可观察热更新。
+程序会读取 `DEFAULT_GROUP` 下的 `application-config1`；在 Nacos 修改并发布配置即可观察 last-good 热更新。退出时会显式关闭配置 handle。
 
 ## 目录说明
 
@@ -95,7 +95,7 @@ cargo run -p examples --bin nacos-hot-config
 src/
 ├── lib.rs                 # DTO 与共享 RPC trait
 ├── service.rs             # Host/Nacos 共用的服务实现
-├── middleware/            # Middleware、Observer 与负载均衡扩展示例
+├── middleware/            # Middleware、MetricsRecorder 与负载均衡扩展示例
 ├── host/
 │   ├── server.rs          # 无注册中心的服务端
 │   ├── client.rs          # 生成 Builder 的 direct 模式

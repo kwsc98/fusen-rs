@@ -8,14 +8,18 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/fusen-register"
-readme.workspace = true
+readme = "README.md"
 license-file.workspace = true
 
 
 [dependencies]
 fusen-contract.workspace = true
+futures-util.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
+
+[lints]
+workspace = true

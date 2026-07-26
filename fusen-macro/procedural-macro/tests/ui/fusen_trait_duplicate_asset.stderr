@@ -1,5 +1,0 @@
-error: only one `asset` attribute is allowed
- --> tests/ui/fusen_trait_duplicate_asset.rs:5:1
-  |
-5 | #[fusen_procedural_macro::asset(path = "/two")]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

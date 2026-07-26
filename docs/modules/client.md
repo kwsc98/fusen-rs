@@ -1,27 +1,44 @@
 # 客户端行为
 
-## 职责与接口
+> English summary: `ClientRuntime` owns logical admission, discovery, plaintext pools,
+> retries, circuit breakers, and one cancellation-safe shutdown result.
 
-`ClientRuntime::builder()` 装配 registry、全局 `Middleware`、`InvocationObserver` 和 `ClientConfig`。`fusen_trait` 为每个服务生成专属 Client Builder，普通用户通过 `.direct(...).connect()` 或 `.discover().connect()` 创建客户端；协议可用 `.protocol(WireProtocol)` 选择。
+## 构建与所有权
 
-生成方法直接传入 `MethodId` 和精确容量参数 Vec，不做字符串方法查找。静态 `ServiceDescriptor` 通过 `OnceLock` 初始化一次，并由客户端、服务端和注册信息共享。
+`ClientRuntime::builder()` 接受私有字段的 `ClientConfig`、一个可选 `Registry`、全局 `Middleware`、`RetryPolicy` 与 `MetricsRecorder`。生成的服务 Builder 通过 `.direct("http://...")` 或 `.discover()` 选择寻址，并通过 `.protocol(...)` 选择明确 wire 版本。
 
-## Cluster
+Runtime 必须在正在运行的 Tokio runtime 内构建。`https://`、含凭据/query/fragment 的 endpoint 在 connect/validation 阶段失败，不产生网络 I/O。Direct client 不创建订阅；discovery client 按 `(ServiceSelector, WireProtocol)` 共享 supervisor。
 
-Client Middleware 在 Router/LB 之前执行，可写入 `RpcContext::metadata_mut()` 或 extensions。`client::cluster` 只提供同步 `Router`、`LoadBalancer` 和 `InstanceSnapshot`。多个 Router 按配置顺序执行；未配置时复用 Directory 快照。默认 `WeightedRandom`，每次调用只选择并访问一个 endpoint。
+## 逻辑调用
 
-Direct endpoint 在 connect 时解析成 `ServiceEndpoint`，不登记订阅。Discovery 按 `ServiceSelector + WireProtocol` 复用订阅，调用时只 clone 当前不可变快照；最后一个 client lease 释放后关闭 listener。空实例、Router 清空结果和非法 LB 索引返回 `ServiceUnavailable`。
+全局与服务局部 Middleware 每次逻辑调用各执行一次，位于 Router、LoadBalancer 与全部物理 attempts 之外。成功通过 Middleware 后，runtime 冻结可重放请求模板，并在每次 attempt 重新读取最新 Directory snapshot。
 
-## Deadline、错误与关闭
+选择顺序为 Router -> open endpoint 过滤 -> LoadBalancer -> endpoint bulkhead。只要有尚未尝试的 endpoint，就不会重复选择本次调用已失败的 endpoint。无实例、非法 LB 结果、序列化、本地 admission 与调用方取消均不进入 circuit breaker。
 
-默认连接超时 3 秒、调用超时 10 秒、发现超时 5 秒、订阅清理超时 5 秒、响应 body 上限 2 MiB。一个 `timeout_at` 覆盖关闭检查、构造、Middleware、Cluster、DNS/TLS、HTTP 响应头和 body。非 2xx Problem Details 还原为 `FusenError::Remote` 后再返回 Middleware。
+## Deadline、Retry 与 Breaker
 
-`ClientRuntime::shutdown()` 幂等关闭所有订阅并拒绝新连接和 RPC。它会等待并发创建完成，超时项保留到下一次 shutdown，终态错误稳定返回；Drop 仅在最后一个 owner 释放时尽力启动后台清理。
+默认调用 deadline 为 10 秒，一个 absolute deadline 覆盖 admission/queue、Middleware、所有 attempts、退避、传输与 decode。调用方取消立即取消当前 attempt。
 
-## HTTP 连接池
+只有 `Idempotency::Idempotent` 与 `Safe` 可重试。内置策略最多三次总 attempts，使用 10 ms 到 200 ms 的 full-jitter 指数退避，并由每服务容量 100、每秒补充 10 的 token bucket 限制 retry。`Retry-After` 支持 delta-seconds 与 HTTP-date，并作为最小等待；剩余 deadline 不足时直接结束。自定义 policy 不能放宽这些硬上限。
 
-`ClientRuntimeBuilder::http1_pool` 和 `http2_pool` 分别配置两个独立的 Hyper pool。H1 支持配置每个地址保留的最大空闲连接数和空闲回收时间；`max_idle_per_host = 0` 关闭连接复用，但它不是正在使用连接数的上限。
+Endpoint breaker 使用 10 秒窗口、最少 20 样本、50% 失败比例；service breaker 使用 30 秒窗口、最少 50 样本、60% 失败比例。Endpoint 记录每个真实 attempt，service 仅记录最终逻辑结果。Endpoint entry 上限 10,000，缺失或空闲 10 分钟后淘汰。
 
-H2 的 `connections_per_host` 表示每个地址的独立多路复用连接分片数。每个分片拥有独立 pool，连接按需创建，请求根据 endpoint 和 request ID 做无锁稳定哈希分片。默认值为 1；CPU 密集的小消息高并发场景可从 2 或 4 开始压测，连接数增加也会同步增加 socket、握手和服务端连接状态成本。
+HTTP/wire 成功但 typed `result` 无法反序列化为生成方法的 Rust 类型时，不执行 retry；调用以 `DataLoss`/`invalid_result` 终止，selected endpoint attempt 与 service final outcome 均按 `Protocol` failure 计入 breaker。
 
-H2 还可配置空闲回收、ping 间隔、ping 应答 timeout 以及是否在无活动 stream 时保活。`keep_alive_interval = None` 表示关闭 ping，不影响正常的 HTTP 连接复用。
+## Admission 与预算
+
+默认最多 1024 个逻辑调用、每 endpoint 128 个 attempts，单请求和响应各 2 MiB，全局请求和响应 byte budget 各 64 MiB。默认 fail-fast；只有显式配置 `QueueConfig::bounded(capacity)` 才允许排队，默认最长等待 50 ms 且始终计入逻辑 deadline。
+
+请求不会按 2 MiB 上限预分配。可重放请求模板在序列化写入前增量申请 byte permit，同一份 `Bytes` 在全部 attempts 与 backoff 期间只计费一次，并由 queued body chunk 持有到 Hyper transport 消费或取消。响应 body permit 持有到 decode 完成或取消，panic、timeout 和 cancellation 都必须归还 admission 与 byte permits。协议 framing、codec staging 与 socket buffer 属于独立有界的 transport overhead，不计入 body budget。
+
+## Discovery
+
+连接要求 Directory 在 initial timeout 内进入 `Ready`。最近一次有效实例在 provider 断开后可短暂以 `Stale` 状态继续路由，默认最长 30 秒；之后进入 `Unavailable` 并 fail fast。Revision 对状态或实例变化严格递增，旧 subscription generation 的迟到更新不能覆盖新状态。
+
+Subscription close 超时会隔离该 selector/protocol；在旧 worker 到达终态前，新的 discover connect 立即失败，不等待也不创建重叠 listener。
+
+## Shutdown
+
+状态为 `Running -> Draining -> Closed`。`shutdown()` 先原子关闭 admission，再在共享 30 秒 deadline 内并行排空逻辑调用、关闭 subscriptions 与连接池；期限到达后广播 cancellation 并 drop pool，有界返回 `ClientError`。
+
+并发 shutdown 调用共享同一终态。取消某个 waiter 不取消 coordinator；Drop 只请求关闭，显式 `shutdown().await` 才是应用生命周期契约。

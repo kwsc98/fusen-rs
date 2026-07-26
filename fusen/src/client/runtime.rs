@@ -1,258 +1,576 @@
 use super::{
     builder::ServiceClientBuilder,
-    invocation::HttpTransport,
-    subscription::{ManagerShutdownError, SubscriptionManager},
+    config::ClientConfig,
+    endpoint_breakers::{EndpointBreakerSource, EndpointBreakers},
+    subscription::SubscriptionManager,
+    transport::HttpTransport,
 };
 use crate::{
-    error::FusenError,
-    filter::{Middleware, MiddlewareDyn, erase_middleware},
-    invocation::InvocationObserver,
-    protocol::{self, codec::FusenHttpCodec},
+    ClientError, ClientErrorKind, Middleware, RetryPolicy,
+    middleware::{MiddlewareDyn, erase_middleware},
+    resilience::{
+        breaker::{BreakerConfig, BreakerPhase, CircuitBreaker},
+        retry::{RetryBudget, StandardRetryPolicy},
+    },
+    runtime::{admission::AdmissionGate, budget::ByteBudget, metrics::SafeMetrics},
 };
-use fusen_contract::ServiceDescriptor;
-use fusen_register::{Register, error::RegisterError};
+use fusen_contract::{ServiceDescriptor, WireProtocol};
+use fusen_observability::{CircuitState, MetricEvent, MetricOutcome, MetricsRecorder};
+use fusen_register::Registry;
 use std::{
+    collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
     },
-    time::Duration,
+    time::Instant as StdInstant,
 };
+use tokio::sync::{Semaphore, watch};
+use tokio_util::sync::CancellationToken;
 
-pub use crate::protocol::http::client::{Http1PoolConfig, Http2PoolConfig};
+pub(crate) const CLIENT_RUNNING: u8 = 0;
+const CLIENT_DRAINING: u8 = 1;
+const CLIENT_CLOSED: u8 = 2;
 
-/// Resource limits and deadlines shared by all clients in one runtime.
-#[derive(Clone, Debug)]
-pub struct ClientConfig {
-    /// Maximum time allowed to establish a connection.
-    pub connect_timeout: Duration,
-    /// End-to-end deadline for one logical RPC invocation.
-    pub request_timeout: Duration,
-    /// Maximum time allowed for an initial discovery subscription.
-    pub discovery_timeout: Duration,
-    /// Maximum time allowed to clean up one subscription.
-    pub subscription_close_timeout: Duration,
-    /// Maximum response body size accepted from a peer.
-    pub max_response_body_bytes: usize,
-    /// HTTP/1.1 connection-pool settings.
-    pub http1_pool: Http1PoolConfig,
-    /// HTTP/2 connection-pool and keep-alive settings.
-    pub http2_pool: Http2PoolConfig,
+/// Observable client runtime lifecycle state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ClientState {
+    /// New logical invocations are admitted.
+    Running,
+    /// Admission is closed and existing work is draining.
+    Draining,
+    /// Shutdown reached its shared terminal result.
+    Closed,
 }
 
-impl Default for ClientConfig {
-    fn default() -> Self {
-        Self {
-            connect_timeout: Duration::from_secs(3),
-            request_timeout: Duration::from_secs(10),
-            discovery_timeout: Duration::from_secs(5),
-            subscription_close_timeout: Duration::from_secs(5),
-            max_response_body_bytes: 2 * 1024 * 1024,
-            http1_pool: Http1PoolConfig::default(),
-            http2_pool: Http2PoolConfig::default(),
+/// Shared client runtime for discovery, middleware, pools, and resilience state.
+#[derive(Clone)]
+pub struct ClientRuntime {
+    pub(crate) inner: Arc<ClientRuntimeInner>,
+}
+
+/// Builder for [`ClientRuntime`].
+pub struct ClientRuntimeBuilder {
+    config: ClientConfig,
+    registry: Option<Arc<dyn Registry>>,
+    middleware: Vec<Arc<dyn MiddlewareDyn>>,
+    metrics: Option<Arc<dyn MetricsRecorder>>,
+    retry_policy: Arc<dyn RetryPolicy>,
+}
+
+impl ClientRuntime {
+    /// Starts a runtime builder with bounded production defaults.
+    pub fn builder() -> ClientRuntimeBuilder {
+        ClientRuntimeBuilder {
+            config: ClientConfig::default(),
+            registry: None,
+            middleware: Vec::new(),
+            metrics: None,
+            retry_policy: Arc::new(StandardRetryPolicy),
         }
+    }
+
+    /// Returns the current lifecycle state.
+    pub fn state(&self) -> ClientState {
+        match self.inner.state.load(Ordering::Acquire) {
+            CLIENT_RUNNING => ClientState::Running,
+            CLIENT_DRAINING => ClientState::Draining,
+            _ => ClientState::Closed,
+        }
+    }
+
+    /// Requests idempotent background shutdown and waits for its shared terminal result.
+    pub async fn shutdown(&self) -> Result<(), ClientError> {
+        self.inner.shutdown.cancel();
+        let mut completion = self.inner.completion.clone();
+        loop {
+            if let Some(result) = completion.borrow().clone() {
+                return result;
+            }
+            completion.changed().await.map_err(|error| {
+                ClientError::with_source(
+                    ClientErrorKind::Shutdown,
+                    "client shutdown coordinator ended without a result",
+                    error,
+                )
+            })?;
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn service_builder(&self, service: &'static ServiceDescriptor) -> ServiceClientBuilder {
+        ServiceClientBuilder::new(self, service)
     }
 }
 
-/// Builds a shared client runtime.
-pub struct ClientRuntimeBuilder {
-    pub(super) registry: Option<Arc<dyn Register>>,
-    middleware: Vec<Arc<dyn MiddlewareDyn>>,
-    observers: Vec<Arc<dyn InvocationObserver>>,
-    pub(super) config: ClientConfig,
-}
-
 impl ClientRuntimeBuilder {
-    /// Replaces client resource limits and deadlines.
+    /// Replaces immutable client configuration.
     pub fn config(mut self, config: ClientConfig) -> Self {
         self.config = config;
         self
     }
 
-    /// Replaces the HTTP/1.1 connection-pool settings.
-    pub fn http1_pool(mut self, config: Http1PoolConfig) -> Self {
-        self.config.http1_pool = config;
-        self
-    }
-
-    /// Replaces the HTTP/2 connection-pool and keep-alive settings.
-    pub fn http2_pool(mut self, config: Http2PoolConfig) -> Self {
-        self.config.http2_pool = config;
-        self
-    }
-
-    /// Installs the registry used by generated clients in discovery mode.
-    pub fn registry(mut self, registry: impl Register + 'static) -> Self {
+    /// Installs the one registry used by discovery clients.
+    pub fn registry<R>(mut self, registry: R) -> Self
+    where
+        R: Registry + 'static,
+    {
         self.registry = Some(Arc::new(registry));
         self
     }
 
-    /// Appends global client middleware in execution order.
+    /// Appends global logical-invocation middleware.
     pub fn middleware(mut self, middleware: impl Middleware) -> Self {
         self.middleware.push(erase_middleware(middleware));
         self
     }
 
-    /// Appends a synchronous complete-invocation observer.
-    pub fn observer(mut self, observer: impl InvocationObserver + 'static) -> Self {
-        self.observers.push(Arc::new(observer));
+    /// Installs the synchronous, non-blocking metrics recorder.
+    pub fn metrics(mut self, recorder: impl MetricsRecorder) -> Self {
+        self.metrics = Some(Arc::new(recorder));
         self
     }
 
-    /// Builds the reusable runtime and HTTP connection pools.
-    pub fn build(self) -> Result<ClientRuntime, FusenError> {
-        validate_config(&self.config)?;
-        Ok(ClientRuntime {
-            inner: Arc::new(ClientRuntimeInner {
-                registry: self.registry,
-                transport: HttpTransport {
-                    codec: FusenHttpCodec::new(self.config.max_response_body_bytes),
-                    client: protocol::http::client::HttpClient::new(
-                        self.config.connect_timeout,
-                        &self.config.http1_pool,
-                        &self.config.http2_pool,
-                    ),
-                },
-                middleware: Arc::from(self.middleware),
-                observers: Arc::from(self.observers),
-                subscriptions: SubscriptionManager::new(self.config.subscription_close_timeout),
-                shutdown_failure: Mutex::new(None),
-                shutdown_lock: tokio::sync::Mutex::new(()),
-                closed: AtomicBool::new(false),
-                shutdown_complete: AtomicBool::new(false),
-                config: self.config,
-            }),
-        })
+    /// Replaces the retry decision extension while retaining runtime hard limits.
+    pub fn retry_policy(mut self, policy: impl RetryPolicy) -> Self {
+        self.retry_policy = Arc::new(policy);
+        self
+    }
+
+    /// Validates and creates all runtime-owned supervisors and plaintext pools.
+    pub fn build(self) -> Result<ClientRuntime, ClientError> {
+        self.config.validate()?;
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            ClientError::with_source(
+                ClientErrorKind::Build,
+                "ClientRuntime must be built inside a running Tokio runtime",
+                error,
+            )
+        })?;
+        let config = Arc::new(self.config);
+        let admission = AdmissionGate::new(config.admission().max_in_flight_value());
+        let queue_slots = (config.admission().queue_value().capacity() > 0)
+            .then(|| Arc::new(Semaphore::new(config.admission().queue_value().capacity())));
+        let request_budget = ByteBudget::new(config.admission().request_byte_budget());
+        let response_budget = ByteBudget::new(config.admission().response_byte_budget());
+        let transport = Arc::new(Mutex::new(Some(HttpTransport::new(
+            config.connect_timeout(),
+            config.http(),
+        ))));
+        let metrics = SafeMetrics::new(self.metrics);
+        let endpoint_threshold = breaker_config(
+            config.circuit_breaker().endpoint_value(),
+            config.circuit_breaker().max_open_duration_value(),
+        );
+        let endpoint_breakers = EndpointBreakers::new(
+            endpoint_threshold,
+            config.circuit_breaker().max_endpoint_entries_value(),
+            config.circuit_breaker().idle_eviction_value(),
+        );
+        let subscriptions = self.registry.as_ref().map(|registry| {
+            SubscriptionManager::new(
+                registry.clone(),
+                config.discovery().clone(),
+                metrics.clone(),
+                endpoint_breakers.clone(),
+            )
+        });
+        let shutdown = CancellationToken::new();
+        let force_cancel = CancellationToken::new();
+        let state = Arc::new(AtomicU8::new(CLIENT_RUNNING));
+        let (completion_sender, completion) = watch::channel(None);
+        let inner = Arc::new(ClientRuntimeInner {
+            config: config.clone(),
+            middleware: Arc::from(self.middleware),
+            metrics: metrics.clone(),
+            retry_policy: self.retry_policy,
+            admission: admission.clone(),
+            queue_slots,
+            request_budget,
+            response_budget,
+            transport: transport.clone(),
+            subscriptions: subscriptions.clone(),
+            endpoint_breakers,
+            service_breakers: Mutex::new(HashMap::new()),
+            retry_budgets: Mutex::new(HashMap::new()),
+            endpoint_bulkheads: Mutex::new(HashMap::new()),
+            shutdown: shutdown.clone(),
+            force_cancel: force_cancel.clone(),
+            state: state.clone(),
+            completion,
+        });
+        runtime.spawn(client_shutdown_coordinator(ClientShutdown {
+            deadline: config.shutdown_timeout(),
+            shutdown,
+            force_cancel,
+            state,
+            admission,
+            subscriptions,
+            transport,
+            completion: completion_sender,
+            metrics,
+        }));
+        Ok(ClientRuntime { inner })
     }
 }
 
-/// Shared ownership root for connection pools, discovery subscriptions, middleware and observers.
-#[derive(Clone)]
-pub struct ClientRuntime {
-    pub(super) inner: Arc<ClientRuntimeInner>,
-}
-
-impl ClientRuntime {
-    /// Creates an empty runtime builder with bounded defaults.
-    pub fn builder() -> ClientRuntimeBuilder {
-        ClientRuntimeBuilder {
-            registry: None,
-            middleware: Vec::new(),
-            observers: Vec::new(),
-            config: ClientConfig::default(),
-        }
-    }
-
-    /// Idempotently rejects new work and closes every runtime-owned subscription.
-    pub async fn shutdown(&self) -> Result<(), FusenError> {
-        self.inner.closed.store(true, Ordering::Release);
-        let _guard = self.inner.shutdown_lock.lock().await;
-        if self.inner.shutdown_complete.load(Ordering::Acquire) {
-            return self.inner.shutdown_result();
-        }
-        match self.inner.subscriptions.shutdown().await {
-            Ok(()) => {}
-            Err(ManagerShutdownError::Timeout) => {
-                return Err(FusenError::Timeout(
-                    "subscription cleanup deadline exceeded".into(),
-                ));
-            }
-            Err(ManagerShutdownError::Terminal(error)) => {
-                self.inner.record_shutdown_failure(error);
-            }
-        }
-        self.inner.shutdown_complete.store(true, Ordering::Release);
-        self.inner.shutdown_result()
-    }
-
-    #[doc(hidden)]
-    pub fn __client_builder(&self, service: &'static ServiceDescriptor) -> ServiceClientBuilder {
-        ServiceClientBuilder::new(self.clone(), service)
-    }
-}
-
-pub(super) struct ClientRuntimeInner {
-    pub(super) registry: Option<Arc<dyn Register>>,
-    pub(super) transport: HttpTransport,
-    pub(super) middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
-    pub(super) observers: Arc<[Arc<dyn InvocationObserver>]>,
-    pub(super) subscriptions: Arc<SubscriptionManager>,
-    shutdown_failure: Mutex<Option<ShutdownFailure>>,
-    shutdown_lock: tokio::sync::Mutex<()>,
-    pub(super) closed: AtomicBool,
-    shutdown_complete: AtomicBool,
-    pub(super) config: ClientConfig,
-}
-
-#[derive(Clone)]
-struct ShutdownFailure {
-    source: RegisterError,
+pub(crate) struct ClientRuntimeInner {
+    pub config: Arc<ClientConfig>,
+    pub middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
+    pub metrics: SafeMetrics,
+    pub retry_policy: Arc<dyn RetryPolicy>,
+    pub admission: Arc<AdmissionGate>,
+    pub queue_slots: Option<Arc<Semaphore>>,
+    pub request_budget: Arc<ByteBudget>,
+    pub response_budget: Arc<ByteBudget>,
+    pub transport: Arc<Mutex<Option<HttpTransport>>>,
+    pub subscriptions: Option<Arc<SubscriptionManager>>,
+    pub endpoint_breakers: EndpointBreakers,
+    pub service_breakers: Mutex<HashMap<String, Arc<CircuitBreaker>>>,
+    pub retry_budgets: Mutex<HashMap<String, Arc<RetryBudget>>>,
+    pub endpoint_bulkheads: Mutex<HashMap<String, Arc<Semaphore>>>,
+    pub shutdown: CancellationToken,
+    pub force_cancel: CancellationToken,
+    pub state: Arc<AtomicU8>,
+    completion: watch::Receiver<Option<Result<(), ClientError>>>,
 }
 
 impl ClientRuntimeInner {
-    fn record_shutdown_failure(&self, source: RegisterError) {
-        let mut failure = self
-            .shutdown_failure
+    pub(crate) fn transport(&self) -> Result<HttpTransport, ClientError> {
+        self.transport
             .lock()
-            .expect("client shutdown failure lock poisoned");
-        if failure.is_none() {
-            *failure = Some(ShutdownFailure { source });
-        }
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .ok_or_else(|| {
+                ClientError::message(ClientErrorKind::Closed, "client connection pool is closed")
+            })
     }
 
-    fn shutdown_result(&self) -> Result<(), FusenError> {
-        match self
-            .shutdown_failure
+    pub(crate) fn service_breaker(
+        &self,
+        service: &'static ServiceDescriptor,
+    ) -> Arc<CircuitBreaker> {
+        let mut breakers = self
+            .service_breakers
             .lock()
-            .expect("client shutdown failure lock poisoned")
+            .unwrap_or_else(|error| error.into_inner());
+        breakers
+            .entry(service.identity().to_owned())
+            .or_insert_with(|| {
+                let metrics = self.metrics.clone();
+                let service_id = service.selector().service_id().to_owned();
+                CircuitBreaker::observed(
+                    breaker_config(
+                        self.config.circuit_breaker().service_value(),
+                        self.config.circuit_breaker().max_open_duration_value(),
+                    ),
+                    Arc::new(move |phase| {
+                        metrics.record(&MetricEvent::CircuitStateChanged {
+                            scope: "service",
+                            service: &service_id,
+                            state: metric_circuit_state(phase),
+                        });
+                    }),
+                )
+            })
             .clone()
+    }
+
+    pub(crate) fn endpoint_breaker(
+        &self,
+        service: &'static ServiceDescriptor,
+        protocol: WireProtocol,
+        source: EndpointBreakerSource,
+        endpoint: &str,
+    ) -> Arc<CircuitBreaker> {
+        let metrics = self.metrics.clone();
+        let service_id = service.selector().service_id().to_owned();
+        self.endpoint_breakers.get_or_insert_observed(
+            service.identity(),
+            protocol,
+            source,
+            endpoint,
+            Arc::new(move |phase| {
+                metrics.record(&MetricEvent::CircuitStateChanged {
+                    scope: "endpoint",
+                    service: &service_id,
+                    state: metric_circuit_state(phase),
+                });
+            }),
+        )
+    }
+
+    pub(crate) fn retry_budget(&self, service: &'static ServiceDescriptor) -> Arc<RetryBudget> {
+        let mut budgets = self
+            .retry_budgets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        budgets
+            .entry(service.identity().to_owned())
+            .or_insert_with(|| {
+                Arc::new(RetryBudget::new(
+                    self.config.retry().budget_capacity_value(),
+                    self.config.retry().budget_refill_value(),
+                ))
+            })
+            .clone()
+    }
+
+    pub(crate) fn endpoint_bulkhead(&self, endpoint: &str) -> Arc<Semaphore> {
+        let mut bulkheads = self
+            .endpoint_bulkheads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if bulkheads.len() >= self.config.circuit_breaker().max_endpoint_entries_value()
+            && !bulkheads.contains_key(endpoint)
+            && let Some(key) = bulkheads.keys().next().cloned()
         {
-            Some(failure) => Err(FusenError::internal(
-                "failed to close service subscription",
-                failure.source,
-            )),
-            None => Ok(()),
+            bulkheads.remove(&key);
         }
+        bulkheads
+            .entry(endpoint.to_owned())
+            .or_insert_with(|| {
+                Arc::new(Semaphore::new(
+                    self.config.admission().max_in_flight_per_endpoint_value(),
+                ))
+            })
+            .clone()
+    }
+}
+
+const fn metric_circuit_state(phase: BreakerPhase) -> CircuitState {
+    match phase {
+        BreakerPhase::Closed => CircuitState::Closed,
+        BreakerPhase::Open => CircuitState::Open,
+        BreakerPhase::HalfOpen => CircuitState::HalfOpen,
     }
 }
 
 impl Drop for ClientRuntimeInner {
     fn drop(&mut self) {
-        self.closed.store(true, Ordering::Release);
-        let subscriptions = self.subscriptions.clone();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let _ = subscriptions.shutdown().await;
-            });
-        }
+        self.shutdown.cancel();
     }
 }
 
-fn validate_config(config: &ClientConfig) -> Result<(), FusenError> {
-    if config.connect_timeout.is_zero()
-        || config.request_timeout.is_zero()
-        || config.discovery_timeout.is_zero()
-        || config.subscription_close_timeout.is_zero()
-        || config.max_response_body_bytes == 0
-        || config
-            .http1_pool
-            .idle_timeout
-            .is_some_and(|timeout| timeout.is_zero())
-        || config.http2_pool.connections_per_host == 0
-        || config
-            .http2_pool
-            .idle_timeout
-            .is_some_and(|timeout| timeout.is_zero())
-        || config
-            .http2_pool
-            .keep_alive_interval
-            .is_some_and(|interval| interval.is_zero())
-        || config.http2_pool.keep_alive_timeout.is_zero()
-    {
-        Err(FusenError::InvalidRequest(
-            "client limits, pool sizes, and configured timeouts must be greater than zero".into(),
-        ))
-    } else {
-        Ok(())
+fn breaker_config(
+    threshold: &super::config::BreakerThreshold,
+    max_open_duration: std::time::Duration,
+) -> BreakerConfig {
+    BreakerConfig::new(
+        threshold.window(),
+        threshold.buckets(),
+        threshold.minimum_samples(),
+        threshold.failure_ratio(),
+        threshold.open_duration(),
+        max_open_duration,
+        threshold.half_open_probes(),
+        threshold.close_successes(),
+    )
+}
+
+struct ClientShutdown {
+    deadline: std::time::Duration,
+    shutdown: CancellationToken,
+    force_cancel: CancellationToken,
+    state: Arc<AtomicU8>,
+    admission: Arc<AdmissionGate>,
+    subscriptions: Option<Arc<SubscriptionManager>>,
+    transport: Arc<Mutex<Option<HttpTransport>>>,
+    completion: watch::Sender<Option<Result<(), ClientError>>>,
+    metrics: SafeMetrics,
+}
+
+async fn client_shutdown_coordinator(coordinator: ClientShutdown) {
+    coordinator.shutdown.cancelled().await;
+    let started = StdInstant::now();
+    let deadline = tokio::time::Instant::now() + coordinator.deadline;
+    coordinator.state.store(CLIENT_DRAINING, Ordering::Release);
+    coordinator.admission.begin_draining();
+    if let Some(subscriptions) = &coordinator.subscriptions {
+        subscriptions.begin_shutdown();
+    }
+    let work = async {
+        let subscriptions = async {
+            match &coordinator.subscriptions {
+                Some(subscriptions) => subscriptions.closed().await.map_err(|error| {
+                    ClientError::with_source(
+                        ClientErrorKind::Shutdown,
+                        "failed to close discovery subscription",
+                        error,
+                    )
+                }),
+                None => Ok(()),
+            }
+        };
+        let invocations = async {
+            coordinator.admission.drained().await;
+            close_transport(&coordinator.transport);
+        };
+        let ((), subscriptions) = tokio::join!(invocations, subscriptions);
+        subscriptions
+    };
+    let result = match tokio::time::timeout_at(deadline, work).await {
+        Ok(result) => result,
+        Err(_) => {
+            coordinator.force_cancel.cancel();
+            close_transport(&coordinator.transport);
+            Err(ClientError::message(
+                ClientErrorKind::Timeout,
+                "client graceful shutdown deadline elapsed",
+            ))
+        }
+    };
+    if let Some(subscriptions) = &coordinator.subscriptions {
+        subscriptions.finish_shutdown();
+    }
+    coordinator.admission.close();
+    coordinator.state.store(CLIENT_CLOSED, Ordering::Release);
+    coordinator.metrics.record(&MetricEvent::ShutdownFinished {
+        runtime: "client",
+        outcome: match &result {
+            Ok(()) => MetricOutcome::Success,
+            Err(error) if error.kind() == ClientErrorKind::Timeout => MetricOutcome::Timeout,
+            Err(_) => MetricOutcome::Error,
+        },
+        duration: started.elapsed(),
+    });
+    coordinator.completion.send_replace(Some(result));
+}
+
+fn close_transport(transport: &Mutex<Option<HttpTransport>>) {
+    transport
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fusen_contract::{
+        InstanceId, ServiceInstance, ServiceRegistration, ServiceSelector, ServiceWeight,
+        WireProtocol,
+    };
+    use fusen_register::{
+        RegistrationHandle, SubscriptionHandle,
+        directory::directory,
+        error::{RegistryError, RegistryErrorKind, RegistryOperation},
+        prepare_subscription,
+    };
+    use std::{future::pending, time::Duration};
+    use tokio::sync::Notify;
+
+    #[derive(Clone)]
+    struct PendingCloseRegistry {
+        close_started: Arc<Notify>,
+    }
+
+    impl Registry for PendingCloseRegistry {
+        fn prepare_registration(
+            &self,
+            _registration: Arc<ServiceRegistration>,
+            _protocol: WireProtocol,
+        ) -> Result<RegistrationHandle, RegistryError> {
+            Err(RegistryError::message(
+                RegistryOperation::PrepareRegistration,
+                RegistryErrorKind::InvalidResource,
+                "test registry only supports subscriptions",
+            ))
+        }
+
+        fn prepare_subscription(
+            &self,
+            _selector: ServiceSelector,
+            _protocol: WireProtocol,
+        ) -> Result<SubscriptionHandle, RegistryError> {
+            let (publisher, directory) = directory();
+            let close_started = self.close_started.clone();
+            let close_publisher = publisher.clone();
+            Ok(prepare_subscription(
+                directory,
+                async move {
+                    publisher.publish_ready(vec![ServiceInstance::new(
+                        InstanceId::new("shutdown-test").unwrap(),
+                        "http://127.0.0.1:8080".parse().unwrap(),
+                        ServiceWeight::default(),
+                    )])?;
+                    Ok(())
+                },
+                move || async move {
+                    let _publisher = close_publisher;
+                    close_started.notify_one();
+                    pending::<Result<(), RegistryError>>().await
+                },
+            ))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn admitted_work_keeps_pool_access_until_it_has_drained() {
+        let runtime = ClientRuntime::builder().build().unwrap();
+        let admitted = runtime.inner.admission.try_enter().unwrap();
+        let shutting_down = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { runtime.shutdown().await }
+        });
+
+        tokio::task::yield_now().await;
+        assert_eq!(runtime.state(), ClientState::Draining);
+        assert!(runtime.inner.transport().is_ok());
+
+        drop(admitted);
+        shutting_down.await.unwrap().unwrap();
+        assert_eq!(runtime.state(), ClientState::Closed);
+        assert!(runtime.inner.transport().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_waiter_does_not_cancel_shared_bounded_shutdown() {
+        let config = ClientConfig::builder()
+            .shutdown_timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let registry = PendingCloseRegistry {
+            close_started: Arc::new(Notify::new()),
+        };
+        let runtime = ClientRuntime::builder()
+            .config(config)
+            .registry(registry.clone())
+            .build()
+            .unwrap();
+        runtime
+            .inner
+            .subscriptions
+            .as_ref()
+            .unwrap()
+            .acquire(
+                ServiceSelector::new("shutdown-test", None, None).unwrap(),
+                WireProtocol::FusenV1,
+            )
+            .await
+            .unwrap();
+        let admitted = runtime.inner.admission.try_enter().unwrap();
+        let waiter = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { runtime.shutdown().await }
+        });
+
+        registry.close_started.notified().await;
+        assert_eq!(runtime.state(), ClientState::Draining);
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::task::yield_now().await;
+        let first = runtime.shutdown().await.unwrap_err();
+        let second = runtime.shutdown().await.unwrap_err();
+        assert_eq!(first.kind(), ClientErrorKind::Timeout);
+        assert_eq!(second.kind(), ClientErrorKind::Timeout);
+        assert_eq!(runtime.state(), ClientState::Closed);
+        assert!(runtime.inner.force_cancel.is_cancelled());
+        assert!(runtime.inner.transport().is_err());
+
+        drop(admitted);
     }
 }

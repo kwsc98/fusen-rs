@@ -1,90 +1,42 @@
-use rpc::fusen_trait;
+//! Compile-time consumer proving that generated code honors a renamed `fusen-rs` dependency.
 
-#[fusen_trait]
-#[rpc::asset(path = "/renamed", method = get)]
+use rpc::{RpcError, service};
+
+#[service(name = "renamed", group = "test", version = "1")]
+/// Service contract used to prove dependency-renamed macro expansion.
 pub trait RenamedRuntimeService {
-    async fn lookup(&self, id: String) -> String;
+    #[rpc::method(
+        idempotency = "safe",
+        spring(method = "GET", path = "/renamed/{id}", query = ["expand"])
+    )]
+    /// Looks up one value through both generated protocol mappings.
+    async fn lookup(&self, id: String, expand: Option<bool>) -> Result<String, RpcError>;
+}
+
+/// Minimal direct implementation used by the renamed-runtime consumer test.
+pub struct Service;
+
+impl RenamedRuntimeService for Service {
+    async fn lookup(&self, id: String, _expand: Option<bool>) -> Result<String, RpcError> {
+        Ok(id)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rpc::{
-        Middleware, Next, RpcContext, RpcResult,
-        client::cluster::{InstanceSnapshot, LoadBalancer},
-        error::FusenError,
-        fusen_service,
-    };
-    use std::marker::PhantomData;
-
-    #[fusen_trait]
-    #[rpc::asset(path = "/generic", method = "post")]
-    trait GenericService: Send + Sync
-    where
-        Self: 'static,
-    {
-        async fn echo(&self, value: String, pair: (u8, u8)) -> String;
-    }
-
-    struct GenericServiceImpl<T>(PhantomData<T>);
-
-    #[fusen_service]
-    impl<T> GenericService for GenericServiceImpl<T>
-    where
-        T: Send + Sync + 'static,
-    {
-        async fn echo(
-            &self,
-            mut value: String,
-            (left, right): (u8, u8),
-        ) -> Result<String, FusenError> {
-            value.push_str(&format!("{left}{right}"));
-            Ok(value)
-        }
-    }
-
-    struct GenericMiddleware<T>(PhantomData<T>);
-
-    impl<T> Middleware for GenericMiddleware<T>
-    where
-        T: Send + Sync + 'static,
-    {
-        async fn handle<'a>(&'a self, context: RpcContext, next: Next<'a>) -> RpcResult {
-            next.run(context).await
-        }
-    }
-
-    struct GenericLoadBalance<T>(PhantomData<T>);
-
-    impl<T> LoadBalancer for GenericLoadBalance<T>
-    where
-        T: Send + Sync + 'static,
-    {
-        fn select(
-            &self,
-            _context: &RpcContext,
-            invokers: &InstanceSnapshot,
-        ) -> Result<usize, FusenError> {
-            (!invokers.is_empty()).then_some(0).ok_or_else(|| {
-                FusenError::ServiceUnavailable("no healthy service instances".into())
-            })
-        }
-    }
 
     #[test]
-    fn renamed_runtime_and_qualified_asset_preserve_metadata() {
-        let info = RenamedRuntimeServiceClient::service_descriptor();
-        assert_eq!(info.methods()[0].path(), "/renamed/lookup");
-        assert_eq!(info.methods()[0].method(), &http::Method::GET);
-    }
+    fn renamed_runtime_and_direct_trait_implementation_compile() {
+        let descriptor = RenamedRuntimeServiceClient::descriptor();
+        assert_eq!(descriptor.selector().service_id(), "renamed");
+        assert_eq!(descriptor.selector().group(), Some("test"));
+        assert_eq!(descriptor.selector().version(), Some("1"));
+        assert_eq!(descriptor.methods()[0].fusen_identity(), "lookup");
+        let spring = descriptor.methods()[0].spring_cloud().unwrap();
+        assert_eq!(spring.method().as_str(), "GET");
+        assert_eq!(spring.path(), "/renamed/{id}");
 
-    #[test]
-    fn generic_service_and_extensions_compile() {
-        let _service = GenericServiceImpl::<u8>(PhantomData);
-        let _middleware = GenericMiddleware::<u8>(PhantomData);
-        let _load_balance = GenericLoadBalance::<u8>(PhantomData);
-        let info = GenericServiceClient::service_descriptor();
-        assert_eq!(info.methods()[0].path(), "/generic/echo");
-        assert_eq!(info.methods()[0].method(), &http::Method::POST);
+        let _server = RenamedRuntimeServiceServer::new(Service);
     }
 }

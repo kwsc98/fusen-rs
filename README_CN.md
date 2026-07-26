@@ -1,205 +1,144 @@
 # fusen-rs 0.9
 
-`fusen-rs` 是一个面向 Rust 微服务的异步 JSON RPC 框架。`#[fusen_trait]` 会生成类型安全客户端、服务专属 Builder、静态方法描述和服务端 wrapper；`#[fusen_service]` 将 Rust 实现绑定到按声明顺序生成的 `MethodId` 分派。
-
-框架支持 HTTP/1.1、HTTP/2、直连、Nacos 注册发现、可插拔 Cluster 选择、类型化 Middleware、完整生命周期观察、有界 body、绝对 deadline、Problem Details 和优雅停机。
+`fusen-rs` 是面向 Rust 微服务的生产级异步 JSON RPC 框架。0.9 是一次 clean-slate 的 API 与 wire 基线：提供生成式客户端和服务端、明确的生命周期所有权、有界资源、服务发现、重试、熔断、中间件与结构化可观测性。
 
 [English](README.md)
 
-## 核心模型
+## 运行边界
 
-```text
-ClientRuntime -> Middleware -> Router -> LoadBalancer -> HTTP
-Server        -> admission/decode/route -> Middleware -> MethodId dispatch -> encode
-```
+- Rust 1.97、Edition 2024、Tokio 与 JSON。
+- Core 仅支持明文 HTTP：Fusen V1 使用 HTTP/2 prior knowledge（h2c），Spring Cloud V1 使用 HTTP/1.1。
+- `https://` endpoint 会在任何网络 I/O 前被拒绝；TLS 应由 ingress、sidecar、反向代理或 service mesh 终止。
+- 稳定扩展面仅包括 `Middleware`、`Registry`、`Router`、`LoadBalancer`、`RetryPolicy` 和 `MetricsRecorder`。
+- Transport、Codec、Acceptor、连接池与生命周期状态机均为 runtime 私有实现。
 
-- 默认一次逻辑 RPC 只执行一次 HTTP attempt，不做隐式重试。
-- `Next` 消费自身且不可克隆，下游最多执行一次。
-- `InvocationObserver` 覆盖 Middleware 外的错误、timeout 和 cancellation。
-- Nacos 使用不可变快照；未配置 Router 时直接复用当前快照，不复制实例列表。
-- Fusen HTTP/2 与 SpringCloud HTTP/1.1 的 JSON wire format 保持不变。
+## 服务契约
 
-## 定义与实现服务
+一个 trait 宏定义完整服务；每个 RPC 方法显式声明重试语义，并返回 `Result<T, RpcError>`。
 
 ```rust,no_run
-use fusen_rs::{FusenError, fusen_service, fusen_trait};
+use fusen_rs::{RpcError, method, service};
+use serde::{Deserialize, Serialize};
 
-#[fusen_trait]
-pub trait DemoService {
-    async fn say_hello(&self, name: String) -> String;
-}
+#[derive(Serialize, Deserialize)]
+pub struct User { pub id: String }
 
-pub struct DemoServiceImpl;
+#[derive(Serialize, Deserialize)]
+pub struct CreateUser { pub id: String }
 
-#[fusen_service]
-impl DemoService for DemoServiceImpl {
-    async fn say_hello(&self, name: String) -> Result<String, FusenError> {
-        Ok(format!("Hello {name}"))
-    }
+#[service(name = "user", group = "prod", version = "1")]
+pub trait UserService {
+    #[method(
+        idempotency = "safe",
+        spring(method = "GET", path = "/users/{id}", query = ["expand"])
+    )]
+    async fn get(&self, id: String, expand: Option<bool>) -> Result<User, RpcError>;
+
+    #[method(
+        idempotency = "none",
+        spring(method = "POST", path = "/users", body = "request")
+    )]
+    async fn create(&self, request: CreateUser) -> Result<User, RpcError>;
 }
 ```
 
-`MethodId(u16)` 按 trait 声明顺序稳定生成。实现方法可以用任意顺序书写，生成的 O(1) dispatch 不做方法名字符串比较。
+宏只生成 `UserServiceClient`、`UserServiceClientBuilder` 与 `UserServiceServer`；实现类型直接实现 trait，不再需要实现宏。幂等性默认 `none`，不会根据 HTTP method 推断。Spring path 参数从 `{name}` 推导，query/body 必须显式列出；HEAD 因无响应 body 必须返回 `Result<(), RpcError>`；Fusen V1 始终按参数名编码全部参数。
 
 ## 客户端
 
-一个 `ClientRuntime` 统一持有连接池、全局 Middleware、Observer、发现订阅与关闭状态。生成客户端只保存服务局部配置和共享 runtime 引用。
+`ClientRuntime` 统一持有 admission、字节预算、Middleware、发现订阅、连接池、重试预算和熔断器。
 
 ```rust,no_run
-use fusen_rs::{ClientRuntime, FusenError, fusen_trait};
-
-#[fusen_trait]
-trait DemoService {
-    async fn say_hello(&self, name: String) -> String;
-}
-
-async fn example() -> Result<(), FusenError> {
-let runtime = ClientRuntime::builder()
-    .build()?;
-
-let client = DemoServiceClient::builder(&runtime)
-    .direct("http://127.0.0.1:8081")
-    .connect()
-    .await?;
-
-let value = client.say_hello("fusen".into()).await?;
-runtime.shutdown().await?;
-Ok(())
-}
-```
-
-注册发现仍使用同一个生成 Builder：
-
-```rust,no_run
-use fusen_rs::{ClientRuntime, FusenError, fusen_trait};
-
-#[fusen_trait]
-trait DemoService {
-    async fn say_hello(&self, name: String) -> String;
-}
-
-async fn example() -> Result<(), FusenError> {
+# use fusen_rs::{ClientError, ClientRuntime, WireProtocol};
+# use crate::UserServiceClient;
+# async fn run() -> Result<(), ClientError> {
 let runtime = ClientRuntime::builder().build()?;
-let client = DemoServiceClient::builder(&runtime)
-    .discover()
+
+let client = UserServiceClient::builder(&runtime)
+    .direct("http://127.0.0.1:8081")
+    .protocol(WireProtocol::FusenV1)
     .connect()
     .await?;
+
+// 生成的 RPC 方法返回 Result<T, RpcError>。
 runtime.shutdown().await?;
-Ok(())
-}
+# Ok(())
+# }
 ```
 
-`shutdown()` 幂等关闭 runtime 持有的所有订阅，并拒绝新客户端和 RPC。Drop 只提供尽力而为的后台兜底，应用仍应显式 shutdown。
+在 runtime builder 安装一个 `Registry` 后，用 `.discover()` 替代 `.direct(...)` 即可启用发现。每个 `(ServiceSelector, WireProtocol)` 共享唯一订阅，latest-wins 快照状态为 `Initializing`、`Ready`、`Stale`、`Unavailable` 或 `Closed`。
 
-H1 与 H2 连接池可以在 runtime 上分别配置：
+一个绝对 deadline 覆盖 admission、Middleware、全部 attempts、退避、传输与 decode。只有声明为 `idempotent` 或 `safe` 的方法可重试；内置策略最多执行三次总 attempts，并受每服务 token budget 的硬约束。每次物理 attempt 都重新读取发现快照，并应用 endpoint/service 熔断器和 endpoint bulkhead。
 
-```rust,no_run
-use fusen_rs::{ClientRuntime, FusenError, Http1PoolConfig, Http2PoolConfig};
+如果 HTTP/wire 成功响应中的 `result` 无法反序列化为生成方法声明的 Rust 类型，调用会以 `DataLoss`/`invalid_result` 非重试终止；该 selected endpoint attempt 与 service 最终结果都会按 protocol failure 计入对应熔断器。
 
-fn example() -> Result<(), FusenError> {
-let runtime = ClientRuntime::builder()
-    .http1_pool(Http1PoolConfig {
-        max_idle_per_host: 256,
-        ..Http1PoolConfig::default()
-    })
-    .http2_pool(Http2PoolConfig {
-        connections_per_host: 4,
-        ..Http2PoolConfig::default()
-    })
-    .build()?;
-Ok(())
-}
-```
-
-`max_idle_per_host` 限制 H1 每个地址保留的空闲连接数，不限制正在使用的并发连接；设为 0 会关闭 H1 连接复用。H2 分片按地址懒建连接，并根据 endpoint 和 request ID 做无锁稳定哈希选择。
+`ClientRuntime::shutdown()` 幂等：先关闭 admission，再在同一 deadline 内排空逻辑调用、关闭订阅与连接池。取消某个 shutdown waiter 不会取消后台 coordinator。
 
 ## 服务端
 
-普通服务直接注册实现对象；只有需要服务局部 Middleware 时才使用宏生成的 `*Server` wrapper。
-
 ```rust,no_run
-use fusen_rs::{FusenError, Server, fusen_service, fusen_trait};
+# use fusen_rs::{Server, ServerError};
+# use crate::{UserServiceServer, UserServiceImpl};
+# async fn run() -> Result<(), ServerError> {
+let server = Server::builder("0.0.0.0:0")
+    .service(UserServiceServer::new(UserServiceImpl))
+    .build()?;
 
-#[fusen_trait]
-trait DemoService {
-    async fn ping(&self) -> String;
-}
-
-struct DemoServiceImpl;
-
-#[fusen_service]
-impl DemoService for DemoServiceImpl {
-    async fn ping(&self) -> Result<String, FusenError> {
-        Ok("pong".into())
-    }
-}
-
-async fn example() -> Result<(), FusenError> {
-Server::bind("0.0.0.0:8081")
-    .service(DemoServiceImpl)
-    .run()
-    .await?;
-Ok(())
-}
+let running = server.start().await?;
+println!("listening on {}", running.local_addr());
+running.shutdown().await?;
+# Ok(())
+# }
 ```
 
-启动过程先校验服务与路由、绑定监听器，再事务化注册 provider。每条路由会预绑定静态方法描述、不可变 Middleware slice 和 service invoker。并发准入保持 fail-fast，同一个绝对 deadline 覆盖 decode、route、Middleware、service dispatch 与 response encode。
+`start()` 先 bind，再以 not-ready 状态启动 accept loop，随后激活注册，只有进入 `Ready` 后才返回。Ready 前请求收到非 retryable 的 `503 not_ready`，且 body 不会被 poll。`RunningServer` 提供 `local_addr()`、`state()`、`handle()`、`wait()` 与 `shutdown()`；所有 handle 的 shutdown 幂等并共享唯一终态。`Server::serve()` 额外提供平台信号处理。
 
-`Server::run` 在 Unix 上响应 SIGINT 或 SIGTERM，在其他平台响应 Ctrl-C。停机时先关闭 listener，再并行逆序注销 provider 和排空 Hyper 在途连接，二者共享 `graceful_shutdown_timeout` 的同一份总预算。accept、注销或停机超时会作为错误返回给调用方。`run_with_shutdown` 只受传入的 future 控制；若 Server future 在注册资源被追踪后取消，只要承载它的 Tokio runtime 仍在运行，就会执行一次有界的后台注销补偿。
+停机先关闭 readiness 和 listener，再在同一个绝对 deadline 内并行注销 provider、通知 Hyper graceful shutdown 并排空在途请求。deadline 到达后会取消剩余工作并有界返回 `ServerError`，不会无限等待 task 回收。
 
-## Middleware
+## Wire V1
 
-客户端和服务端共用一个用户 trait，不需要注册宏、字符串 ID、`BoxFuture` 或自定义 terminal。
+Fusen V1：
 
-```rust,no_run
-use fusen_rs::{Middleware, Next, RpcContext, RpcResult};
-
-struct AuthMiddleware;
-
-impl Middleware for AuthMiddleware {
-    async fn handle<'a>(&'a self, mut context: RpcContext, next: Next<'a>) -> RpcResult {
-        context.metadata_mut().insert("tenant".into(), "acme".into());
-        next.run(context).await
-    }
-}
+```text
+POST /_fusen/v1/{service}/{method}
+Content-Type: application/fusen+json;version=1
+{"arguments":{"name":...}}
+{"result":...}
 ```
 
-全局 Middleware 先进入，服务局部 Middleware 后进入，退出顺序相反。客户端 Middleware 在 Router 与负载均衡之前执行，可以设置租户、灰度或一致性哈希 metadata；服务端 Middleware 在 HTTP 路由后执行。Middleware 可以不调用 `next`，直接返回错误或显式 `RpcResponse`。
+Spring Cloud V1 按方法声明的 HTTP method/path/query/body 映射传输 `application/json`，成功响应为 raw JSON；它是明确子集，不承诺完整 Spring MVC 兼容。
 
-完整请求日志和指标应使用 `InvocationObserver`。Observer 同步、按注册顺序执行，并恰好产生一次 finish；事件不会暴露 body、凭据或完整 headers。Future 取消时不保证 Middleware 后置代码执行，资源清理应使用 RAII。
+两种协议共享 `x-request-id`、`x-fusen-timeout-ms` 与 `x-fusen-attempt`。错误统一为 `application/problem+json`，包含 RFC 9457 字段及 `code`、`request_id`、`retryable`；内部 source 与 panic payload 永不进入 wire。
 
-## Cluster 扩展
+## 生产默认值
 
-高级客户端接口集中在 `client::cluster`：
+| 限制 | Client | Server |
+| --- | ---: | ---: |
+| 请求 deadline | 10 秒 | 最大 30 秒 |
+| 停机 deadline | 30 秒 | 30 秒 |
+| connect/startup | 3 秒 | 30 秒 |
+| registry operation | 5 秒 | 5 秒 |
+| 并发请求 | 1024 | 1024 |
+| endpoint 并发 attempt | 128 | - |
+| 单请求/响应 body | 各 2 MiB | 各 2 MiB |
+| 请求/响应全局字节预算 | 各 64 MiB | 各 64 MiB |
+| TCP 连接 | - | 2048 |
+| 单 H2 连接 stream | - | 128 |
 
-- `Router` 过滤或重排 `InstanceSnapshot`。
-- `LoadBalancer` 返回快照中的一个索引。
-- 默认负载均衡按已校验的 provider 权重随机选择。
+队列默认关闭。`QueueConfig::bounded(capacity)` 可显式启用有界队列，等待时间仍计入逻辑 deadline；其他 admission 与 byte budget 均 fail-fast。
 
-空快照、Router 清空结果和非法索引统一返回 `FusenError::ServiceUnavailable`。当前阶段不提供 retry、退避、熔断或多 attempt API。
+Byte budget 覆盖 runtime 持有的 decoded/encoded payload，以及 Hyper 消费或取消前的排队 body chunk。协议 framing、HPACK/H2 codec staging 和 OS socket buffer 是独立有界的 transport overhead，不计入 body budget。
 
-## 默认约束
+## Workspace
 
-- 客户端连接超时 3 秒，完整调用超时 10 秒
-- 发现和订阅清理超时 5 秒
-- H1 每个地址最多保留 128 条空闲连接，空闲 90 秒后回收
-- H2 每个地址默认一条连接，空闲 90 秒后回收，默认关闭 ping 保活
-- 请求与响应 body 上限 2 MiB
-- 服务端请求超时 30 秒
-- 请求并发 1024、连接 2048、单连接 HTTP/2 stream 128
-- 优雅停机共享总预算 30 秒、注册操作 5 秒
+| Crate | 职责 |
+| --- | --- |
+| `fusen-contract` | Service、Method、Protocol、Endpoint、Instance 等纯值对象 |
+| `fusen-register` | Registry SPI、生命周期 handle、Directory snapshot |
+| `fusen-config` | 静态解析与 last-good 热配置 |
+| `fusen-nacos` | Nacos Registry 和 ConfigSource adapter |
+| `fusen-observability` | Metrics SPI 与可选 telemetry adapter |
+| `fusen-procedural-macro` | 服务声明及客户端/服务端 wrapper 生成 |
+| `fusen-rs` | Client/Server runtime、Middleware、策略与明文 HTTP |
 
-这些值通过 `ClientConfig` 和 `ServerConfig` 配置。配置的 duration 和必要 pool size 必须大于零；H1 的 `max_idle_per_host` 可以为 0，表示关闭复用。非 2xx Problem Details 会还原为 `FusenError::Remote`。
-
-## 示例与压测
-
-```bash
-cargo run -p examples --bin host-server
-cargo run -p examples --bin host-client
-
-cargo run --release -p examples --bin host-server-pt
-PT_PROTOCOL=both PT_CONCURRENCY=1,100 PT_ROUNDS=5 \
-cargo run --release -p examples --bin host-client-pt
-```
-
-Nacos 示例使用 `NACOS_ADDR`，服务端还需要 `FUSEN_ADVERTISED_URL`。详见 [examples/README.md](examples/README.md) 和 [性能基线](docs/performance-baseline.md)。
+详见[架构](docs/architecture.md)、[模块契约](docs/modules/README.md)、[兼容性](docs/compatibility.md)与[示例](examples/README.md)。

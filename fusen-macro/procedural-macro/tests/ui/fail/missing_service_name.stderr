@@ -1,0 +1,5 @@
+error: service name is required: use `#[service(name = "...")]`
+ --> tests/ui/fail/missing_service_name.rs:4:7
+  |
+4 | trait UserService {
+  |       ^^^^^^^^^^^

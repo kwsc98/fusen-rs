@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "benchmark": "direct/fusen-v1",
+  "host_id": "fusen-0.9-reference-macos-arm64",
+  "source_ref": "the 0.9.0 clean-slate baseline commit containing this file",
+  "recorded_at": "2026-07-27T00:00:00+08:00",
+  "platform": "macOS 26.5 arm64",
+  "rust_toolchain": "1.97.0",
+  "required_runs": 5,
+  "threshold_percent": 10,
+  "median_mean_ns": 59829,
+  "median_p50_ns": 59583,
+  "median_p99_ns": 73667,
+  "successful_qps": 16714.97,
+  "samples": [
+    { "mean_ns": 60984, "p50_ns": 60417, "p99_ns": 75000 },
+    { "mean_ns": 60271, "p50_ns": 59583, "p99_ns": 75167 },
+    { "mean_ns": 59711, "p50_ns": 59584, "p99_ns": 73167 },
+    { "mean_ns": 59411, "p50_ns": 59167, "p99_ns": 73667 },
+    { "mean_ns": 59829, "p50_ns": 59375, "p99_ns": 73083 }
+  ]
+}

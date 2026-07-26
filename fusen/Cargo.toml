@@ -8,7 +8,7 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/fusen-rs"
-readme.workspace = true
+readme = "README.md"
 license-file.workspace = true
 
 
@@ -16,8 +16,9 @@ license-file.workspace = true
 fusen-procedural-macro.workspace = true
 fusen-contract.workspace = true
 fusen-register.workspace = true
+fusen-observability.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = [
     "rt",
@@ -28,15 +29,17 @@ tokio = { workspace = true, features = [
     "signal",
     "io-util",
 ] }
+tokio-util = { workspace = true, features = ["rt"] }
+futures-util.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 #网络协议处理
 http.workspace = true
+httpdate.workspace = true
 bytes.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
-hyper-tls = { workspace = true, features = ["alpn"] }
 hyper-util = { workspace = true, features = ["client-legacy", "server-auto", "tokio"] }
 rand.workspace = true
 urlencoding.workspace = true
@@ -49,3 +52,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 [[bench]]
 name = "invocation"
 harness = false
+
+[lints]
+workspace = true

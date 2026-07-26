@@ -4,15 +4,9 @@
 mod protocol;
 mod service;
 
-pub use protocol::WireProtocol;
+pub use protocol::{Idempotency, ProtocolSet, WireProtocol};
 pub use service::{
-    ContractError, Metadata, MethodDescriptor, MethodId, ParameterDescriptor, ParameterSource,
-    ServiceDescriptor, ServiceEndpoint, ServiceInstance, ServiceRegistration, ServiceSelector,
-    ServiceWeight,
+    ContractError, InstanceId, Metadata, MethodDescriptor, MethodId, ServiceDescriptor,
+    ServiceEndpoint, ServiceInstance, ServiceRegistration, ServiceSelector, ServiceWeight,
+    SpringCloudMethod, SpringCloudParameter, SpringCloudParameterSource,
 };
-
-/// Borrowing, sendable future used by object-safe asynchronous contracts.
-pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
-/// Owned, sendable future used by asynchronous contracts that do not borrow their caller.
-pub type StaticBoxFuture<T> = BoxFuture<'static, T>;

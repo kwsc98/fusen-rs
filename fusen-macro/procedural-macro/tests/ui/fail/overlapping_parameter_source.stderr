@@ -1,0 +1,5 @@
+error: Spring parameter `id` is declared more than once (already mapped as path)
+ --> tests/ui/fail/overlapping_parameter_source.rs:8:16
+  |
+8 |         body = "id"
+  |                ^^^^

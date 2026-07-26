@@ -1,0 +1,5 @@
+error: safe methods may use only GET or HEAD Spring mappings
+ --> tests/ui/fail/safe_post.rs:7:25
+  |
+7 |         spring(method = "POST", path = "/users")
+  |                         ^^^^^^

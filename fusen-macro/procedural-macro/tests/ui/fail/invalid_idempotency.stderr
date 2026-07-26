@@ -1,0 +1,5 @@
+error: idempotency must be one of `none`, `idempotent`, or `safe`
+ --> tests/ui/fail/invalid_idempotency.rs:5:52
+  |
+5 |     #[fusen_procedural_macro::method(idempotency = "automatic")]
+  |                                                    ^^^^^^^^^^^

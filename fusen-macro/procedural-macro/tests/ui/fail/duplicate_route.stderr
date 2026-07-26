@@ -1,0 +1,5 @@
+error: duplicate Spring route GET /users/{name}; it conflicts with method `by_id`
+ --> tests/ui/fail/duplicate_route.rs:9:14
+  |
+9 |     async fn by_name(&self, name: String) -> Result<(), RpcError>;
+  |              ^^^^^^^

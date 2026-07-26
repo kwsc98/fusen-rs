@@ -2,11 +2,14 @@
 name = "fusen-macro-renamed-runtime"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
 rpc = { package = "fusen-rs", path = "../../../fusen" }
-http.workspace = true
 
 [dev-dependencies]
 trybuild.workspace = true
+
+[lints]
+workspace = true

@@ -8,15 +8,13 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/fusen-procedural-macro"
-readme.workspace = true
+readme = "README.md"
 license-file.workspace = true
 
 [lib]
 proc-macro = true
 
 [dependencies]
-fusen-macro-support.workspace = true
-
 quote.workspace = true
 syn = { workspace = true, features = ["full", "visit"] }
 proc-macro2.workspace = true
@@ -24,3 +22,6 @@ proc-macro-crate.workspace = true
 
 [dev-dependencies]
 trybuild.workspace = true
+
+[lints]
+workspace = true

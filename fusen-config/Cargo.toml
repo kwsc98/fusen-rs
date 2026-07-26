@@ -8,7 +8,7 @@ description = "Typed static and hot configuration for fusen-rs"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/fusen-config"
-readme.workspace = true
+readme = "README.md"
 license-file.workspace = true
 
 [features]
@@ -16,8 +16,8 @@ default = []
 yaml = ["dep:serde_yaml_ng"]
 
 [dependencies]
-fusen-config-macro.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+futures-util.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 serde.workspace = true
 serde_yaml_ng = { workspace = true, optional = true }
 toml.workspace = true
@@ -26,3 +26,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

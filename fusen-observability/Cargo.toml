@@ -4,29 +4,19 @@ version = "0.9.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Tracing, logging, and OpenTelemetry setup for fusen-rs"
+description = "Backend-neutral metrics contracts and optional telemetry adapters for fusen-rs"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/fusen-observability"
-readme.workspace = true
+readme = "README.md"
 license-file.workspace = true
 
 [features]
 default = []
-otel = [
-    "dep:tracing-opentelemetry",
-    "dep:opentelemetry",
-    "dep:opentelemetry_sdk",
-    "dep:opentelemetry-otlp",
-]
+otel = ["dep:opentelemetry"]
 
 [dependencies]
-chrono.workspace = true
-serde.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
-tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
+
+[lints]
+workspace = true

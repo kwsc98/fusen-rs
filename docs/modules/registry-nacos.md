@@ -1,14 +1,32 @@
-# 注册发现与 Nacos 行为
+# 注册发现与 Nacos
 
-> English summary: discovery publishes atomic snapshots and Nacos implements
-> the workspace-owned Register contract.
+> English summary: synchronous prepare returns an owned lifecycle handle;
+> activate/close waiters are cancellation-safe and directory updates are latest-wins.
 
-`Register` 负责注册、摘除和订阅，全部错误必须可跨线程并可克隆。register/deregister 必须幂等；注册结果明确失败或因 timeout/cancellation 而不确定时，调用方可以对当前资源和已成功资源逆序补偿注销。
+## Registry SPI
 
-`fusen-nacos` 实现 `fusen-contract` 的 descriptor/selector/registration/instance 模型。`ServiceRegistration` 只在静态 descriptor 上附加 endpoint 与 weight；订阅目录只暴露经过健康、启用和正权重过滤的 `ServiceInstance`。
+`Registry` 只提供同步 `prepare_registration(...) -> RegistrationHandle` 与 `prepare_subscription(...) -> SubscriptionHandle`。Prepare 返回前，handle 已拥有 provider worker、远端资源身份和补偿状态；runtime 必须先追踪 handle，再等待 `activate().await`。
 
-发现快照通过 `directory_channel` 分离所有权：provider listener 独占 `DirectoryWriter`，消费者只能从 `Directory` 读取 `snapshot()` 或等待 `changed()`。最后一个 writer 释放后，`changed()` 返回 `DirectoryClosed`，消费者无法覆盖或注入地址。
+取消或 timeout 只取消当前 waiter，不取消 provider worker。Activation late success 且已无人等待时，worker 自动请求一次补偿 close。`close()` 幂等，并发调用共享唯一终态；Drop 只请求关闭。Provider activate/close panic 转为 `RegistryError`，补偿继续处理其他 handle。公开 API 不泄漏 Tokio channel、cleanup coordinator 或 Nacos SDK listener 类型。
 
-订阅关闭使用 `subscription_cleanup` 创建 caller `SubscriptionCloser` 和 provider `SubscriptionCleanup`。provider 在自己的 executor 上运行 cleanup future；并发 close 共享同一结果，取消等待者不取消 cleanup，task abort/panic 或 cleanup 未启动统一返回 `CleanupAborted`。`fusen-register` 本身不启动 Tokio task，固定本地订阅可在非 Tokio executor 中关闭。
+## Directory
 
-Nacos naming/config 均先安装 listener，再读取初始快照；初始化窗口内的事件采用 latest-wins，后续失败或取消由 setup guard 在后台移除 listener。unsubscribe task 持有原始 listener 和 DirectoryWriter，完成后目录进入关闭状态。Nacos 只发布 healthy、enabled、正权重实例，并用保留 metadata 保存 scheme、base path、service/version/group；IPv6 和 HTTPS 地址通过 URL API 重建。需要验证真实 Nacos 时，显式设置 `NACOS_ADDR`，并使用 `cargo test -p fusen-nacos --all-features live_nacos_ -- --ignored` 运行手工集成测试。
+`DirectorySnapshot` 包含严格递增的 `revision`、`observed_at`、`DirectoryState` 与 `Arc<[ServiceInstance]>`。状态为：
+
+- `Initializing`：尚无可用初始快照；
+- `Ready`：provider 当前可用；
+- `Stale`：使用有期限的 last-good 实例；
+- `Unavailable`：不可路由并 fail fast；
+- `Closed`：subscription 已到达终态。
+
+更新使用 watch/latest-wins；状态或实例变化才递增 revision。每个 selector/protocol 由唯一 supervisor 管理，旧 generation 的迟到更新会被隔离。关闭超时进入 quarantined，旧 close 未终止前禁止重叠订阅。
+
+## Nacos Adapter
+
+`NacosRegistry` 实现 Registry SPI，`NacosConfigSource` 实现热配置 SPI。Adapter 将 provider SDK 类型、listener 和执行器保持私有，并把 `FusenV1`/`SpringCloudV1`、稳定 `InstanceId`、明文 endpoint、group/version 与 metadata 映射到 Nacos。
+
+Naming 与 config setup 都先安装 listener，再读取初始值，消除查询与监听之间的丢更新窗口；初始化窗口内采用 latest-wins。Setup waiter 取消后，late success 自动移除 listener。Nacos 只发布 healthy、enabled、正权重实例。
+
+`NacosConfig` 字段私有，仅通过 builder/getter 访问；Debug 永远脱敏 password。Nacos provider 自身的控制面连接安全由 SDK/部署负责，不改变 core 只支持明文 RPC endpoint 的边界。
+
+真实 Nacos 验证使用唯一资源名并显式执行 ignored release-gate tests；日常单元测试使用 fake adapter 覆盖每个 await 点的取消与 finally cleanup。

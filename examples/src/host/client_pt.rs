@@ -1,3 +1,5 @@
+//! Direct HTTP/1.1 and h2c benchmark client.
+
 use std::{env, io, time::Instant};
 
 use examples::{DemoServiceClient, RequestDto};
@@ -26,8 +28,8 @@ impl BenchmarkProtocol {
 
     fn wire_protocol(self) -> WireProtocol {
         match self {
-            Self::Http1 => WireProtocol::SpringCloud,
-            Self::Http2 => WireProtocol::Fusen,
+            Self::Http1 => WireProtocol::SpringCloudV1,
+            Self::Http2 => WireProtocol::FusenV1,
         }
     }
 }
@@ -155,7 +157,7 @@ async fn warm_up(
         let client = client.clone();
         tasks.spawn(async move {
             client
-                .sayHelloV2(RequestDto {
+                .say_hello_v2(RequestDto {
                     str: REQUEST_VALUE.to_owned(),
                 })
                 .await
@@ -182,7 +184,7 @@ async fn run_benchmark(
             let mut stats = TaskStats::default();
             for _ in 0..requests_per_task {
                 match client
-                    .sayHelloV2(RequestDto {
+                    .say_hello_v2(RequestDto {
                         str: REQUEST_VALUE.to_owned(),
                     })
                     .await
@@ -266,7 +268,7 @@ fn print_result(config: &BenchmarkConfig, result: &BenchmarkResult, round: usize
         "  JSON body 吞吐率:    {:.2} MiB/s",
         result.throughput_mib()
     );
-    println!("  注: 字节统计不包含 HTTP 帧头、TCP/IP 或 TLS 开销");
+    println!("  注: 字节统计不包含 HTTP 帧头或 TCP/IP 开销");
 
     if let Some(error) = result.stats.first_error.as_deref() {
         println!("  首个请求错误:         {error}");

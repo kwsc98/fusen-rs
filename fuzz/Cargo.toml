@@ -1,0 +1,37 @@
+[package]
+name = "fusen-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+fusen-fuzz-support = { path = "../fuzz-support" }
+libfuzzer-sys = "0.4"
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[[bin]]
+name = "wire_codec"
+path = "fuzz_targets/wire_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spring_path"
+path = "fuzz_targets/spring_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "problem_details"
+path = "fuzz_targets/problem_details.rs"
+test = false
+doc = false
+bench = false

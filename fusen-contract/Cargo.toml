@@ -8,10 +8,13 @@ description = "Stable protocol and service registry contracts for fusen-rs"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/fusen-contract"
-readme.workspace = true
+readme = "README.md"
 license-file.workspace = true
 
 [dependencies]
 http.workspace = true
 thiserror.workspace = true
 url.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          components: rustfmt
+      - run: cargo +1.97.0 fmt --all --check
+      - run: cargo +1.97.0 fmt --manifest-path fuzz-support/Cargo.toml -- --check
+      - run: cargo +1.97.0 fmt --manifest-path fuzz/Cargo.toml -- --check
+
+  msrv:
+    name: msrv-clippy-test-doc
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.97.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo +1.97.0 test --locked --workspace --all-features
+      - run: cargo +1.97.0 test --locked --workspace --all-features --doc
+      - name: Build documentation without warnings
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo +1.97.0 doc --locked --workspace --all-features --no-deps
+
+  stable-os:
+    name: stable-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +stable test --locked --workspace --all-features
+
+  features:
+    name: feature-${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: config-minimal
+            command: cargo +1.97.0 check --locked -p fusen-config --no-default-features
+          - name: config-yaml
+            command: cargo +1.97.0 check --locked -p fusen-config --no-default-features --features yaml
+          - name: nacos-minimal
+            command: cargo +1.97.0 check --locked -p fusen-nacos --no-default-features
+          - name: nacos-yaml
+            command: cargo +1.97.0 check --locked -p fusen-nacos --no-default-features --features yaml
+          - name: observability-minimal
+            command: cargo +1.97.0 check --locked -p fusen-observability --no-default-features
+          - name: observability-otel
+            command: cargo +1.97.0 check --locked -p fusen-observability --no-default-features --features otel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
+      - run: ${{ matrix.command }}
+
+  release-contracts:
+    name: release-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.97.0 fetch --locked
+      - run: cargo +1.97.0 fetch --locked --manifest-path fuzz-support/Cargo.toml
+      - run: cargo +1.97.0 fetch --locked --manifest-path fuzz/Cargo.toml
+      - name: Enforce the plaintext dependency boundary
+        run: bash .github/scripts/check-dependency-policy.sh
+      - name: Enforce the clean-slate public API denylist
+        run: bash .github/scripts/check-public-api-denylist.sh
+      - name: Check repository-local Markdown links
+        run: python3 .github/scripts/check-markdown-links.py
+      - name: Lint fuzz support against private runtime sources
+        run: >-
+          cargo +1.97.0 clippy --locked --offline
+          --manifest-path fuzz-support/Cargo.toml
+          --all-targets -- -D warnings
+      - name: Compile the renamed-runtime macro consumer
+        run: cargo +1.97.0 test --locked --offline -p fusen-macro-renamed-runtime
+      - name: Run and record the release benchmark smoke sample
+        run: >-
+          python3 .github/scripts/run-benchmark-gate.py
+          --host-id ci-${RUNNER_OS}-${RUNNER_ARCH}
+          --runs 1
+          --output-dir target/benchmark-smoke
+      - name: Archive the benchmark smoke sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: target/benchmark-smoke
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Compile an external consumer from package archives
+        run: bash .github/scripts/check-package-consumer.sh
+
+  lifecycle-repeat:
+    name: lifecycle-repeat
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.97.0 fetch --locked
+      - name: Repeat deterministic readiness and lifecycle tests
+        env:
+          LIFECYCLE_REPEAT_COUNT: 20
+        run: bash .github/scripts/repeat-lifecycle-tests.sh
+
+  nacos-live:
+    name: nacos-live-container
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      nacos:
+        image: nacos/nacos-server:v2.4.3
+        env:
+          MODE: standalone
+          NACOS_AUTH_ENABLE: "false"
+          NACOS_SERVER_IP: 127.0.0.1
+        ports:
+          - 8848:8848
+          - 9848:9848
+          - 9849:9849
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.97.0 fetch --locked
+      - name: Wait for the Nacos readiness endpoint
+        shell: bash
+        run: |
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:8848/nacos/v1/console/health/readiness; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Nacos did not become ready within 120 seconds" >&2
+          exit 1
+      - name: Run non-empty live Nacos lifecycle tests
+        env:
+          NACOS_ADDR: 127.0.0.1:8848
+          NACOS_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash .github/scripts/run-live-nacos-tests.sh
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - run: bash .github/scripts/check-dependency-policy.sh
+      - run: cargo deny check advisories bans licenses sources
+      - run: cargo audit

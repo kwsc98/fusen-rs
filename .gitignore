@@ -1,4 +1,5 @@
 target/
+fuzz/artifacts/
 .idea/
 .vscode/
 log/

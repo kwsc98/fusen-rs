@@ -1,5 +1,0 @@
-error: route parameter id has no matching method parameter
- --> tests/ui/fusen_trait_unknown_path_parameter.rs:6:14
-  |
-6 |     async fn get(&self, name: String) -> String;
-  |              ^^^

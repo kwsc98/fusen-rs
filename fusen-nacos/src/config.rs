@@ -1,282 +1,400 @@
-use crate::NacosConfig;
+use crate::{NacosConfig, client_props, validate_application_name};
 use fusen_config::{
-    __private::{ConfigCloseFuture, ConfigLifecycle},
-    ConfigManager, ConfigResponse, Error, config_build,
+    ConfigDocument, ConfigError, ConfigErrorKind, ConfigFormat, ConfigFuture, ConfigHandle,
+    ConfigKey, ConfigOperation, ConfigPublisher, ConfigSource, prepare_config,
 };
-use nacos_sdk::api::{
-    config::{ConfigChangeListener, ConfigService, ConfigServiceBuilder},
-    props::ClientProps,
+use nacos_sdk::api::config::{
+    ConfigChangeListener, ConfigResponse, ConfigService, ConfigServiceBuilder,
 };
+use nacos_sdk::api::error::Error as NacosError;
 use std::sync::Arc;
-use tokio::sync::watch;
 
+const DEFAULT_GROUP: &str = "DEFAULT_GROUP";
+
+/// Nacos-backed hot configuration source.
 #[derive(Clone)]
-/// Shared Nacos configuration client.
-pub struct NacosConfiguration {
-    config_service: Arc<ConfigService>,
+pub struct NacosConfigSource {
+    client: Arc<dyn ConfigOperations>,
 }
 
-impl NacosConfiguration {
-    /// Connects a Nacos configuration client with optional authentication.
-    pub async fn init_nacos_configuration(config: Arc<NacosConfig>) -> Result<Self, Error> {
-        let props = ClientProps::new()
-            .server_addr(config.server_addr.clone())
-            .namespace(config.namespace.clone().unwrap_or_default())
-            .auth_username(config.username.clone().unwrap_or_default())
-            .auth_password(config.password.clone().unwrap_or_default());
-        let builder = ConfigServiceBuilder::new(props);
-        let builder = if config.username.is_some() {
+impl NacosConfigSource {
+    /// Connects a Nacos configuration client for one application.
+    ///
+    /// Configuration is validated before the SDK performs network I/O.
+    pub async fn connect(
+        application_name: impl Into<String>,
+        config: NacosConfig,
+    ) -> Result<Self, ConfigError> {
+        let application_name = application_name.into();
+        config.validate().map_err(|message| {
+            ConfigError::message(
+                ConfigOperation::Prepare,
+                ConfigErrorKind::InvalidInput,
+                message,
+            )
+        })?;
+        validate_application_name(&application_name).map_err(|message| {
+            ConfigError::message(
+                ConfigOperation::Prepare,
+                ConfigErrorKind::InvalidInput,
+                message,
+            )
+        })?;
+        let builder = ConfigServiceBuilder::new(client_props(&config, &application_name));
+        let builder = if config.username().is_some() {
             builder.enable_auth_plugin_http()
         } else {
             builder
         };
+        let service = builder
+            .build()
+            .await
+            .map_err(|error| provider_error(ConfigOperation::Prepare, error))?;
         Ok(Self {
-            config_service: Arc::new(builder.build().await.map_err(Error::config)?),
+            client: Arc::new(SdkConfigOperations {
+                service: Arc::new(service),
+            }),
         })
     }
+}
 
-    /// Reads and deserializes the current value for one data ID and group.
-    pub async fn get_config<T: serde::de::DeserializeOwned>(
+impl std::fmt::Debug for NacosConfigSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NacosConfigSource")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConfigSource for NacosConfigSource {
+    fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError> {
+        let data_id = key.name().to_owned();
+        let group = key.group().unwrap_or(DEFAULT_GROUP).to_owned();
+        let activate_client = self.client.clone();
+        let close_client = self.client.clone();
+
+        Ok(prepare_config(move |publisher| {
+            let listener: Arc<dyn ConfigChangeListener> = Arc::new(NacosConfigChangeListener {
+                data_id: data_id.clone(),
+                publisher,
+            });
+            let activate_data_id = data_id.clone();
+            let activate_group = group.clone();
+            let activate_listener = listener.clone();
+            (
+                async move {
+                    activate_client
+                        .add_listener(
+                            activate_data_id.clone(),
+                            activate_group.clone(),
+                            activate_listener,
+                        )
+                        .await?;
+                    activate_client.get(activate_data_id, activate_group).await
+                },
+                move || async move { close_client.remove_listener(data_id, group, listener).await },
+            )
+        }))
+    }
+}
+
+trait ConfigOperations: Send + Sync {
+    fn add_listener(
         &self,
-        data_id: &str,
-        group: &str,
-    ) -> Result<T, Error> {
-        config_build(self.get_config_response(data_id, group).await?)
-    }
-
-    async fn get_config_response(
-        &self,
-        data_id: &str,
-        group: &str,
-    ) -> Result<ConfigResponse, Error> {
-        let response = self
-            .config_service
-            .get_config(data_id.to_owned(), group.to_owned())
-            .await
-            .map_err(Error::config)?;
-        Ok(ConfigResponse {
-            content_type: response.content_type().to_owned(),
-            content: response.content().to_owned(),
-        })
-    }
-
-    /// Creates a latest-wins typed manager backed by a removable Nacos listener.
-    pub async fn get_config_manager<T: serde::de::DeserializeOwned + Send + Sync + 'static>(
-        &self,
-        data_id: &str,
-        group: &str,
-    ) -> Result<ConfigManager<T>, Error> {
-        let (sender, mut receiver) = watch::channel(None);
-        let listener = NacosConfigChangeListener { sender };
-        let listener: Arc<dyn ConfigChangeListener> = Arc::new(listener);
-        self.config_service
-            .add_listener(data_id.to_owned(), group.to_owned(), listener.clone())
-            .await
-            .map_err(Error::config)?;
-        let lifecycle = Arc::new(NacosConfigLifecycle::new(
-            self.config_service.clone(),
-            data_id.to_owned(),
-            group.to_owned(),
-            listener,
-        ));
-        let setup_guard = ConfigSetupGuard::new(lifecycle);
-        let fetched = self.get_config_response(data_id, group).await?;
-        let initial = config_build(select_initial_response(fetched, &mut receiver))?;
-        let manager = ConfigManager::build_hot_config(initial, receiver)?;
-        Ok(manager.with_lifecycle(setup_guard.disarm()))
-    }
-}
-
-fn select_initial_response(
-    fetched: ConfigResponse,
-    receiver: &mut watch::Receiver<Option<ConfigResponse>>,
-) -> ConfigResponse {
-    receiver.borrow_and_update().clone().unwrap_or(fetched)
-}
-
-struct NacosConfigChangeListener {
-    sender: watch::Sender<Option<ConfigResponse>>,
-}
-
-impl ConfigChangeListener for NacosConfigChangeListener {
-    fn notify(&self, response: nacos_sdk::api::config::ConfigResponse) {
-        self.sender.send_replace(Some(ConfigResponse {
-            content_type: response.content_type().to_owned(),
-            content: response.content().to_owned(),
-        }));
-    }
-}
-
-struct NacosConfigLifecycle {
-    cancel: watch::Sender<bool>,
-    result: watch::Receiver<Option<Result<(), Error>>>,
-}
-
-impl NacosConfigLifecycle {
-    fn new(
-        service: Arc<ConfigService>,
         data_id: String,
         group: String,
         listener: Arc<dyn ConfigChangeListener>,
-    ) -> Self {
-        let (cancel, mut receiver) = watch::channel(false);
-        let (result_sender, result) = watch::channel(None);
-        tokio::spawn(async move {
-            if !*receiver.borrow() {
-                let _ = receiver.changed().await;
-            }
-            let result = service
-                .remove_listener(data_id, group, listener)
-                .await
-                .map_err(Error::config);
-            result_sender.send_replace(Some(result));
-        });
-        Self { cancel, result }
-    }
+    ) -> ConfigFuture<()>;
+
+    fn get(&self, data_id: String, group: String) -> ConfigFuture<ConfigDocument>;
+
+    fn remove_listener(
+        &self,
+        data_id: String,
+        group: String,
+        listener: Arc<dyn ConfigChangeListener>,
+    ) -> ConfigFuture<()>;
 }
 
-impl ConfigLifecycle for NacosConfigLifecycle {
-    fn request_close(&self) {
-        self.cancel.send_replace(true);
+struct SdkConfigOperations {
+    service: Arc<ConfigService>,
+}
+
+impl ConfigOperations for SdkConfigOperations {
+    fn add_listener(
+        &self,
+        data_id: String,
+        group: String,
+        listener: Arc<dyn ConfigChangeListener>,
+    ) -> ConfigFuture<()> {
+        let service = self.service.clone();
+        Box::pin(async move {
+            service
+                .add_listener(data_id, group, listener)
+                .await
+                .map_err(|error| provider_error(ConfigOperation::Activate, error))
+        })
     }
 
-    fn close(&self) -> ConfigCloseFuture {
-        self.request_close();
-        let mut result = self.result.clone();
+    fn get(&self, data_id: String, group: String) -> ConfigFuture<ConfigDocument> {
+        let service = self.service.clone();
         Box::pin(async move {
-            loop {
-                if let Some(result) = result.borrow().clone() {
-                    return result;
-                }
-                result.changed().await.map_err(|_| {
-                    Error::config(std::io::Error::other(
-                        "Nacos config listener cleanup ended without a result",
-                    ))
-                })?;
-            }
+            let response = service
+                .get_config(data_id.clone(), group)
+                .await
+                .map_err(|error| provider_error(ConfigOperation::Activate, error))?;
+            document_from_response(response, &data_id, ConfigOperation::Activate)
+        })
+    }
+
+    fn remove_listener(
+        &self,
+        data_id: String,
+        group: String,
+        listener: Arc<dyn ConfigChangeListener>,
+    ) -> ConfigFuture<()> {
+        let service = self.service.clone();
+        Box::pin(async move {
+            service
+                .remove_listener(data_id, group, listener)
+                .await
+                .map_err(|error| provider_error(ConfigOperation::Close, error))
         })
     }
 }
 
-struct ConfigSetupGuard {
-    lifecycle: Option<Arc<NacosConfigLifecycle>>,
+fn provider_error(operation: ConfigOperation, error: NacosError) -> ConfigError {
+    let kind = match &error {
+        NacosError::InvalidParam(_, _) | NacosError::WrongServerAddress(_) => {
+            ConfigErrorKind::InvalidInput
+        }
+        NacosError::Serialization(_) => ConfigErrorKind::InvalidData,
+        _ => ConfigErrorKind::Unavailable,
+    };
+    ConfigError::new(operation, kind, error)
 }
 
-impl ConfigSetupGuard {
-    fn new(lifecycle: Arc<NacosConfigLifecycle>) -> Self {
-        Self {
-            lifecycle: Some(lifecycle),
-        }
-    }
+struct NacosConfigChangeListener {
+    data_id: String,
+    publisher: ConfigPublisher,
+}
 
-    fn disarm(mut self) -> Arc<NacosConfigLifecycle> {
-        self.lifecycle
-            .take()
-            .expect("setup lifecycle is present until disarmed")
+impl ConfigChangeListener for NacosConfigChangeListener {
+    fn notify(&self, response: ConfigResponse) {
+        let document = document_from_response(response, &self.data_id, ConfigOperation::Publish);
+        match document.and_then(|document| self.publisher.publish(document)) {
+            Ok(()) => {}
+            Err(error) => tracing::warn!(
+                error = %error,
+                data_id = %self.data_id,
+                "Nacos configuration update rejected"
+            ),
+        }
     }
 }
 
-impl Drop for ConfigSetupGuard {
-    fn drop(&mut self) {
-        if let Some(lifecycle) = &self.lifecycle {
-            lifecycle.request_close();
-        }
-    }
+fn document_from_response(
+    response: ConfigResponse,
+    data_id: &str,
+    operation: ConfigOperation,
+) -> Result<ConfigDocument, ConfigError> {
+    let format = ConfigFormat::from_name(response.content_type())
+        .or_else(|| {
+            std::path::Path::new(data_id)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .and_then(ConfigFormat::from_name)
+        })
+        .ok_or_else(|| {
+            ConfigError::message(
+                operation,
+                ConfigErrorKind::UnsupportedFormat,
+                format!(
+                    "Nacos resource {data_id:?} uses unsupported content type {:?}",
+                    response.content_type()
+                ),
+            )
+        })?;
+    Ok(ConfigDocument::new(format, response.content().to_owned()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde::Deserialize;
-    use std::time::Duration;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::sync::{Notify, oneshot};
 
-    #[derive(Deserialize)]
-    struct LiveConfig {
+    #[derive(Debug, Deserialize)]
+    struct Demo {
         value: String,
     }
 
-    fn response(value: &str) -> ConfigResponse {
-        ConfigResponse {
-            content_type: "toml".into(),
-            content: format!("value = '{value}'"),
+    fn response(data_id: &str, content_type: &str, content: &str) -> ConfigResponse {
+        ConfigResponse::new(
+            data_id.into(),
+            DEFAULT_GROUP.into(),
+            String::new(),
+            content.into(),
+            content_type.into(),
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn format_uses_content_type_then_data_id_extension() {
+        let explicit = document_from_response(
+            response("settings.data", "toml", "value = 'ok'"),
+            "settings.data",
+            ConfigOperation::Activate,
+        )
+        .unwrap();
+        assert_eq!(explicit.format(), ConfigFormat::Toml);
+
+        let inferred = document_from_response(
+            response("settings.yaml", "text", "value: ok"),
+            "settings.yaml",
+            ConfigOperation::Activate,
+        )
+        .unwrap();
+        assert_eq!(inferred.format(), ConfigFormat::Yaml);
+    }
+
+    #[test]
+    fn unknown_format_is_rejected_without_exposing_content() {
+        let error = document_from_response(
+            response("settings.data", "xml", "<password>secret</password>"),
+            "settings.data",
+            ConfigOperation::Activate,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ConfigErrorKind::UnsupportedFormat);
+        assert!(!error.to_string().contains("secret"));
+    }
+
+    #[derive(Clone)]
+    struct ControlledConfig {
+        listener_ready: Arc<Notify>,
+        listener: Arc<Mutex<Option<Arc<dyn ConfigChangeListener>>>>,
+        fetch_release: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+        removals: Arc<AtomicUsize>,
+    }
+
+    impl ConfigOperations for ControlledConfig {
+        fn add_listener(
+            &self,
+            _data_id: String,
+            _group: String,
+            listener: Arc<dyn ConfigChangeListener>,
+        ) -> ConfigFuture<()> {
+            let provider = self.clone();
+            Box::pin(async move {
+                *provider.listener.lock().unwrap() = Some(listener);
+                provider.listener_ready.notify_one();
+                Ok(())
+            })
+        }
+
+        fn get(&self, _data_id: String, _group: String) -> ConfigFuture<ConfigDocument> {
+            let receiver = self.fetch_release.lock().unwrap().take().unwrap();
+            Box::pin(async move {
+                let _ = receiver.await;
+                Ok(ConfigDocument::new(
+                    ConfigFormat::Toml,
+                    "value = 'stale-fetch'",
+                ))
+            })
+        }
+
+        fn remove_listener(
+            &self,
+            _data_id: String,
+            _group: String,
+            _listener: Arc<dyn ConfigChangeListener>,
+        ) -> ConfigFuture<()> {
+            let removals = self.removals.clone();
+            Box::pin(async move {
+                removals.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
         }
     }
 
-    #[test]
-    fn listener_update_wins_over_older_initial_fetch() {
-        let (sender, mut receiver) = watch::channel(None);
-        sender.send_replace(Some(response("latest")));
-        let selected = select_initial_response(response("stale"), &mut receiver);
-        assert_eq!(selected.content, "value = 'latest'");
-    }
-
-    #[test]
-    fn latest_initialization_update_wins() {
-        let (sender, mut receiver) = watch::channel(None);
-        sender.send_replace(Some(response("old")));
-        sender.send_replace(Some(response("latest")));
-        let selected = select_initial_response(response("stale"), &mut receiver);
-        assert_eq!(selected.content, "value = 'latest'");
+    fn controlled_source() -> (NacosConfigSource, ControlledConfig, oneshot::Sender<()>) {
+        let (fetch_sender, fetch_receiver) = oneshot::channel();
+        let provider = ControlledConfig {
+            listener_ready: Arc::new(Notify::new()),
+            listener: Arc::new(Mutex::new(None)),
+            fetch_release: Arc::new(Mutex::new(Some(fetch_receiver))),
+            removals: Arc::new(AtomicUsize::new(0)),
+        };
+        (
+            NacosConfigSource {
+                client: Arc::new(provider.clone()),
+            },
+            provider,
+            fetch_sender,
+        )
     }
 
     #[tokio::test]
-    #[ignore = "requires NACOS_ADDR and a manually managed Nacos server"]
-    async fn live_nacos_config_updates_and_listener_close_when_configured() {
-        let server_addr = std::env::var("NACOS_ADDR")
-            .expect("set NACOS_ADDR before running the ignored Nacos integration test");
-        let configuration = NacosConfiguration::init_nacos_configuration(Arc::new(NacosConfig {
-            server_addr,
-            ..Default::default()
-        }))
-        .await
-        .unwrap();
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+    async fn listener_update_wins_over_an_older_initial_fetch() {
+        let (source, provider, fetch_sender) = controlled_source();
+        let handle = source
+            .prepare(ConfigKey::new("settings.toml").unwrap())
+            .unwrap();
+        let activation = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.activate().await }
+        });
+        provider.listener_ready.notified().await;
+        provider
+            .listener
+            .lock()
             .unwrap()
-            .as_nanos();
-        let data_id = format!("fusen-live-{unique}.toml");
-        let group = "DEFAULT_GROUP".to_owned();
+            .as_ref()
+            .unwrap()
+            .notify(response(
+                "settings.toml",
+                "toml",
+                "value = 'listener-update'",
+            ));
+        fetch_sender.send(()).unwrap();
+        activation.await.unwrap().unwrap();
 
-        configuration
-            .config_service
-            .publish_config(
-                data_id.clone(),
-                group.clone(),
-                "value = 'initial'".into(),
-                Some("toml".into()),
-            )
-            .await
-            .unwrap();
-        let mut manager = configuration
-            .get_config_manager::<LiveConfig>(&data_id, &group)
-            .await
-            .unwrap();
-        assert_eq!(manager.get_hot_config().value, "initial");
+        let hot = handle.typed::<Demo>().unwrap();
+        assert_eq!(hot.current().value, "listener-update");
+        hot.close().await.unwrap();
+        assert_eq!(provider.removals.load(Ordering::SeqCst), 1);
+    }
 
-        configuration
-            .config_service
-            .publish_config(
-                data_id.clone(),
-                group.clone(),
-                "value = 'updated'".into(),
-                Some("toml".into()),
-            )
-            .await
+    #[tokio::test]
+    async fn cancelled_activation_waiter_still_removes_the_listener_once() {
+        let (source, provider, fetch_sender) = controlled_source();
+        let handle = source
+            .prepare(ConfigKey::new("settings.toml").unwrap())
             .unwrap();
-        let updated = tokio::time::timeout(Duration::from_secs(10), manager.changed())
-            .await
-            .expect("Nacos config listener did not update before the deadline")
-            .unwrap();
-        assert_eq!(updated.value, "updated");
+        let waiter = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.activate().await }
+        });
+        provider.listener_ready.notified().await;
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
 
-        tokio::time::timeout(Duration::from_secs(10), manager.close())
-            .await
-            .expect("Nacos config listener did not close before the deadline")
-            .unwrap();
-        configuration
-            .config_service
-            .remove_config(data_id, group)
-            .await
-            .unwrap();
+        let closing = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.close().await }
+        });
+        fetch_sender.send(()).unwrap();
+        closing.await.unwrap().unwrap();
+        assert_eq!(provider.removals.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            handle.activate().await.unwrap_err().kind(),
+            ConfigErrorKind::Cancelled
+        );
     }
 }

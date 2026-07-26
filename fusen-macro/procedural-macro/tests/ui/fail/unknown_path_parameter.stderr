@@ -1,0 +1,5 @@
+error: path parameter `id` has no matching method parameter
+ --> tests/ui/fail/unknown_path_parameter.rs:5:68
+  |
+5 |     #[fusen_procedural_macro::method(spring(method = "GET", path = "/users/{id}"))]
+  |                                                                    ^^^^^^^^^^^^^

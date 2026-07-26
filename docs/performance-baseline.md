@@ -1,55 +1,58 @@
-# 开发期性能基线
+# 0.9 性能基线
 
-性能验证分为进程内微基准和端到端 HTTP 压测。共享 CI 不设置耗时硬门槛；同机、同工具链、同负载比较时，重构后的 median QPS 或吞吐不得比重构前回退超过 5%。
+0.9 clean-slate 不把重构前的内部微基准当作发布基线。首个 baseline 由 `0.9.0` release candidate 的 direct、single-attempt、无日志真实 socket 场景建立，并与最终 tag 一起归档。
 
-## 微基准
+## Release Gate
 
-运行：
+同一机器、Rust 1.97、相同 release profile、相同 CPU 电源策略和相同 payload 下，对候选提交至少重复 5 轮，分别记录 p50/p99 latency、成功 QPS、错误数和应用层 JSON bytes。相对当前 0.9 baseline，direct single-attempt benchmark 的 p50 或 p99 不得回退超过 10%。参考机器由稳定 host id 与 self-hosted runner label 绑定；GitHub hosted runner 的结果只做 smoke artifact，禁止跨机器套用绝对延迟 baseline。
+
+比较必须满足：
+
+- Direct endpoint，单 logical invocation，关闭 retry 与外部 registry；
+- 分别测试并发 1 与 100，至少覆盖小 payload 和 64 KiB payload；
+- 服务端与客户端固定在同一组 CPU/网络条件，关闭逐请求日志与 exporter；
+- 所有请求成功，permit、连接与 task 数量在测试后回到稳定值；
+- 报告 before/after commit、操作系统、CPU、Rust 版本、命令、原始结果和中位数；
+- 没有可执行 baseline 时不得声称通过回退门槛，应先建立并归档 baseline。
+
+## E2E 命令
+
+主 release benchmark 使用真实 loopback h2c socket，并直接报告 mean/p50/p99。正式 gate 运行五轮、保存逐轮 log 与 summary，并校验 committed baseline：
 
 ```bash
-cargo bench --locked -p fusen-rs --bench invocation
+python3 .github/scripts/run-benchmark-gate.py \
+  --host-id fusen-0.9-reference-macos-arm64 \
+  --runs 5 \
+  --baseline .github/benchmarks/fusen-0.9-reference-macos-arm64.json \
+  --output-dir target/release-benchmark-gate
 ```
 
-基准覆盖 0/1/4/8 个空 middleware、0/1 个 Observer 回调、客户端声明序号分派，以及 1 KiB/64 KiB JSON request encode/decode。结果报告 `ns/op` 和 `ops/s`；正式对比应固定 CPU 电源策略、关闭逐请求日志，并至少重复 5 次关注中位数。
+只查看单轮原始输出时仍可直接运行 `cargo +1.97.0 bench --locked -p fusen-rs --bench invocation`。机器可读行固定为 `direct/fusen-v1 iterations=... mean_ns=... p50_ns=... p99_ns=...`，gate 要求每轮恰好一行且所有数值为正。
 
-## HTTP 压测
-
-先启动无日志服务端，再运行客户端矩阵：
+双协议吞吐与成功率矩阵使用 examples runner：
 
 ```bash
-cargo run --release -p examples --bin host-server-pt
-PT_PROTOCOL=both PT_CONCURRENCY=1,100 PT_ROUNDS=5 \
+cargo +1.97.0 run --release -p examples --bin host-server-pt
+
+PT_PROTOCOL=both \
+PT_CONCURRENCY=1,100 \
+PT_ROUNDS=5 \
 PT_REQUESTS_PER_TASK=10000 \
-cargo run --release -p examples --bin host-client-pt
+cargo +1.97.0 run --release -p examples --bin host-client-pt
 ```
 
-客户端逐轮报告成功/失败、QPS 和 JSON body 吞吐，并按协议与并发度输出中位数。HTTP/1.1 与 HTTP/2 顺序执行；字节统计不包含 HTTP framing、TCP/IP 或 TLS。比较前后版本时必须使用相同 Rust 版本、release profile、机器、服务地址和环境变量。
+`PT_PROTOCOL=h2` 测试 `FusenV1`，`PT_PROTOCOL=h1` 测试 `SpringCloudV1`。统计的 JSON bytes 不包含 HTTP framing、HPACK 或 TCP/IP；需要线速数据时使用独立 socket/packet instrumentation，不修改稳定 wire。
 
-## 当前开发节点记录
+## Baseline Record
 
-2026-07-24 在 arm64 macOS 26.5、Rust/Cargo 1.97.0 上完成本轮质量改造后连续运行 5 次，以下为 `ns/op` 中位数。chain 数值包含每次构造 `RpcContext`；Observer 数值只测同步回调 fan-out。变化比例相对同机、同工具链和同负载的上一份开发节点记录计算；`ns/op` 为负值表示更快。
+0.9 reference baseline 的机器可读记录保存在 [`.github/benchmarks/fusen-0.9-reference-macos-arm64.json`](../.github/benchmarks/fusen-0.9-reference-macos-arm64.json)。数据来自同一 macOS 26.5 arm64 参考机器、Rust 1.97.0、release profile 的连续五轮真实 loopback h2c 测量；baseline 文件与产生它的 0.9 clean-slate commit 一起冻结。
 
-| Case | Current median | Previous median | Change |
-| --- | ---: | ---: | ---: |
-| chain: 0 middleware | 126.76 ns | 161.05 ns | -21.3% |
-| chain: 1 middleware | 199.29 ns | 204.81 ns | -2.7% |
-| chain: 4 middleware | 392.37 ns | 394.80 ns | -0.6% |
-| chain: 8 middleware | 624.54 ns | 632.66 ns | -1.3% |
-| observer fan-out: 0 | 0.33 ns | 0.33 ns | 0.0% |
-| observer fan-out: 1 | 2.24 ns | 2.27 ns | -1.3% |
-| client dispatch: `MethodId` index | 0.96 ns | 9.72 ns | -90.1% |
-| codec encode: 1 KiB | 1133.66 ns | 1133.15 ns | +0.0% |
-| codec decode: 1 KiB | 727.68 ns | 722.09 ns | +0.8% |
-| codec encode: 64 KiB | 24246.54 ns | 24757.42 ns | -2.1% |
-| codec decode: 64 KiB | 11873.54 ns | 11915.92 ns | -0.4% |
+| Commit | Platform | Protocol | Payload | Concurrency | p50 | p99 | QPS | Errors |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline file commit | macOS 26.5 arm64 | Fusen V1 | small | 1 | 59,583 ns | 73,667 ns | 16,714.97 | 0 |
 
-端到端矩阵使用 release server/client、每任务 10,000 次 RPC、每组 5 轮，所有请求均成功：
+五轮 p50 为 `60,417 / 59,583 / 59,584 / 59,167 / 59,375 ns`，p99 为 `75,000 / 75,167 / 73,167 / 73,667 / 73,083 ns`。发布比较使用各列中位数，单轮 outlier 不直接决定 gate；任何一列中位数超过 baseline 的 110% 仍会失败。
 
-| Protocol | Concurrency | Median QPS | Previous QPS | QPS change | JSON throughput |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| HTTP/1.1 | 1 | 22,496.98 | 22,498.34 | +0.0% | 0.99 MiB/s |
-| HTTP/1.1 | 100 | 115,354.61 | 116,195.83 | -0.7% | 5.06 MiB/s |
-| HTTP/2 | 1 | 13,590.27 | 13,789.70 | -1.4% | 0.60 MiB/s |
-| HTTP/2 | 100 | 34,136.38 | 34,699.06 | -1.6% | 1.50 MiB/s |
+Spring Cloud V1 的吞吐/成功率矩阵与大 payload 数据作为同一 release artifact 归档；扩展为稳定 latency gate 前，必须先为该 case 建立可重复 baseline。
 
-本轮所有中位数变化均未超过 5% 回退门槛，端到端请求全部成功。这些数字是当前开发节点的基线，不代表 HTTP/1.1 与 HTTP/2 的普遍性能关系。后续比较必须记录前后 commit，并复用相同机器、工具链、协议顺序与环境变量；没有可执行的旧构建时不能声称满足或违反 5% 回退门槛。
+Retry、breaker、admission、codec 和 middleware 可以增加独立 microbench，但不能代替真实 H1/H2 release gate。Benchmark 代码不得暴露私有 transport/codec API 只为方便测量。

@@ -1,5 +1,0 @@
-error: RPC routes must not contain a query string or fragment
- --> tests/ui/fusen_trait_invalid_route.rs:6:14
-  |
-6 |     async fn call(&self) -> String;
-  |              ^^^^

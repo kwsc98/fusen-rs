@@ -1,23 +1,22 @@
-use fusen_rs::{InvocationFinish, InvocationObserver, InvocationStart};
+//! Minimal application-owned tracing backend and metrics sink.
+
+use fusen_observability::{MetricEvent, MetricsRecorder};
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
-pub struct LogObserver;
+/// Logs low-cardinality runtime metric events through `tracing`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LogMetricsRecorder;
 
-impl InvocationObserver for LogObserver {
-    fn on_start(&self, _event: &InvocationStart<'_>) {}
-
-    fn on_finish(&self, event: &InvocationFinish<'_>) {
-        info!(
-            side = ?event.side,
-            request_id = event.request_id,
-            service = event.service,
-            method = event.method,
-            phase = ?event.phase,
-            outcome = ?event.outcome,
-            status = event.http_status.map(|status| status.as_u16()),
-            error_code = event.error_code,
-            elapsed_ms = event.elapsed.as_millis(),
-            "request completed"
-        );
+impl MetricsRecorder for LogMetricsRecorder {
+    fn record(&self, event: &MetricEvent<'_>) {
+        info!(?event, "runtime metric");
     }
+}
+
+/// Installs a process-wide formatting subscriber with an environment override.
+pub fn init_tracing(default_filter: &str) {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }

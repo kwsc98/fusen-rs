@@ -1,5 +1,0 @@
-error: attribute `id` must be a string literal
- --> tests/ui/fusen_trait_invalid_attribute.rs:3:20
-  |
-3 | #[fusen_trait(id = concat!("one", "two"))]
-  |                    ^^^^^^^^^^^^^^^^^^^^^

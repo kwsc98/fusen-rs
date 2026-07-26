@@ -1,5 +1,0 @@
-error: attribute fields must use `name = value` syntax
- --> tests/ui/fusen_trait_bare_attribute.rs:3:15
-  |
-3 | #[fusen_trait(id)]
-  |               ^^

@@ -1,0 +1,5 @@
+error: Spring HEAD mappings must return `Result<(), RpcError>` because HEAD responses have no body
+ --> tests/ui/fail/head_requires_unit.rs:9:28
+  |
+9 |     async fn health(&self) -> Result<String, RpcError>;
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^

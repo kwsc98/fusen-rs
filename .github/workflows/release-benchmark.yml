@@ -1,0 +1,39 @@
+name: Release Benchmark Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  invocation-regression:
+    name: release-benchmark-10pct
+    runs-on: [self-hosted, fusen-benchmark-0-9-reference]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.97.0 fetch --locked
+      - name: Run five same-host samples and enforce the committed baseline
+        run: >-
+          python3 .github/scripts/run-benchmark-gate.py
+          --host-id fusen-0.9-reference-macos-arm64
+          --runs 5
+          --baseline .github/benchmarks/fusen-0.9-reference-macos-arm64.json
+          --output-dir target/release-benchmark-gate
+      - name: Archive raw samples and comparison summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-benchmark-${{ github.sha }}
+          path: target/release-benchmark-gate
+          if-no-files-found: error
+          retention-days: 90

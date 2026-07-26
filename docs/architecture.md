@@ -1,49 +1,117 @@
-# 架构与调用链
+# Fusen 0.9 架构
 
-## 边界
+## 总体模型
 
-workspace 将稳定契约、注册发现、配置、Nacos、可观测性、RPC runtime 和过程宏分开。`fusen-contract` 定义唯一的 `ServiceDescriptor` 以及 selector/registration/instance/endpoint；`fusen-register` 只定义注册发现和不可变 `Directory` 快照；具体集成分别位于 `fusen-config`、`fusen-nacos` 与 `fusen-observability`。
-
-## Invoker 模型
-
-调用链借鉴 Dubbo 的 Invocation/Cluster/Protocol/Service 分层，但使用 Rust 静态描述、显式上下文和消费型 pipeline：
+0.9 将客户端和服务端视为拥有明确终态的 runtime，而不是一组可独立拼装的 transport helper。
 
 ```text
-ClientRuntime
-  -> InvocationObserver
-  -> Client Middleware
-  -> ClusterInvoker
-       -> Router -> LoadBalancer
-       -> HTTP encode/send/decode
-
-Server
-  -> InvocationObserver
-  -> admission -> decode -> route
-  -> Provider Middleware
-  -> MethodId service dispatch
-  -> encode
+ClientRuntime / Server runtime
+├── Lifecycle supervisor
+├── Control plane
+│   ├── Registry handles
+│   ├── Subscription supervisor
+│   └── Readiness / stale state
+├── Data plane
+│   ├── Admission / byte budgets
+│   ├── Middleware / service
+│   └── Plain HTTP transport
+└── LogicalInvocation
+    └── AttemptExecutor
+        ├── Router / LoadBalancer
+        ├── Retry budget
+        └── Endpoint + service circuit breaker
 ```
 
-没有 ThreadLocal RpcContext、字符串 attachment、动态 SPI 或可重复 Filter 调用。`RpcContext` 显式携带 request ID、静态 service/method、绝对 deadline、headers、metadata 与类型化 extensions。`Next` 借用不可变 Middleware slice 和私有 terminal，消费自身后才能进入下游。
+生命周期 supervisor 是资源的唯一所有者。调用者等待 activation、close 或 shutdown 时可以取消自己的 waiter，但不会夺走 provider worker 或 coordinator 的所有权。Transport、Codec、Acceptor、连接池和内部失败分类均不属于公开扩展面。
 
-## 静态描述与分派
+## Crate 边界
 
-`fusen_trait` 通过 `OnceLock` 初始化一份进程生命周期 `ServiceDescriptor`。每个方法按 trait 声明顺序获得 `MethodId(u16)`；客户端、服务端和注册信息引用同一描述对象。生成客户端直接按 ID 取静态描述，服务端隐藏 dispatch 使用整数 match 调用实现方法。
+依赖方向固定为纯值对象 -> SPI -> adapter/runtime -> application：
 
-服务端启动时为每条 HTTP route 预绑定 `&'static MethodDescriptor + Middleware slice + service invoker`，请求热路径不查 service HashMap、不比较方法名、不重建路径元数据。
+| Crate | 职责 |
+| --- | --- |
+| `fusen-contract` | 无 executor 依赖的 service/method/protocol/endpoint/instance 值对象 |
+| `fusen-register` | `Registry`、registration/subscription handle 与 `DirectorySnapshot` |
+| `fusen-config` | 静态解析、last-good 热配置及显式关闭 |
+| `fusen-nacos` | Nacos naming/config provider adapter |
+| `fusen-observability` | 同步非阻塞 `MetricsRecorder` 及可选 backend adapter |
+| `fusen-procedural-macro` | `service`/`method` 解析和 wrapper 生成 |
+| `fusen-rs` | Client、Server、策略、Middleware 与明文 HTTP runtime |
 
-## Cluster
+Core 不依赖 Nacos、TLS、OpenSSL、进程级 tracing subscriber 或 OTel backend。宏生成代码只通过隐藏的 `fusen_rs::__macro` ABI 使用 runtime internals。
 
-客户端 Middleware 在 ClusterInvoker 之前执行。未配置 Router 时，`InstanceSnapshot` 直接包住 Nacos `Arc<Vec<_>>`；Router 可以按顺序过滤或重排。调用链固定执行一次 LoadBalancer 和一次 transport，默认 `WeightedRandom` 返回一个索引；空结果和非法索引统一为 `ServiceUnavailable`。
+## 逻辑调用与 Attempt
 
-## 生命周期与期限
+客户端一次调用固定执行：
 
-客户端入口与服务端并发准入前创建 `InvocationGuard`。Observer 按注册顺序同步通知，每次调用恰好一次 finish，包含 side、request ID、service/method、阶段、耗时、HTTP 状态、错误 code 和 Success/Error/Timeout/Cancelled，不包含 body、凭据或完整 headers。
+```text
+logical admission + tracing
+-> Middleware exactly once
+-> freeze replayable RequestTemplate
+-> service circuit breaker
+-> AttemptExecutor
+   -> latest DirectorySnapshot
+   -> Router -> breaker filter -> LoadBalancer
+   -> endpoint bulkhead
+   -> send / decode
+   -> AttemptOutcome -> retry decision / backoff
+-> one logical terminal outcome
+```
 
-客户端一个绝对 deadline 覆盖参数构造、Middleware、快照、Cluster、连接和响应 decode。服务端一个绝对 deadline 覆盖 admission、decode、route、Middleware、service 与 encode。Future 被丢弃时 guard 报告 Cancelled；Middleware 后置代码不保证运行，资源释放必须依靠 RAII。
+Middleware 包围整个逻辑调用，而不是每次 attempt。一个 absolute deadline 覆盖排队、Middleware、全部 attempts、退避与 decode。每次 attempt 重新读取发现快照；只要仍有未尝试 endpoint，就不能重复选择本次调用中已失败的 endpoint。调用方取消会直接取消当前 attempt，不产生 detached retry。
 
-## 所有权与停机
+Endpoint breaker 记录真实 attempt；service breaker 只记录逻辑调用的最终结果。序列化、无实例、本地 admission、普通 4xx、Application error 和调用方取消不污染 breaker。自定义 `RetryPolicy` 仍受幂等性、三次 attempt、deadline 和 token budget 的硬上限约束。
 
-`ClientRuntime` 统一拥有连接池、注册中心、全局 Middleware、Observer、订阅管理器和关闭状态。相同 selector/protocol 的 discovery client 共享 Directory 与 listener；最后一个 client lease 释放时后台关闭订阅。`shutdown()` 与并发 connect 原子交接所有权并强制清理全部 entry，Drop 只做后台兜底。Direct client 不进入订阅管理器。
+HTTP/wire 成功但 typed `result` 无法解码时，调用以非重试的 `DataLoss`/`invalid_result` 结束；selected endpoint attempt 和 service 最终结果均记录为 `Protocol` failure。这类响应说明远端契约或部署版本已失配，属于健康度信号而不是本地序列化错误。
 
-服务端先校验、绑定并事务化注册；注册失败按相反顺序回滚。停机先停止 accept，在同一总期限内摘除服务并排空连接。
+## 服务端请求管线
+
+服务端执行顺序固定为：
+
+```text
+protocol / request-id / deadline / readiness
+-> route head
+-> fail-fast admission
+-> content-type / content-length
+-> byte budget + body read / decode
+-> Middleware / service
+-> bounded response encode
+```
+
+因此未知路由、not-ready、draining、非法 head 和已知超限 `Content-Length` 都不会 poll body。请求 guard 至少持有到 decode 完成；响应 byte permit 由 HTTP body 和 Hyper 排队中的 payload 持有，直到 transport 消费或取消。Byte budget 约束 runtime 持有及排队的 body payload；HTTP framing、HPACK/H2 codec 和 OS socket buffer 是独立有界的 transport overhead，不计入 body budget。框架错误使用独立的最大 4 KiB 应急编码路径。
+
+## Control Plane
+
+`Registry::prepare_registration` 和 `prepare_subscription` 同步返回已拥有 worker 与补偿状态的 handle。Runtime 先追踪 handle，再等待 `activate()`。Late success 若已经没有 waiter，会自动执行一次补偿关闭；`close()` 幂等且并发调用共享同一终态。
+
+发现按 `(ServiceSelector, WireProtocol)` 共享唯一 supervisor。状态流为：
+
+```text
+Absent -> Starting -> Active -> Stale -> Closing -> Absent
+                                  \-> Quarantined
+```
+
+旧 generation 未关闭前不能创建重叠订阅。关闭超时进入 `Quarantined`，新连接立即失败；只有后台 worker 到达终态后才能恢复。Directory 更新 latest-wins，状态或实例发生变化时 revision 严格递增。
+
+## 生命周期
+
+Client：
+
+```text
+Running -> Draining(deadline) -> Closed(result)
+```
+
+Server：
+
+```text
+Constructed -> Validated -> Bound -> AcceptingNotReady
+            -> Registering -> Ready -> Draining -> Stopped
+```
+
+Client shutdown 先线性化关闭 admission，再并行排空逻辑调用、关闭订阅和连接池。Server bind 后即启动 accept loop，但 Ready 前拒绝业务请求；注册完成后 `start()` 才返回。停机先关闭 readiness 与 listener，再并行注销、通知连接 graceful shutdown 并排空请求。两者都使用唯一共享 deadline，取消 waiter 不取消后台 coordinator。
+
+## Panic 与可观测性
+
+发布 profile 使用 `panic=unwind`。Middleware、service、Router、LoadBalancer、RetryPolicy 和 `MetricsRecorder` 分别隔离：请求扩展 panic 只终止当前请求；单个 H2 stream panic 不关闭同连接其他 stream；registry activation/close panic 转成生命周期错误并继续补偿；metrics recorder 首次 panic 后被原子禁用。
+
+Core 直接产生结构化 tracing span/event，应用负责安装 subscriber。Metrics callback 必须同步且非阻塞，label 禁止包含 request ID、endpoint、错误文本、body、完整 headers 或凭据。同步死循环和阻塞无法被 async timeout 抢占，扩展实现应将阻塞工作移到 `spawn_blocking`。

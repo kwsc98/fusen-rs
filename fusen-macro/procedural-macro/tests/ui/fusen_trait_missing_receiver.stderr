@@ -1,5 +1,0 @@
-error: RPC methods must have an immutable `&self` receiver
- --> tests/ui/fusen_trait_missing_receiver.rs:5:5
-  |
-5 |     async fn call(value: String) -> String;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

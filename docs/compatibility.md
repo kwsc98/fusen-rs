@@ -1,7 +1,15 @@
 # 兼容性策略
 
-`0.9.0` 发布前属于开发节点，公开 Rust API 可以直接破坏性调整，不承诺兼容层或迁移指南。正式发布后，0.x 的 minor 版本可引入破坏性变更，patch 版本不得主动破坏公开 Rust API 或已声明的线协议。
+`0.9.0` 是 fusen-rs 的第一个兼容性 baseline。它发布前的开发提交不提供 API、宏、配置或 wire 迁移兼容；仓库不保留 alias、deprecated facade、旧 decoder 或公开版本过渡模块。
 
-从 0.9 开始，Fusen JSON HTTP/2 和 SpringCloud JSON HTTP/1.1 子集是受支持协议。SpringCloud 子集包括路径/query 参数和最多一个 JSON request body；不声明完整 Spring MVC 注解兼容。未在协议测试中覆盖的能力不得出现在 README 功能列表。MSRV 为 Rust 1.97，提升 MSRV 属于 minor 变更。
+`0.9.0` 发布后：
 
-弃用 API 至少保留一个 minor 周期；安全漏洞和错误协议实现可以直接移除，但必须在 SECURITY/CHANGELOG 中说明。
+- patch 版本保持 0.9 公共 Rust API、宏语法和已声明 wire v1 行为兼容；
+- 破坏 Rust API 或提升 MSRV 至少需要新的 minor 版本并记录在 CHANGELOG；
+- wire 兼容由 `FusenV1`、`SpringCloudV1` 的协议版本独立约束，有意破坏语义必须引入新 wire 版本和 ADR；
+- 未记录为公开扩展面的模块、隐藏宏 ABI 与实现细节不构成稳定契约；
+- 不承诺完整 Spring MVC 兼容，只承诺 golden fixtures 覆盖的 Spring Cloud V1 子集。
+
+MSRV 为 Rust 1.97，Edition 为 2024。0.9 发布 tag 形成基线后启用 `cargo-semver-checks`；在此之前不拿历史开发提交充当兼容参照。
+
+语义 fixture 固定 method、URI、header、JSON envelope、Problem Details 与参数映射，但不固定 JSON object key 顺序、TCP 分包、H2 frame 或 HPACK 编码。

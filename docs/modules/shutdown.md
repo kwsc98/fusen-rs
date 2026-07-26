@@ -1,12 +1,41 @@
 # 停机行为
 
-> English summary: on Unix, `Server::run` listens for SIGINT and SIGTERM; on
-> other platforms it listens for Ctrl-C. Shutdown closes the listener first,
-> then deregisters providers and drains active Hyper connections concurrently
-> under one shared deadline.
+> English summary: client and server shutdown are idempotent background
+> coordinators with one shared absolute deadline and a stable terminal result.
 
-`Server::run` 在 Unix 上由 SIGINT 或 SIGTERM 触发停机，在其他平台由 Ctrl-C 触发。信号监听失败时会记录错误并进入相同的 fail-safe 停机流程。`run_with_shutdown` 不叠加这些系统信号，只等待调用方传入的 shutdown future，适合嵌入式运行和确定性测试。该 future 在启动注册完成、进入 accept loop 后才开始轮询；启动注册不会被它中断，仍由 `registry_timeout` 约束。
+## Client
 
-停机开始后，Server 计算唯一的绝对 deadline，先关闭 listener，并立即通知所有 Hyper 连接 graceful shutdown。注册实例的逆序注销和在途连接排空随后并行进行，共享 `graceful_shutdown_timeout` 的总预算，而不是分别获得一段完整超时。期限到达时仍未结束的连接 task 会被强制取消，Server 不会为回收它们而无限等待。
+```text
+Running
+-> linearize admission closed
+-> Draining(deadline)
+   -> logical invocations
+   -> subscription handles
+   -> connection pools
+-> Closed(result)
+```
 
-accept 失败、注册中心注销失败或停机超时会由 Server 返回 `FusenError`，次要故障仍写入日志。若 `run_with_shutdown` 在资源被追踪后遭到取消，独立清理 worker 会触发一次有界的后台逆序注销；该补偿依赖承载 Server 的 Tokio runtime 在清理期间继续运行。
+三类工作并行共享默认 30 秒预算，不分别获得完整 timeout。期限到达后 coordinator 广播 cancellation、drop pool 并返回 `ClientError`。并发 `shutdown()` waiter 读取同一终态；取消一个 waiter 不取消实际关闭。
+
+## Server
+
+```text
+Ready or startup/accept failure
+-> compute one absolute deadline
+-> readiness = draining; close listener
+-> notify every HTTP connection graceful shutdown
+-> concurrently close registration handles and drain requests
+-> Stopped(result), or cancel remaining work at deadline
+```
+
+关闭 listener 和 readiness 发生在任何可能阻塞的 cleanup await 之前。Registration 按确定性逆序全部尝试；单项失败不短路其他项。Deadline 到达后剩余连接被 abort，runtime 不为 task reaping 无界等待。
+
+错误优先级为 deadline > fatal accept > registry aggregate。所有被覆盖的次要错误仍产生结构化事件。普通连接协议错误与单请求 panic 不属于 server 生命周期错误。
+
+`Server::serve()` 在 Unix 监听 SIGINT/SIGTERM，在其他平台监听 Ctrl-C。监听器失败或关闭时进入同一 fail-safe shutdown。需要由应用控制信号时，调用 `start()` 并通过 `RunningServer`/`ServerHandle` 关闭。
+
+## 取消补偿边界
+
+Registry 与 Config 的 handle 在同步 prepare 返回前已拥有 worker 与补偿状态。Runtime 先追踪 handle，再等待 `activate()`；activation waiter 被 drop 不会取消 provider worker，late success 会请求一次 close。`close()` 幂等，并发 waiter 共享终态；Drop 只请求关闭，不在析构中执行 async cleanup。
+
+这些保证依赖承载 supervisor 的 Tokio runtime 在后台 coordinator 到达终态前继续运行。应用退出 runtime 之前应显式等待 client/server/config shutdown。

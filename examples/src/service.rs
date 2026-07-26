@@ -1,43 +1,48 @@
-use crate::{DemoService, DemoServiceV2, RequestDto, ResponseDto};
-use fusen_rs::{FusenError, fusen_service};
+//! Direct implementations of the generated service traits.
 
+use crate::{DemoService, DemoServiceV2, RequestDto, ResponseDto};
+use fusen_rs::{RpcCategory, RpcError};
+
+/// Primary demonstration service implementation.
 #[derive(Debug, Default)]
 pub struct DemoServiceImpl;
 
-#[fusen_service]
 impl DemoService for DemoServiceImpl {
-    async fn sayHelloV4(&self) -> Result<String, FusenError> {
+    async fn say_hello_v4(&self) -> Result<String, RpcError> {
         Ok("Hello V4".to_string())
     }
 
-    async fn sayHello(&self, name: String) -> Result<String, FusenError> {
+    async fn say_hello(&self, name: String) -> Result<String, RpcError> {
         Ok(format!("Hello {name}"))
     }
 
-    async fn sayHelloV2(&self, name: RequestDto) -> Result<ResponseDto, FusenError> {
+    async fn say_hello_v2(&self, request: RequestDto) -> Result<ResponseDto, RpcError> {
         Ok(ResponseDto {
-            str: format!("HelloV2 {}", name.str),
+            str: format!("HelloV2 {}", request.str),
         })
     }
 
-    async fn divideV2(&self, a: i32, b: i32) -> Result<String, FusenError> {
+    async fn divide(&self, a: i32, b: i32) -> Result<String, RpcError> {
         if b == 0 {
-            return Err(FusenError::InvalidRequest(
-                "divisor must not be zero".to_owned(),
-            ));
+            return Err(RpcError::new(
+                RpcCategory::InvalidArgument,
+                "zero_divisor",
+                "divisor must not be zero",
+            )
+            .expect("the static error code is valid"));
         }
         Ok(format!("a / b = {}", a / b))
     }
 }
 
+/// Secondary versioned service implementation.
 #[derive(Debug, Default)]
 pub struct DemoServiceImplV2;
 
-#[fusen_service]
 impl DemoServiceV2 for DemoServiceImplV2 {
-    async fn sayHelloV3(&self, name: RequestDto) -> Result<ResponseDto, FusenError> {
+    async fn say_hello_v3(&self, request: RequestDto) -> Result<ResponseDto, RpcError> {
         Ok(ResponseDto {
-            str: format!("HelloV3 {}", name.str),
+            str: format!("HelloV3 {}", request.str),
         })
     }
 }

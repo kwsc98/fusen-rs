@@ -1,7 +1,10 @@
+//! Invocation timing middleware example.
+
 use fusen_rs::{Middleware, Next, RpcContext, RpcResult};
 use std::time::Instant;
 use tracing::debug;
 
+/// Records the elapsed duration of one logical invocation.
 pub struct TimingMiddleware;
 
 impl Middleware for TimingMiddleware {

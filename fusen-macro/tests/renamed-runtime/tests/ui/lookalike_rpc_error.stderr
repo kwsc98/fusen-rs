@@ -1,0 +1,21 @@
+error[E0308]: mismatched types
+ --> tests/ui/lookalike_rpc_error.rs:7:1
+  |
+7 | #[service(name = "user")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+  | |
+  | expected `fusen_rs::RpcError`, found `lookalike::RpcError`
+  | expected `Result<(), fusen_rs::RpcError>` because of return type
+  |
+  = note: `lookalike::RpcError` and `fusen_rs::RpcError` have similar names, but are actually distinct types
+note: `lookalike::RpcError` is defined in the current crate
+ --> tests/ui/lookalike_rpc_error.rs:4:5
+  |
+4 |     pub struct RpcError;
+  |     ^^^^^^^^^^^^^^^^^^^
+note: `fusen_rs::RpcError` is defined in crate `fusen_rs`
+ --> $WORKSPACE/fusen/src/rpc/error.rs
+  |
+  | pub struct RpcError {
+  | ^^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `service` (in Nightly builds, run with -Z macro-backtrace for more info)

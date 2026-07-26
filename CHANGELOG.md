@@ -1,46 +1,45 @@
 # Changelog
 
-本项目遵循语义化版本思想；当前 `0.9.0` 仍处于开发阶段，Unreleased API 可以直接破坏性调整。
+## [Unreleased] - 0.9.0
 
-## [Unreleased]
+`0.9.0` 是 clean-slate 的首个兼容性 baseline，不兼容此前未发布的 Rust API、宏、配置或 wire 流量。
 
-### Added
+### Public Contract
 
-- 新增客户端和服务端共用的 `InvocationObserver`，完整报告阶段、耗时、HTTP 状态、错误 code、timeout 与 cancellation。
-- 新增 `ClientRuntime`、生成式服务 Client Builder/Server wrapper，以及 Router/LoadBalancer 扩展层。
-- 新增独立的 H1/H2 客户端连接池配置，以及 H2 每地址多连接分片和无锁轮询。
-- 新增调用链、Observer、客户端分派和 1/64 KiB codec 微基准，以及多轮中位数 HTTP 压测矩阵。
-- RFC 9457 错误契约、客户端/服务端类型化配置和 request ID。
-- body、并发、deadline 限制以及事务化注册和连接排空。
-- workspace 内职责独立的 `fusen-nacos`、`fusen-config`、`fusen-observability` 与 `StrategyDebug` 配置宏。
-- 架构、模块行为、贡献、安全和发布文档。
-- 具备显式关闭语义的注册发现与热配置订阅。
-- Rust 1.97/stable 双工具链本地发布检查，以及可选的 `NACOS_ADDR` 手工集成验证。
+- Workspace 统一为 Rust 1.97、Edition 2024、resolver 3、禁止 unsafe，并集中 lint policy。
+- 服务声明统一为 `service` trait 宏与 `method` 元数据；RPC 显式返回 `Result<T, RpcError>`，实现类型直接实现 trait。
+- 调用错误拆分为 `RpcError`、`ClientError`、`ServerError`、`RegistryError` 与 `ConfigError`，字段私有并提供稳定分类/getter。
+- 公开扩展面收敛为 Middleware、Registry、Router、LoadBalancer、RetryPolicy 与 MetricsRecorder；transport/codec/acceptor/pool/lifecycle internals 全部私有。
+- 所有配置采用私有字段、`Default`、builder/setter 与 getter；可扩展 enum/error 标记为 non-exhaustive。
 
-### Changed
+### Protocol And Runtime
 
-- workspace 第三方依赖升级到当前最新版本并统一集中管理；Nacos 0.8 的客户端构造改为异步初始化。
-- 调用链改为 Observer、统一 Middleware、ClusterInvoker 和 MethodId ServiceInvoker 分层。
-- 请求/响应 API 收敛为 `RpcContext`、`RpcResponse` 与 `RpcResult`，统一使用绝对 deadline。
-- 客户端按 `MethodId` 分派并传递类型化 endpoint；服务端启动时预绑定路由、middleware 与 service invoker。
-- codec 移除 `Bytes` clone，并按受限 `size_hint` 预分配 body buffer。
-- 寻址拆分为 `ClientEndpoint`，线协议拆分为 `WireProtocol`。
-- 路由和 Directory 改为确定性不可变/快照模型。
-- 所有 crate 统一升级到 0.9.0 和 Rust 1.97。
-- 参数元数据改为 Path/Query/Body，客户端 deadline 覆盖完整调用。
-- Nacos、配置与 OTel 从 common 拆分为独立 crate，YAML/OTel 保持可选 feature。
-- 应用错误改为受验证的私有字段类型，注册错误与订阅关闭结果支持并发共享。
-- Nacos naming/config 改为 listener-first 初始化，路由对分段后的路径执行严格百分号解码。
-- Directory 拆分只读 reader/provider writer，订阅 cleanup 改为 executor-neutral 的共享终态协调器。
-- 客户端增加订阅关闭 deadline 和关闭状态，收窄 Tokio 依赖 feature。
-- RPC 宏生成静态描述、服务专属 Client Builder、Server wrapper 和 O(1) dispatch。
-- 服务描述统一为 `fusen-contract::ServiceDescriptor`，客户端、服务端与注册中心复用同一静态对象。
-- 相同 selector/protocol 的 discovery client 复用订阅，Direct client 不再进入 shutdown 清理集合。
-- 服务端优雅停机改为先关闭 listener，再在一个共享 deadline 内并行逆序注销与排空连接；Unix 默认同时响应 SIGINT/SIGTERM，停机失败向调用方返回错误，并为 Server future 取消提供有界的后台注销补偿。
+- 定义 Fusen V1：h2c、固定 v1 URI、按名称 arguments envelope 与 result envelope。
+- 定义 Spring Cloud V1：HTTP/1.1、显式 method/path/query/body mapping 与 raw JSON success。
+- 两种协议统一 request ID、relative timeout、attempt headers 与 RFC 9457 Problem Details；内部 source/panic 永不进入 wire。
+- Core 仅支持 canonical `http://` endpoint，在网络 I/O 前拒绝 HTTPS；移除所有 native TLS/OpenSSL runtime 依赖。
+- Client 使用 logical invocation/attempt 分层，一个 deadline 覆盖 admission、Middleware、retries、backoff、transport 与 decode。
+- 增加 retry token budget、endpoint/service circuit breaker、endpoint bulkhead、有界可选 queue 与全局 request/response byte budgets。
+- Retry-After 同时支持 delta-seconds 与 HTTP-date；可重放请求模板和分段响应从序列化前到 Hyper transport 消费/取消 payload 全程持有 byte permit，framing/codec/socket buffer 作为独立有界 transport overhead。
+- Typed result 解码失败以非重试 `DataLoss`/`invalid_result` 终止，并作为 endpoint attempt 与 service final outcome 的 protocol breaker failure 记账。
+- Server 增加 not-ready accept、确定性并发注册、body-before-read head validation、bounded response encoder 与 accept backoff。
+
+### Lifecycle And Control Plane
+
+- Registry 改为同步 prepare 与取消安全的 `activate()`/`close()` handles，支持 late-success compensation 和共享幂等终态。
+- Directory 增加 revision、observed time 与 Initializing/Ready/Stale/Unavailable/Closed 状态，更新采用 latest-wins。
+- Client 和 Server shutdown 均由后台 coordinator 持有，使用一个 absolute deadline，并发 waiter 共享终态。
+- `Server::start()` 只在 Ready 后返回 `RunningServer`；`ServerHandle` 提供幂等 shutdown，`serve()` 提供平台信号 convenience。
+- `fusen-config` 提供 TOML/YAML 静态解析、last-good typed hot config 与显式关闭；Nacos naming/config 使用 listener-first setup 和取消补偿。
+
+### Safety And Observability
+
+- Middleware、service、Router、LoadBalancer、RetryPolicy、Registry 与 MetricsRecorder 分别建立 panic boundary。
+- Core 产生结构化 tracing event；MetricsRecorder 同步非阻塞，panic 后原子禁用，labels 受低 cardinality 与脱敏约束。
+- 增加真实 H1/H2 golden fixtures、macro compile tests、paused-time lifecycle/resilience tests、资源预算测试和跨平台 CI/release gates。
 
 ### Removed
 
-- 删除 `FusenFilter`、`ProceedingJoinPoint`、Aspect、Handler、HandlerLoad、字符串 handler ID、`ClientOptions`、逐客户端 close 和公开 terminal。
-- 不完整的 Dubbo Triple/Prost 实现和不安全的错误 Send/Sync 声明。
-- `fusen-internal-common`、`ServiceResource` 和 `BoxFutureV2`；稳定共享契约迁移到 `fusen-contract`。
-- `ClusterPolicy`、`SingleAttempt` 和职责过宽的 `fusen-common` 兼容入口。
+- 删除所有旧服务声明/实现入口、单体错误体系、observer 模型、公开 transport/codec 生命周期细节和旧 wire decoder。
+- 删除不完整协议实现、TLS client stack、无限 queue 语义及兼容 facade。
+- 删除独立配置 derive 宏 crate；敏感字段通过普通私有配置类型与显式安全 Debug 管理。

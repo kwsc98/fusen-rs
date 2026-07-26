@@ -1,5 +1,6 @@
 [advisories]
 yanked = "deny"
+ignore = []
 
 [licenses]
 confidence-threshold = 0.8
@@ -8,6 +9,26 @@ allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+highlight = "all"
+deny = [
+    { name = "hyper-tls" },
+    { name = "native-tls" },
+    { name = "tokio-native-tls" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "openssl-probe" },
+    { name = "openssl-macros" },
+    { name = "rustls" },
+    { name = "rustls-native-certs" },
+    { name = "rustls-pemfile" },
+    { name = "rustls-pki-types" },
+    { name = "rustls-platform-verifier" },
+    { name = "rustls-webpki" },
+    { name = "tokio-rustls" },
+    { name = "hyper-rustls" },
+    { name = "webpki" },
+    { name = "webpki-roots" },
+]
 
 [sources]
 unknown-registry = "deny"
