@@ -3,10 +3,12 @@ use rpc::service;
 mod lookalike {
     pub struct RpcError;
 
-    pub enum Result<T, E> {
+    pub enum LookalikeResult<T, E> {
         Ok(T),
         Err(E),
     }
+
+    pub type Result<T, E> = LookalikeResult<T, E>;
 }
 
 #[service(name = "user")]
