@@ -106,7 +106,7 @@ jobs:
       - run: cargo +1.97.0 fetch --locked
       - run: cargo +1.97.0 fetch --locked --manifest-path fuzz-support/Cargo.toml
       - run: cargo +1.97.0 fetch --locked --manifest-path fuzz/Cargo.toml
-      - name: Enforce the plaintext dependency boundary
+      - name: Enforce the approved client TLS dependency boundary
         run: bash .github/scripts/check-dependency-policy.sh
       - name: Enforce the clean-slate public API denylist
         run: bash .github/scripts/check-public-api-denylist.sh

@@ -7,8 +7,8 @@
 ## Requirements And Scope
 
 - Rust 1.97, Edition 2024, Tokio, and JSON.
-- Plain HTTP only: Fusen V1 uses HTTP/2 prior knowledge (h2c), and Spring Cloud V1 uses HTTP/1.1.
-- `https://` endpoints are rejected during validation, before network I/O. Terminate TLS at an ingress, sidecar, reverse proxy, or service mesh.
+- Clients support canonical `http://` and `https://` endpoints. Fusen V1 uses h2c over HTTP and TLS/ALPN `h2` over HTTPS; Spring Cloud V1 uses HTTP/1.1 over either scheme.
+- Client HTTPS uses Rustls Ring, TLS 1.2/1.3, bundled Mozilla WebPKI roots, and strict certificate/hostname validation. The built-in server remains plaintext; terminate inbound TLS at an ingress, sidecar, reverse proxy, or service mesh.
 - The stable extension surface is limited to `Middleware`, `Registry`, `Router`, `LoadBalancer`, `RetryPolicy`, and `MetricsRecorder`.
 - Transport, codecs, acceptors, connection pools, and lifecycle state machines are runtime internals.
 
@@ -66,6 +66,11 @@ runtime.shutdown().await?;
 # }
 ```
 
+Use an `https://` direct endpoint, or discover an HTTPS instance from a registry,
+to enable client TLS. The runtime does not read the system trust store and does
+not expose custom CA, mTLS, or certificate-verification bypasses; private CA and
+self-signed endpoints are outside the 0.9 contract.
+
 Use `.discover()` instead of `.direct(...)` after installing one `Registry` on the runtime builder. Discovery is shared per `(ServiceSelector, WireProtocol)` and exposes latest-wins snapshots with `Initializing`, `Ready`, `Stale`, `Unavailable`, and `Closed` states.
 
 One absolute deadline covers admission, middleware, every attempt, backoff, transport, and decode. Only methods declared `idempotent` or `safe` can retry. The built-in policy permits at most three total attempts and is constrained by a per-service retry budget. Endpoint and service circuit breakers, endpoint bulkheads, and fresh discovery snapshots are applied on each physical attempt.
@@ -93,11 +98,15 @@ running.shutdown().await?;
 
 `start()` binds first, starts accepting in not-ready mode, activates registrations, and returns only after the server becomes `Ready`. Before readiness, requests receive a non-retryable `503 not_ready` without polling their body. `RunningServer` exposes `local_addr()`, `state()`, `handle()`, `wait()`, and `shutdown()`; shutdown through any handle is idempotent and shares one terminal result. `Server::serve()` adds platform signal handling.
 
+The built-in listener accepts plaintext HTTP/1.1 and h2c only. An explicit
+`.advertised_endpoint("https://...")` publishes an address served by an external
+TLS terminator; it does not enable TLS on the local listener.
+
 Shutdown closes readiness and the listener first, then deregisters providers, asks Hyper connections to drain, and waits for active requests concurrently under one absolute deadline. Deadline exhaustion cancels remaining work and returns a `ServerError` without an unbounded task-reaping wait.
 
 ## Wire V1
 
-Fusen V1 uses:
+Fusen V1 uses h2c for `http://` and TLS/ALPN `h2` for `https://`:
 
 ```text
 POST /_fusen/v1/{service}/{method}
@@ -139,6 +148,6 @@ Byte budgets cover decoded/encoded payload retained by the runtime and queued bo
 | `fusen-nacos` | Nacos registry and configuration adapters |
 | `fusen-observability` | Metrics SPI and optional telemetry adapters |
 | `fusen-procedural-macro` | Service declaration and generated wrappers |
-| `fusen-rs` | Client/server runtimes, middleware, policy, and plaintext HTTP |
+| `fusen-rs` | HTTP/HTTPS client, plaintext HTTP server, middleware, and policy runtimes |
 
 See [architecture](docs/architecture.md), [module contracts](docs/modules/README.md), [compatibility](docs/compatibility.md), and [examples](examples/README.md).

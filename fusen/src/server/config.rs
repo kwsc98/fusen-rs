@@ -107,7 +107,7 @@ impl ServerRequestConfig {
     }
 }
 
-/// Plain HTTP/1.1 and HTTP/2 server settings.
+/// Plain HTTP/1.1 and h2c server settings.
 #[derive(Clone, Debug)]
 pub struct HttpServerConfig {
     max_connections: usize,

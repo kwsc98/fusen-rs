@@ -14,7 +14,8 @@
 
 ### Fusen V1
 
-- 明文 HTTP/2 prior knowledge；
+- `http://` 使用 HTTP/2 prior knowledge（h2c）；
+- `https://` 使用 TLS ALPN `h2`，不得降级到 HTTP/1.1；
 - `POST /_fusen/v1/{service}/{method}`；
 - `Content-Type: application/fusen+json;version=1`；
 - request 为 `{"arguments":{"name":...}}`；
@@ -23,12 +24,16 @@
 
 ### Spring Cloud V1
 
-- 明文 HTTP/1.1；
+- `http://` 与 `https://` 都使用 HTTP/1.1；
 - 使用方法属性显式声明的 method/path/query/body；
 - 最多一个 JSON body，success 为 raw JSON；
 - 只承诺 fixtures 覆盖的子集，不声明完整 Spring MVC 兼容。
 
 两种协议共享经验证的 `x-request-id`、`x-fusen-timeout-ms`、`x-fusen-attempt`。错误统一为 RFC 9457 `application/problem+json`，扩展 `code`、`request_id`、`retryable`。Source 和 panic payload 不进入 wire。
+
+HTTPS 的信任根、验证与服务端终止边界由
+[ADR 0006](0006-client-tls-and-plaintext-server.md) 定义。TLS 不改变 method、URI、
+header multimap、JSON shape 或 Problem Details，因此不引入新的 wire 版本。
 
 Golden fixtures 固定 method、URI、header multimap、JSON shape、Problem Details、path/query/body mapping、request ID、deadline 和 attempt。Fixtures 不固定 H2 frame、HPACK、TCP 分包或 JSON object key order。
 

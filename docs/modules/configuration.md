@@ -5,7 +5,9 @@
 
 ## Runtime Config
 
-`ClientConfig`、`ServerConfig` 与子配置字段均私有，只提供 `Default`、builder/setter 和 getter。它们不读取隐式环境变量。Build/start 在网络 I/O 前验证零值、预算关系、protocol 与 endpoint；Core 只接受 canonical `http://` URL。
+`ClientConfig`、`ServerConfig` 与子配置字段均私有，只提供 `Default`、builder/setter 和 getter。它们不读取隐式环境变量。Build/start 在网络 I/O 前验证零值、预算关系、protocol 与 endpoint；`ServiceEndpoint` 只接受 canonical `http://`/`https://` URL。
+
+Client TLS 没有公开配置面：固定使用 Rustls Ring、bundled Mozilla WebPKI roots 与 TLS 1.2/1.3，不读取系统 trust store。不支持私有 CA、自签名证书、自定义 CA、客户端证书/mTLS 或跳过验证。Server 配置不包含 TLS、证书或私钥字段；HTTPS advertisement 仅描述外部终止器。
 
 默认请求/响应 body 各 2 MiB、全局字节预算各 64 MiB、并发请求 1024、队列关闭。Client connect 3 秒、调用 10 秒、shutdown 30 秒；Server startup/request/shutdown 上限均为 30 秒，registry operation 5 秒。Discovery initial/close 为 5 秒、max stale 30 秒、subscription 上限 1024。
 

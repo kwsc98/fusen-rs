@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
-//! Production-oriented JSON RPC runtime for plaintext HTTP/1.1 and h2c.
+//! Production-oriented JSON RPC runtime with HTTP/HTTPS clients and a plaintext HTTP/1.1/h2c server.
 
 extern crate self as fusen_rs;
 

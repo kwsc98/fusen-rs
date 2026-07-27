@@ -6,9 +6,11 @@
 
 ## Transport Boundary
 
-Core 只支持明文 `http://` 与 h2c。它不会提供传输加密，也不会加载证书。生产部署必须通过可信 ingress、sidecar、反向代理或 service mesh 终止 TLS，并保护 Core 到代理之间的网络边界。`https://` endpoint 会在网络 I/O 前被拒绝；禁止把明文 fallback 当作恢复策略。
+Client 支持 `http://` 与 `https://` endpoint。HTTPS 使用 Rustls Ring、TLS 1.2/1.3 与 bundled Mozilla WebPKI roots，并验证证书链、有效期和 endpoint hostname。Fusen V1 要求 ALPN `h2`，Spring Cloud V1 使用 HTTP/1.1；证书或 ALPN 验证失败绝不回退到明文。Runtime 不提供跳过验证、自定义 CA、客户端证书或 mTLS API，也不读取系统 trust store；私有 CA 和自签名证书不受支持。
 
-Nacos provider 的控制面安全由 SDK 与部署配置负责。RPC Core 不得因此引入 native TLS/OpenSSL 依赖，provider credential 也不得泄漏到 contract/runtime 类型。
+内置 Server 只监听明文 HTTP/1.1 与 h2c，不加载证书或私钥。生产入站 TLS 必须通过可信 ingress、sidecar、反向代理或 service mesh 终止，并保护 Server 到终止器之间的明文网络边界。`https://` advertised endpoint 只声明外部终止器的地址，不会让内置 listener 获得 TLS 能力。
+
+Nacos provider 的控制面安全由 SDK 与部署配置负责。RPC client 的 TLS 栈只允许已审计的 Rustls Ring/bundled-roots 路径；`native-tls`、OpenSSL TLS backend、AWS-LC provider、native/system root loader、跳过验证和明文 fallback 仍被依赖策略禁止。Provider credential 不得泄漏到 contract/runtime 类型。
 
 ## Input And Resource Limits
 

@@ -23,10 +23,10 @@
 
 ## Nacos Adapter
 
-`NacosRegistry` 实现 Registry SPI；`NacosConfigSource` 是内置的具体热配置 adapter，不开放自定义配置 provider SPI。Adapter 将 provider SDK 类型、listener 和执行器保持私有，并把 `FusenV1`/`SpringCloudV1`、稳定 `InstanceId`、明文 endpoint、group/version 与 metadata 映射到 Nacos。
+`NacosRegistry` 实现 Registry SPI；`NacosConfigSource` 是内置的具体热配置 adapter，不开放自定义配置 provider SPI。Adapter 将 provider SDK 类型、listener 和执行器保持私有，并把 `FusenV1`/`SpringCloudV1`、稳定 `InstanceId`、HTTP/HTTPS endpoint、group/version 与 metadata 映射到 Nacos。Registration 将实际 scheme 写入 `fusen.scheme`；discovery 保留 `http`/`https` 并过滤未知 scheme，不执行降级或 scheme 重写。
 
 Naming 与 config setup 都先安装 listener，再读取初始值，消除查询与监听之间的丢更新窗口；初始化窗口内采用 latest-wins。Setup waiter 取消后，late success 自动移除 listener。Nacos 只发布 healthy、enabled、正权重实例。
 
-`NacosConfig` 字段私有，仅通过 builder/getter 访问；Debug 永远脱敏 password。Nacos provider 自身的控制面连接安全由 SDK/部署负责，不改变 core 只支持明文 RPC endpoint 的边界。
+`NacosConfig` 字段私有，仅通过 builder/getter 访问；Debug 永远脱敏 password。Nacos provider 自身的控制面连接安全由 SDK/部署负责，与 RPC Client 的 Rustls/bundled-roots 数据面相互独立。Server 发布 HTTPS endpoint 时，该地址必须由外部 TLS 终止器实际提供。
 
 真实 Nacos 验证使用唯一资源名并显式执行 ignored release-gate tests；日常单元测试使用 fake adapter 覆盖每个 await 点的取消与 finally cleanup。

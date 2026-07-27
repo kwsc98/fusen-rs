@@ -138,7 +138,7 @@ impl ClientRuntimeBuilder {
         self
     }
 
-    /// Validates and creates all runtime-owned supervisors and plaintext pools.
+    /// Validates and creates all runtime-owned supervisors and HTTP/HTTPS pools.
     pub fn build(self) -> Result<ClientRuntime, ClientError> {
         self.config.validate()?;
         let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
@@ -157,7 +157,7 @@ impl ClientRuntimeBuilder {
         let transport = Arc::new(Mutex::new(Some(HttpTransport::new(
             config.connect_timeout(),
             config.http(),
-        ))));
+        )?)));
         let metrics = SafeMetrics::new(self.metrics);
         let endpoint_threshold = breaker_config(
             config.circuit_breaker().endpoint_value(),

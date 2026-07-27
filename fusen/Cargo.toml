@@ -41,13 +41,18 @@ bytes.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["client-legacy", "server-auto", "tokio"] }
+tower-service.workspace = true
+hyper-rustls.workspace = true
+rustls.workspace = true
 rand.workspace = true
 urlencoding.workspace = true
 url.workspace = true
 mime.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+tokio-rustls.workspace = true
 
 [[bench]]
 name = "invocation"

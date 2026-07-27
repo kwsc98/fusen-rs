@@ -4,7 +4,7 @@ ignore = []
 
 [licenses]
 confidence-threshold = 0.8
-allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CDLA-Permissive-2.0", "ISC", "Unicode-3.0", "Zlib"]
 
 [bans]
 multiple-versions = "warn"
@@ -18,16 +18,17 @@ deny = [
     { name = "openssl-sys" },
     { name = "openssl-probe" },
     { name = "openssl-macros" },
-    { name = "rustls" },
+    { name = "openssl-src" },
     { name = "rustls-native-certs" },
     { name = "rustls-pemfile" },
-    { name = "rustls-pki-types" },
     { name = "rustls-platform-verifier" },
-    { name = "rustls-webpki" },
-    { name = "tokio-rustls" },
-    { name = "hyper-rustls" },
+    { name = "rustls-platform-verifier-android" },
     { name = "webpki" },
-    { name = "webpki-roots" },
+    { name = "webpki-root-certs" },
+    { name = "aws-lc-rs" },
+    { name = "aws-lc-sys" },
+    { name = "aws-lc-fips" },
+    { name = "aws-lc-fips-sys" },
 ]
 
 [sources]

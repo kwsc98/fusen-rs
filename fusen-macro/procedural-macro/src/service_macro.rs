@@ -65,7 +65,7 @@ fn expand_tokens(args: ServiceArgs, item: ItemTrait) -> syn::Result<proc_macro2:
         }
 
         impl #client_builder_ident {
-            /// Uses one explicitly configured plaintext HTTP endpoint.
+            /// Uses one explicitly configured HTTP or HTTPS endpoint.
             pub fn direct(mut self, endpoint: impl ::core::convert::AsRef<str>) -> Self {
                 self.inner = self.inner.direct(endpoint);
                 self

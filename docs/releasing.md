@@ -24,7 +24,7 @@ bash .github/scripts/check-package-consumer.sh
 cargo +1.97.0 clippy --locked --offline --manifest-path fuzz-support/Cargo.toml --all-targets -- -D warnings
 ```
 
-CI 还必须通过 Linux/macOS/Windows、feature matrix、renamed-runtime macro consumer、`nacos-live-container`、lifecycle 重复测试、Markdown links 与从 `.crate` archive 构建的 package consumer。`repeat-lifecycle-tests.sh` 和 `run-live-nacos-tests.sh` 都先列举预期测试并在匹配数为零时失败，Cargo 的空过滤器不得被当成成功。
+CI 还必须通过 Linux/macOS/Windows、feature matrix、renamed-runtime macro consumer、`nacos-live-container`、HTTP/HTTPS client socket tests、lifecycle 重复测试、Markdown links 与从 `.crate` archive 构建的 package consumer。`repeat-lifecycle-tests.sh` 和 `run-live-nacos-tests.sh` 都先列举预期测试并在匹配数为零时失败，Cargo 的空过滤器不得被当成成功。
 定时流水线还必须通过三个真实私有源码 harness 的 `cargo-fuzz` 任务，以及 `runtime_e2e` 和 `wire_v1_contract` 的 100 轮真实 socket 重复测试。fuzz corpus 与运行方法见 [`fuzz/README.md`](../fuzz/README.md)。
 
 ## Contract Audit
@@ -32,9 +32,10 @@ CI 还必须通过 Linux/macOS/Windows、feature matrix、renamed-runtime macro 
 发布负责人必须确认：
 
 - `check-public-api-denylist.sh` 从干净 rustdoc 输出确认旧入口为零，只有 `service`/`method` 宏和约定的六个扩展 SPI；
-- root、fuzz-support 和 fuzz 的解析后 dependency graph 与 lockfile 均不含 Rustls、`hyper-tls`、`native-tls` 或 OpenSSL；
+- root、fuzz-support 和 fuzz 的解析后 dependency graph 与 lockfile 只包含批准的 Rustls Ring/bundled WebPKI client TLS 栈，不含 `hyper-tls`、`native-tls`、OpenSSL TLS backend、AWS-LC、native/system root loader、platform verifier 或 PEM loader；
 - Core 不依赖 Nacos、subscriber 或 OTel backend；
-- Fusen V1/Spring Cloud V1 golden fixtures、真实 H1/H2 sockets、Problem Details 和 macro trybuild 全部通过；
+- Fusen V1/Spring Cloud V1 golden fixtures、真实明文 H1/h2c sockets、HTTPS H1/ALPN h2 sockets、证书/hostname 拒绝、Problem Details 和 macro trybuild 全部通过；
+- HTTPS 测试确认 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots、无明文 fallback；Server listener 仍不加载证书或私钥；
 - 永久 pending request/registry/config cleanup 在 deadline 内有界返回；
 - lifecycle、retry、breaker 与 byte-budget tests 不依赖 correctness sleep 或预占端口；
 - 在绑定参考机器上执行 `Release Benchmark Gate`，direct single-attempt p50/p99 相对 committed baseline 回退不超过 10%，原始五轮日志与 JSON summary 已归档。

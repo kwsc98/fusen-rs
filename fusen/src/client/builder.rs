@@ -42,7 +42,7 @@ impl ServiceClientBuilder {
         }
     }
 
-    /// Selects a canonical plaintext HTTP endpoint.
+    /// Selects a canonical HTTP or HTTPS endpoint.
     pub fn direct(mut self, endpoint: impl AsRef<str>) -> Self {
         self.endpoint = EndpointMode::Direct(
             endpoint

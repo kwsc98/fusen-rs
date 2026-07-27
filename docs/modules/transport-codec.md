@@ -1,11 +1,12 @@
 # Wire、Transport 与 Codec
 
-> English summary: Fusen V1 is JSON over h2c, Spring Cloud V1 is an explicit
-> JSON-over-HTTP/1.1 subset, and all transport/codec machinery is private.
+> English summary: Fusen V1 is JSON over h2c or TLS/ALPN h2, Spring Cloud V1 is
+> an explicit HTTP/1.1 subset, and all transport/codec machinery is private.
 
 ## Fusen V1
 
-Fusen V1 使用明文 HTTP/2 prior knowledge：
+Fusen V1 在 `http://` endpoint 上使用 HTTP/2 prior knowledge（h2c），在
+`https://` endpoint 上使用 TLS 1.2/1.3 并要求 ALPN `h2`：
 
 ```text
 POST /_fusen/v1/{service}/{method}
@@ -21,7 +22,7 @@ x-fusen-service-version: ...     # optional
 
 ## Spring Cloud V1
 
-Spring Cloud V1 使用明文 HTTP/1.1。Method、path、query 与唯一可选 JSON body 完全来自 `method` 属性；成功响应是 raw JSON，Content-Type 为 `application/json`。HEAD 映射仅允许 unit 成功类型，客户端不读取其响应 body；失败时因 HTTP 不传输 Problem Details body，客户端以 HTTP status 生成 `remote_head_error`。Path placeholder 与 query 值使用结构化 URI 编码，query 支持重复 key；本协议不声明完整 Spring MVC 兼容。
+Spring Cloud V1 在 `http://` 与 `https://` endpoint 上都使用 HTTP/1.1。Method、path、query 与唯一可选 JSON body 完全来自 `method` 属性；成功响应是 raw JSON，Content-Type 为 `application/json`。HEAD 映射仅允许 unit 成功类型，客户端不读取其响应 body；失败时因 HTTP 不传输 Problem Details body，客户端以 HTTP status 生成 `remote_head_error`。Path placeholder 与 query 值使用结构化 URI 编码，query 支持重复 key；本协议不声明完整 Spring MVC 兼容。
 
 ## 控制 Header
 
@@ -41,6 +42,6 @@ Body byte budget 覆盖 runtime 持有的 decoded/encoded payload 以及 Hyper �
 
 ## Transport 边界
 
-Core 仅接受 canonical `http://` endpoint，客户端对 `https://` 在网络 I/O 前失败。TLS 由 sidecar、ingress、reverse proxy 或 service mesh 终止。Transport、Codec、Acceptor、pool 与 socket state 均为私有实现，不提供替换 SPI。
+Client 接受 canonical `http://` 与 `https://` endpoint。HTTPS 使用 Rustls Ring、bundled Mozilla WebPKI roots、TLS 1.2/1.3 及严格的证书/hostname 验证；不读取系统 trust store，也不提供自定义 CA、mTLS、跳过验证或明文 fallback。Server acceptor 仍只处理明文 HTTP/1.1 与 h2c，入站 TLS 由 sidecar、ingress、reverse proxy 或 service mesh 终止。Transport、Codec、Acceptor、pool、TLS config 与 socket state 均为私有实现，不提供替换 SPI。
 
 Golden fixtures 固定 method、URI、header multimap、JSON envelope 与 Problem Details；不固定 JSON key order、TCP 分包、H2 frame 或 HPACK。

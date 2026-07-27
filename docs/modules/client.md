@@ -1,13 +1,15 @@
 # 客户端行为
 
-> English summary: `ClientRuntime` owns logical admission, discovery, plaintext pools,
+> English summary: `ClientRuntime` owns logical admission, discovery, HTTP/HTTPS pools,
 > retries, circuit breakers, and one cancellation-safe shutdown result.
 
 ## 构建与所有权
 
-`ClientRuntime::builder()` 接受私有字段的 `ClientConfig`、一个可选 `Registry`、全局 `Middleware`、`RetryPolicy` 与 `MetricsRecorder`。生成的服务 Builder 通过 `.direct("http://...")` 或 `.discover()` 选择寻址，并通过 `.protocol(...)` 选择明确 wire 版本。
+`ClientRuntime::builder()` 接受私有字段的 `ClientConfig`、一个可选 `Registry`、全局 `Middleware`、`RetryPolicy` 与 `MetricsRecorder`。生成的服务 Builder 通过 `.direct("http://...")`、`.direct("https://...")` 或 `.discover()` 选择寻址，并通过 `.protocol(...)` 选择明确 wire 版本。
 
-Runtime 必须在正在运行的 Tokio runtime 内构建。`https://`、含凭据/query/fragment 的 endpoint 在 connect/validation 阶段失败，不产生网络 I/O。Direct client 不创建订阅；discovery client 按 `(ServiceSelector, WireProtocol)` 共享 supervisor。
+Runtime 必须在正在运行的 Tokio runtime 内构建。Endpoint 只接受 canonical absolute `http://`/`https://`，含凭据/query/fragment 或其他 scheme 的值在 connect/validation 阶段失败。Direct client 不创建订阅；discovery client 按 `(ServiceSelector, WireProtocol)` 共享 supervisor。
+
+Fusen V1 在 HTTP endpoint 上使用 h2c，在 HTTPS endpoint 上要求 TLS 1.2/1.3 与 ALPN `h2`。Spring Cloud V1 在两种 scheme 上都使用 HTTP/1.1。HTTPS 使用 Rustls Ring 和 bundled Mozilla WebPKI roots 验证证书链、有效期与 hostname；不读取系统 trust store，也没有自定义 CA、mTLS、跳过验证或明文 fallback。私有 CA 和自签名证书不受支持。
 
 ## 逻辑调用
 

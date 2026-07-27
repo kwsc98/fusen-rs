@@ -1,7 +1,7 @@
 # fusen-rs
 
-`fusen-rs` is a production-oriented JSON RPC runtime for Rust over plaintext
-HTTP/1.1 and HTTP/2 prior knowledge (h2c). It provides generated clients and
+`fusen-rs` is a production-oriented JSON RPC runtime for Rust with HTTP/HTTPS
+clients and a plaintext HTTP/1.1/h2c server. It provides generated clients and
 server adapters, bounded resource admission, service discovery, retries,
 circuit breakers, middleware, metrics, and explicit runtime lifecycles.
 
@@ -53,6 +53,11 @@ let client = UserServiceClient::builder(&runtime)
 runtime.shutdown().await?;
 ```
 
+Direct and discovered endpoints may use `http://` or `https://`. HTTPS uses
+Rustls Ring, TLS 1.2/1.3, bundled Mozilla WebPKI roots, and strict certificate
+and hostname verification. System roots, custom CAs, mTLS, verification bypass,
+and plaintext fallback are not supported.
+
 A successful wire response whose `result` cannot decode into the generated
 method's Rust type terminates as non-retryable `DataLoss`/`invalid_result` and
 is recorded as a protocol failure by both endpoint and service breakers.
@@ -75,17 +80,19 @@ running.shutdown().await?;
 
 `Server::serve()` adds platform shutdown-signal handling. `RunningServer` and
 `ServerHandle` expose explicit state, wait, and idempotent shutdown operations.
+The built-in listener remains plaintext HTTP/1.1 and h2c. An advertised HTTPS
+endpoint must be served by an external TLS terminator forwarding to that listener.
 
 ## Wire protocols
 
 | Protocol | Transport and mapping |
 |---|---|
-| `WireProtocol::FusenV1` | h2c, `POST /_fusen/v1/{service}/{method}`, versioned Fusen JSON |
-| `WireProtocol::SpringCloudV1` | HTTP/1.1, explicit method/path/query/body mapping, raw success JSON |
+| `WireProtocol::FusenV1` | h2c over HTTP or TLS/ALPN `h2` over HTTPS; versioned Fusen JSON |
+| `WireProtocol::SpringCloudV1` | HTTP/1.1 over HTTP or HTTPS; explicit method/path/query/body mapping |
 
-The core runtime accepts only canonical `http://` endpoints. An `https://`
-endpoint is rejected during validation, before network I/O. Terminate TLS in a
-sidecar, service mesh, ingress, or reverse proxy.
+The client accepts canonical `http://` and `https://` endpoints. The server does
+not terminate TLS; use a sidecar, service mesh, ingress, or reverse proxy for
+inbound HTTPS.
 
 The supported extension surface is `Middleware`, `Registry`, `Router`,
 `LoadBalancer`, `RetryPolicy`, and `MetricsRecorder`. Transports, codecs,

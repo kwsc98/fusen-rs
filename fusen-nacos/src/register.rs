@@ -386,7 +386,7 @@ fn to_service_instance(instance: NacosServiceInstance) -> Option<ServiceInstance
         .get(META_SCHEME)
         .map(String::as_str)
         .unwrap_or("http");
-    if scheme != "http" {
+    if !matches!(scheme, "http" | "https") {
         return None;
     }
     let host = if instance.ip.parse::<std::net::Ipv6Addr>().is_ok() {
@@ -394,7 +394,7 @@ fn to_service_instance(instance: NacosServiceInstance) -> Option<ServiceInstance
     } else {
         instance.ip.clone()
     };
-    let mut url = url::Url::parse(&format!("http://{host}:{port}")).ok()?;
+    let mut url = url::Url::parse(&format!("{scheme}://{host}:{port}")).ok()?;
     if let Some(path) = instance.metadata.get(META_BASE_PATH) {
         let mut segments = url.path_segments_mut().ok()?;
         segments.clear();
@@ -476,7 +476,7 @@ fn build_instance(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<std::collections::HashMap<_, _>>();
-    metadata.insert(META_SCHEME.into(), "http".into());
+    metadata.insert(META_SCHEME.into(), url.scheme().into());
     metadata.insert(
         META_SERVICE_ID.into(),
         registration.selector().service_id().to_owned(),
@@ -516,7 +516,7 @@ mod tests {
         ServiceSelector::new("demo", Some("prod".into()), Some("1".into())).unwrap()
     }
 
-    fn registration() -> Arc<ServiceRegistration> {
+    fn registration_at(endpoint: &str) -> Arc<ServiceRegistration> {
         let descriptor = Box::leak(Box::new(
             ServiceDescriptor::new(
                 selector(),
@@ -531,12 +531,16 @@ mod tests {
             ServiceRegistration::new(
                 InstanceId::new("demo-1").unwrap(),
                 descriptor,
-                "http://127.0.0.1:8080/rpc".parse().unwrap(),
+                endpoint.parse().unwrap(),
                 ProtocolSet::FUSEN_V1,
                 ServiceWeight::new(3.0).unwrap(),
             )
             .unwrap(),
         )
+    }
+
+    fn registration() -> Arc<ServiceRegistration> {
+        registration_at("http://127.0.0.1:8080/rpc")
     }
 
     fn instance(address: &str) -> ServiceInstance {
@@ -584,10 +588,16 @@ mod tests {
         assert_eq!(instance.metadata[META_SCHEME], "http");
         assert_eq!(instance.metadata[META_BASE_PATH], "/rpc");
         assert_eq!(instance.metadata[META_PROTOCOL], "fusen-v1");
+
+        let tls = registration_at("https://service.example:443/rpc");
+        let tls = build_instance(&tls, WireProtocol::FusenV1).unwrap();
+        assert_eq!(tls.ip, "service.example");
+        assert_eq!(tls.port, 443);
+        assert_eq!(tls.metadata[META_SCHEME], "https");
     }
 
     #[test]
-    fn discovery_rejects_non_plaintext_instances_and_restores_base_paths() {
+    fn discovery_preserves_http_and_https_and_rejects_unknown_schemes() {
         let plaintext = NacosServiceInstance {
             instance_id: Some("provider-1".into()),
             ip: "::1".into(),
@@ -600,16 +610,25 @@ mod tests {
             ..NacosServiceInstance::default()
         };
         let tls = NacosServiceInstance {
+            instance_id: Some("provider-tls".into()),
             ip: "127.0.0.1".into(),
             port: 8443,
             metadata: std::collections::HashMap::from([(META_SCHEME.into(), "https".into())]),
             ..NacosServiceInstance::default()
         };
-        let instances = to_service_instances(vec![tls, plaintext]);
-        assert_eq!(instances.len(), 1);
-        assert_eq!(instances[0].instance_id().as_str(), "provider-1");
+        let unsupported = NacosServiceInstance {
+            ip: "127.0.0.1".into(),
+            port: 21,
+            metadata: std::collections::HashMap::from([(META_SCHEME.into(), "ftp".into())]),
+            ..NacosServiceInstance::default()
+        };
+        let instances = to_service_instances(vec![tls, unsupported, plaintext]);
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].instance_id().as_str(), "provider-tls");
+        assert_eq!(instances[0].endpoint().as_str(), "https://127.0.0.1:8443/");
+        assert_eq!(instances[1].instance_id().as_str(), "provider-1");
         assert_eq!(
-            instances[0].endpoint().as_str(),
+            instances[1].endpoint().as_str(),
             "http://[::1]:8080/api%20v1/a%2Fb"
         );
     }

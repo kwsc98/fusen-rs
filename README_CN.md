@@ -7,8 +7,8 @@
 ## 运行边界
 
 - Rust 1.97、Edition 2024、Tokio 与 JSON。
-- Core 仅支持明文 HTTP：Fusen V1 使用 HTTP/2 prior knowledge（h2c），Spring Cloud V1 使用 HTTP/1.1。
-- `https://` endpoint 会在任何网络 I/O 前被拒绝；TLS 应由 ingress、sidecar、反向代理或 service mesh 终止。
+- Client 支持 canonical `http://` 与 `https://` endpoint。Fusen V1 在 HTTP 上使用 h2c、在 HTTPS 上使用 TLS/ALPN `h2`；Spring Cloud V1 在两种 scheme 上都使用 HTTP/1.1。
+- Client HTTPS 使用 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots 和严格的证书/hostname 验证。内置 Server 保持明文；入站 TLS 由 ingress、sidecar、反向代理或 service mesh 终止。
 - 稳定扩展面仅包括 `Middleware`、`Registry`、`Router`、`LoadBalancer`、`RetryPolicy` 和 `MetricsRecorder`。
 - Transport、Codec、Acceptor、连接池与生命周期状态机均为 runtime 私有实现。
 
@@ -66,6 +66,10 @@ runtime.shutdown().await?;
 # }
 ```
 
+Direct client 使用 `https://`，或从 Registry 发现 HTTPS instance，即可启用客户端
+TLS。Runtime 不读取系统 trust store，也不提供自定义 CA、mTLS 或跳过证书验证；
+私有 CA 与自签名 endpoint 不属于 0.9 契约。
+
 在 runtime builder 安装一个 `Registry` 后，用 `.discover()` 替代 `.direct(...)` 即可启用发现。每个 `(ServiceSelector, WireProtocol)` 共享唯一订阅，latest-wins 快照状态为 `Initializing`、`Ready`、`Stale`、`Unavailable` 或 `Closed`。
 
 一个绝对 deadline 覆盖 admission、Middleware、全部 attempts、退避、传输与 decode。只有声明为 `idempotent` 或 `safe` 的方法可重试；内置策略最多执行三次总 attempts，并受每服务 token budget 的硬约束。每次物理 attempt 都重新读取发现快照，并应用 endpoint/service 熔断器和 endpoint bulkhead。
@@ -93,11 +97,15 @@ running.shutdown().await?;
 
 `start()` 先 bind，再以 not-ready 状态启动 accept loop，随后激活注册，只有进入 `Ready` 后才返回。Ready 前请求收到非 retryable 的 `503 not_ready`，且 body 不会被 poll。`RunningServer` 提供 `local_addr()`、`state()`、`handle()`、`wait()` 与 `shutdown()`；所有 handle 的 shutdown 幂等并共享唯一终态。`Server::serve()` 额外提供平台信号处理。
 
+内置 listener 只接受明文 HTTP/1.1 与 h2c。显式
+`.advertised_endpoint("https://...")` 发布由外部 TLS 终止器提供的地址，不会让本地
+listener 启用 TLS。
+
 停机先关闭 readiness 和 listener，再在同一个绝对 deadline 内并行注销 provider、通知 Hyper graceful shutdown 并排空在途请求。deadline 到达后会取消剩余工作并有界返回 `ServerError`，不会无限等待 task 回收。
 
 ## Wire V1
 
-Fusen V1：
+Fusen V1 在 `http://` 上使用 h2c，在 `https://` 上使用 TLS/ALPN `h2`：
 
 ```text
 POST /_fusen/v1/{service}/{method}
@@ -139,6 +147,6 @@ Byte budget 覆盖 runtime 持有的 decoded/encoded payload，以及 Hyper 消�
 | `fusen-nacos` | Nacos Registry 和热配置 adapter |
 | `fusen-observability` | Metrics SPI 与可选 telemetry adapter |
 | `fusen-procedural-macro` | 服务声明及客户端/服务端 wrapper 生成 |
-| `fusen-rs` | Client/Server runtime、Middleware、策略与明文 HTTP |
+| `fusen-rs` | HTTP/HTTPS Client、明文 HTTP Server、Middleware 与策略 runtime |
 
 详见[架构](docs/architecture.md)、[模块契约](docs/modules/README.md)、[兼容性](docs/compatibility.md)与[示例](examples/README.md)。

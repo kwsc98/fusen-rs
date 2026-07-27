@@ -570,7 +570,7 @@ impl CircuitBreakerConfig {
     }
 }
 
-/// Internal plaintext HTTP connection-pool behavior.
+/// Internal HTTP and HTTPS connection-pool behavior.
 #[derive(Clone, Debug)]
 pub struct ClientHttpConfig {
     http1_max_idle_per_host: usize,
@@ -600,7 +600,7 @@ impl ClientHttpConfig {
         self
     }
 
-    /// Sets h2c pool sharding and keep-alive behavior.
+    /// Sets h2c and TLS/ALPN h2 pool sharding and keep-alive behavior.
     pub const fn http2(
         mut self,
         connections_per_host: usize,
@@ -621,15 +621,15 @@ impl ClientHttpConfig {
     pub const fn pool_idle_timeout(&self) -> Option<Duration> {
         self.pool_idle_timeout
     }
-    /// Returns h2c connection shards per endpoint.
+    /// Returns h2c and TLS/ALPN h2 connection shards per endpoint.
     pub const fn http2_connections_per_host(&self) -> usize {
         self.http2_connections_per_host
     }
-    /// Returns the h2c keep-alive interval.
+    /// Returns the h2c and TLS/ALPN h2 keep-alive interval.
     pub const fn http2_keep_alive_interval(&self) -> Option<Duration> {
         self.http2_keep_alive_interval
     }
-    /// Returns the h2c keep-alive timeout.
+    /// Returns the h2c and TLS/ALPN h2 keep-alive timeout.
     pub const fn http2_keep_alive_timeout(&self) -> Duration {
         self.http2_keep_alive_timeout
     }
@@ -728,7 +728,7 @@ impl ClientConfig {
         &self.circuit_breaker
     }
 
-    /// Returns plaintext HTTP pool settings.
+    /// Returns HTTP and HTTPS pool settings.
     pub const fn http(&self) -> &ClientHttpConfig {
         &self.http
     }
@@ -844,7 +844,7 @@ impl ClientConfigBuilder {
         self
     }
 
-    /// Replaces plaintext HTTP pool settings.
+    /// Replaces HTTP and HTTPS pool settings.
     pub fn http(mut self, value: ClientHttpConfig) -> Self {
         self.0.http = value;
         self

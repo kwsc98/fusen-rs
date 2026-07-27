@@ -391,11 +391,11 @@ fn endpoint_uri(
     path: &str,
     query: Option<&str>,
 ) -> Result<Uri, RpcError> {
-    if endpoint.as_url().scheme() != "http" {
+    if !matches!(endpoint.as_url().scheme(), "http" | "https") {
         return Err(RpcError::framework(
             RpcCategory::InvalidArgument,
-            "https_not_supported",
-            "core transport accepts only plaintext http endpoints",
+            "unsupported_endpoint_scheme",
+            "client transport accepts only http or https endpoints",
         ));
     }
     let mut value = endpoint.as_str().trim_end_matches('/').to_owned();
@@ -407,9 +407,9 @@ fn endpoint_uri(
         value.push('?');
         value.push_str(query);
     }
-    value.parse::<Uri>().map_err(|error| {
-        RpcError::internal("failed to construct canonical plaintext HTTP URI", error)
-    })
+    value
+        .parse::<Uri>()
+        .map_err(|error| RpcError::internal("failed to construct canonical HTTP URI", error))
 }
 
 pub(crate) fn decode_fusen_request(bytes: &[u8]) -> Result<Arguments, RpcError> {
@@ -678,7 +678,7 @@ pub(crate) fn validate_protocol_version(
             RpcCategory::InvalidArgument,
             "invalid_http_version",
             match protocol {
-                WireProtocol::FusenV1 => "FusenV1 requires HTTP/2 prior knowledge",
+                WireProtocol::FusenV1 => "FusenV1 requires HTTP/2",
                 WireProtocol::SpringCloudV1 => "SpringCloudV1 requires HTTP/1.1",
                 _ => "unsupported wire protocol",
             },
@@ -977,6 +977,24 @@ mod tests {
             assert!(validate_request_id(invalid).is_err());
         }
         assert!(validate_request_id("request_1.a-b").is_ok());
+    }
+
+    #[test]
+    fn endpoint_uris_preserve_http_and_https_schemes() {
+        for (endpoint, expected) in [
+            (
+                "http://example.com:8080/base",
+                "http://example.com:8080/base/items?page=2",
+            ),
+            (
+                "https://example.com/base",
+                "https://example.com/base/items?page=2",
+            ),
+        ] {
+            let endpoint: ServiceEndpoint = endpoint.parse().unwrap();
+            let uri = endpoint_uri(&endpoint, "/items", Some("page=2")).unwrap();
+            assert_eq!(uri.to_string(), expected);
+        }
     }
 
     #[test]

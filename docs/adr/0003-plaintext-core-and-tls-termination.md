@@ -1,10 +1,13 @@
 # ADR 0003: Core 只提供明文 HTTP
 
-- 状态：已接受
+- 状态：已被 [ADR 0006](0006-client-tls-and-plaintext-server.md) 取代
 - 日期：2026-07-26
 - 决策者：fusen-rs 维护者
 
 ## 背景
+
+> 本 ADR 记录原始的全明文决策。客户端出站 TLS 与服务端明文边界现由
+> [ADR 0006](0006-client-tls-and-plaintext-server.md) 定义。
 
 进程内 TLS 会把证书加载、轮换、SNI、平台 crypto backend 和供应链升级耦合到 RPC transport 与生命周期。该项目的部署目标已经具备 ingress、sidecar、反向代理或 service mesh，可以在独立边界终止 TLS。
 

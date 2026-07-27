@@ -2,12 +2,15 @@
 
 > 最后审阅：2026-07-27
 >
-> 当前远端基线：`fe2d43f`，状态为 0.9.0 发布候选，尚未形成兼容性 tag。
+> 当前远端基线：`5647f9c`，状态为 0.9.0 发布候选，尚未形成兼容性 tag。
 
 ## Direction
 
 当前唯一里程碑是发布可信的 `0.9.0` 首个兼容性基线。优先级固定为：
 CI/正确性/安全 > 契约覆盖 > 发布证据 > 性能演进 > 新功能。
+
+维护者已将 Client HTTPS 明确纳入 0.9 基线；该迭代只扩展客户端出站传输，
+不把 Server TLS、证书生命周期或 Transport SPI 带入范围。
 
 本文件只记录方向和迭代顺序；具体行为以架构、模块契约、ADR、
 [兼容策略](compatibility.md)和[发布流程](releasing.md)为准。
@@ -16,12 +19,14 @@ CI/正确性/安全 > 契约覆盖 > 发布证据 > 性能演进 > 新功能。
 ## Current Snapshot
 
 - 所有发布 crate 已使用 `0.9.0`，但 CHANGELOG 仍为 Unreleased，仓库没有 0.9 tag。
-- [`main` 当前 CI](https://github.com/kwsc98/fusen-rs/actions/runs/30238267440)失败：
+- [`main` 已记录 CI](https://github.com/kwsc98/fusen-rs/actions/runs/30238267440)失败：
   MSRV、stable 三平台和 release-contracts 同源于 renamed-runtime 的环境相关诊断快照；
   security 独立失败于未声明许可证的私有测试 crate。
 - 同一 CI run 的真实 Nacos lifecycle 已通过，后续进入 M0.3 时先复核是否仍需改造。
-- M0.1 本地候选已消除对 `rust-src` 的诊断依赖，并通过目标包、全新 target、
-  workspace、clippy 和格式检查，等待推送后的跨平台 CI 验证。
+- M0.1 候选 `5647f9c` 已消除对 `rust-src` 的诊断依赖并推送；目标包、全新
+  target、workspace、clippy 和格式检查已通过，仍需同一 SHA 的跨平台 CI 证据。
+- M0.HTTPS 正在实现：Client 接受 HTTP/HTTPS，HTTPS 固定使用 Rustls Ring、
+  bundled Mozilla WebPKI roots、TLS 1.2/1.3 与严格验证；Server listener 保持明文。
 - 格式、feature matrix 的部分任务及 lifecycle repeat 已通过。
 - 已确认 Spring route 实现没有完整满足“逐段静态优先且不依赖插入顺序”的契约。
 - [性能规范](performance-baseline.md)与当前单场景 benchmark/baseline 覆盖范围不一致。
@@ -33,7 +38,8 @@ CI/正确性/安全 > 契约覆盖 > 发布证据 > 性能演进 > 新功能。
 
 | ID | 状态 | 独立迭代 | 验收标准 |
 | --- | --- | --- | --- |
-| M0.1 | NOW | 修复 renamed-runtime/workspace test 故障簇 | MSRV package/workspace tests 通过，stable 三平台恢复；不混入 deny 或 Nacos 修复 |
+| M0.1 | CANDIDATE | 修复 renamed-runtime/workspace test 故障簇 | MSRV package/workspace tests 通过，stable 三平台恢复；不混入 deny 或 Nacos 修复 |
+| M0.HTTPS | NOW | 增加 Client 出站 HTTPS，保持 Server 明文 | Direct/Nacos HTTP 与 HTTPS 均可用；Fusen 为 h2c 或 TLS ALPN h2，Spring 为 H1；Rustls Ring、bundled roots、TLS 1.2/1.3、证书/hostname 拒绝及无降级有测试；HTTPS advertisement 只代表外部终止器 |
 | M0.2 | NEXT | 修复 cargo-deny security gate | security job 通过；不使用无依据的 advisory/license 忽略 |
 | M0.3 | NEXT | 修复真实 Nacos lifecycle gate | registration/discovery/config 与失败后 cleanup 全部通过 |
 | M0.4 | NEXT | 修复 Spring route 逐段静态优先 | 正反插入顺序都选择更具体路由，并新增确定性回归测试 |
@@ -48,10 +54,11 @@ CI/正确性/安全 > 契约覆盖 > 发布证据 > 性能演进 > 新功能。
 
 ## Recommended Next Iteration
 
-1. 推送 M0.1 的稳定 fixture 候选，并触发同一 SHA 的 CI。
-2. 确认 renamed-runtime、MSRV workspace、stable 三平台和 release-contracts 全部通过。
-3. 通过后将 M0.1 标记完成，把 M0.2 设为唯一 `NOW`。
-4. 若仍有失败，只处理 M0.1 的同源根因，不扩大到 security/Nacos。
+1. 完成 M0.HTTPS 的 endpoint、direct/discovery transport 与 Nacos scheme 保真。
+2. 锁定 HTTP 回归、HTTPS H1/h2、ALPN、证书信任、hostname mismatch 与无降级测试。
+3. 确认 Server 仍只监听明文；显式 HTTPS advertisement 仅由外部终止器承载。
+4. 通过 workspace、跨平台、dependency policy、security、package consumer 与文档门禁后，
+   将 M0.HTTPS 标记完成，再恢复 M0.1/M0.2 的发布阻塞项顺序。
 
 ## Milestone M1: Maintain 0.9.x
 
@@ -69,7 +76,7 @@ CI/正确性/安全 > 契约覆盖 > 发布证据 > 性能演进 > 新功能。
 ## Not Planned
 
 - 完整 Spring MVC 兼容。
-- Core 内 TLS、HTTP/3 或可替换 Transport/Codec SPI。
+- Server 内 TLS、mTLS/自定义 CA、HTTP/3 或可替换 Transport/Codec SPI。
 - 为未发布历史 API 增加兼容 facade 或旧 wire decoder。
 - 在 0.9.0 基线形成前继续扩大功能面。
 

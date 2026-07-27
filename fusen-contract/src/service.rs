@@ -21,7 +21,7 @@ pub enum ContractError {
     /// User metadata attempted to use an invalid or framework-reserved key.
     #[error("invalid metadata key {0:?}")]
     InvalidMetadataKey(String),
-    /// A service endpoint is not a canonical absolute plaintext HTTP URL.
+    /// A service endpoint is not a canonical absolute HTTP or HTTPS URL.
     #[error("invalid service endpoint: {0}")]
     InvalidEndpoint(String),
     /// A service weight is zero, negative, NaN, or infinite.
@@ -171,18 +171,18 @@ impl MethodId {
     }
 }
 
-/// A canonical absolute plaintext HTTP service endpoint.
+/// A canonical absolute HTTP or HTTPS service endpoint.
 ///
 /// Parsing uses [`url::Url`], so host casing, default ports, percent encoding, and dot segments use
-/// that type's canonical representation. HTTPS is intentionally rejected because server-side TLS
-/// is outside the fusen-rs transport contract.
+/// that type's canonical representation. HTTPS endpoints use client-side TLS; accepting one as a
+/// server advertisement does not make the built-in server listener terminate TLS.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ServiceEndpoint(Url);
 
 impl ServiceEndpoint {
     /// Validates an already parsed canonical URL.
     pub fn new(url: Url) -> Result<Self, ContractError> {
-        let valid = url.scheme() == "http"
+        let valid = matches!(url.scheme(), "http" | "https")
             && !url.cannot_be_a_base()
             && url.host_str().is_some()
             && url.port_or_known_default().is_some_and(|port| port != 0)
@@ -527,7 +527,7 @@ impl ServiceRegistration {
         self.descriptor.selector()
     }
 
-    /// Returns the advertised plaintext HTTP endpoint.
+    /// Returns the advertised HTTP or HTTPS endpoint.
     pub const fn endpoint(&self) -> &ServiceEndpoint {
         &self.endpoint
     }
@@ -575,7 +575,7 @@ impl ServiceInstance {
         &self.instance_id
     }
 
-    /// Returns the callable plaintext HTTP endpoint.
+    /// Returns the callable HTTP or HTTPS endpoint.
     pub const fn endpoint(&self) -> &ServiceEndpoint {
         &self.endpoint
     }
@@ -797,11 +797,12 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_normalizes_http_and_rejects_non_plaintext_or_ambiguous_urls() {
-        let endpoint: ServiceEndpoint = "http://EXAMPLE.COM:80/a/../rpc".parse().unwrap();
-        assert_eq!(endpoint.as_str(), "http://example.com/rpc");
+    fn endpoint_normalizes_http_and_https_and_rejects_ambiguous_urls() {
+        let plaintext: ServiceEndpoint = "http://EXAMPLE.COM:80/a/../rpc".parse().unwrap();
+        assert_eq!(plaintext.as_str(), "http://example.com/rpc");
+        let tls: ServiceEndpoint = "https://EXAMPLE.COM:443/a/../rpc".parse().unwrap();
+        assert_eq!(tls.as_str(), "https://example.com/rpc");
         for value in [
-            "https://example.com/rpc",
             "ftp://example.com/rpc",
             "http://user@example.com/rpc",
             "http://example.com:0/rpc",

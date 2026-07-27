@@ -7,6 +7,8 @@
 
 `Server::builder(address)` 收集私有字段 `ServerConfig`、按插入顺序命名的 registries、全局 Middleware、MetricsRecorder 与宏生成的 `*Server` wrapper。`build()` 完成静态服务、协议与路由校验；`start()` 执行 bind、启动 not-ready accept loop、准备并激活 registration handles，只有 Ready 后才返回 `RunningServer`。
 
+内置 listener 只接受明文 HTTP/1.1 与 h2c，不加载证书或私钥。未配置时，Server 向 registries 发布 bound socket 对应的 `http://` endpoint；显式 `.advertised_endpoint("https://...")` 表示由外部 TLS 终止器提供的可达地址，不会改变本地 listener。应用必须自行确保 ingress、sidecar、反向代理或 service mesh 将该地址转发到明文 listener。
+
 状态为：
 
 ```text

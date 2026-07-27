@@ -110,7 +110,7 @@ struct NamedRegistry {
     registry: Arc<dyn Registry>,
 }
 
-/// Validated server that has not yet bound its listening socket.
+/// Validated plaintext HTTP/1.1 and h2c server that has not yet bound its listener.
 pub struct Server {
     address: SocketAddr,
     advertised_endpoint: Option<ServiceEndpoint>,
@@ -275,7 +275,9 @@ impl ServerBuilder {
         self
     }
 
-    /// Sets the externally reachable plaintext endpoint published to registries.
+    /// Sets the externally reachable HTTP or HTTPS endpoint published to registries.
+    ///
+    /// HTTPS describes an external TLS terminator and does not enable TLS on the local listener.
     pub fn advertised_endpoint(mut self, endpoint: impl AsRef<str>) -> Self {
         self.advertised_endpoint = Some(
             endpoint

@@ -23,9 +23,15 @@ SDK performs network I/O. Credentials must be configured as a pair, and
 
 The registry supports `WireProtocol::FusenV1` and
 `WireProtocol::SpringCloudV1`, preserves stable provider instance identities,
-and publishes only validated plaintext service endpoints. Its prepared
+and preserves validated HTTP and HTTPS service endpoints. Registration stores
+the actual scheme in `fusen.scheme`; discovery accepts `http`/`https` and filters
+unknown schemes without rewriting or downgrade. Its prepared
 registration and subscription handles retain provider cleanup ownership across
 cancelled waiters and late activation results.
+
+An HTTPS endpoint is callable by the fusen client using Rustls and bundled
+Mozilla WebPKI roots. When the built-in server advertises HTTPS, an external TLS
+terminator must actually serve that address and forward to the plaintext listener.
 
 The configuration adapter installs the listener before fetching the initial
 document, preventing a setup gap. It returns a `ConfigHandle` that can produce

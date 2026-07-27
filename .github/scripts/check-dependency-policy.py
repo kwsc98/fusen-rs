@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce plaintext and backend-neutral boundaries from resolved Cargo graphs."""
+"""Enforce the approved client TLS and backend boundaries in resolved Cargo graphs."""
 
 from __future__ import annotations
 
@@ -13,12 +13,55 @@ from collections import deque
 
 
 CORE_FORBIDDEN = {
+    "aws-lc-rs",
+    "aws-lc-sys",
     "fusen-nacos",
     "opentelemetry",
     "opentelemetry-otlp",
     "opentelemetry_sdk",
     "tracing-opentelemetry",
     "tracing-subscriber",
+}
+
+SUPPORTED_CLIENT_TARGETS = (
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+)
+
+APPROVED_CLIENT_TLS = {
+    "hyper-rustls",
+    "rustls",
+    "rustls-pki-types",
+    "rustls-webpki",
+    "tokio-rustls",
+    "webpki-roots",
+}
+
+REQUIRED_CLIENT_STACK = APPROVED_CLIENT_TLS | {"ring"}
+
+EXPECTED_TLS_FEATURES = {
+    "hyper-rustls": {
+        "http1",
+        "http2",
+        "ring",
+        "tls12",
+        "webpki-roots",
+        "webpki-tokio",
+    },
+    "rustls": {"ring", "std", "tls12"},
+    "tokio-rustls": {"ring", "tls12"},
+}
+
+FORBIDDEN_CRYPTO_PACKAGES = {
+    "aws-lc-rs",
+    "native-tls",
+    "openssl",
+    "rustls-native-certs",
+    "rustls-platform-verifier",
+    "rustls-platform-verifier-android",
+    "tokio-native-tls",
 }
 
 
@@ -31,6 +74,7 @@ def is_tls_package(name: str) -> bool:
             "tokio-rustls",
             "hyper-rustls",
             "webpki",
+            "webpki-root-certs",
             "webpki-roots",
         }
         or name == "openssl"
@@ -38,6 +82,14 @@ def is_tls_package(name: str) -> bool:
         or name == "rustls"
         or name.startswith("rustls-")
         or name.endswith("-rustls")
+    )
+
+
+def is_forbidden_crypto_package(name: str) -> bool:
+    return (
+        name in FORBIDDEN_CRYPTO_PACKAGES
+        or name.startswith("aws-lc-")
+        or name.startswith("openssl-")
     )
 
 
@@ -94,6 +146,16 @@ def resolved_names(document: dict) -> set[str]:
         for node in document["resolve"]["nodes"]
         if node["id"] in packages
     }
+
+
+def resolved_features(document: dict) -> dict[str, set[str]]:
+    packages = {package["id"]: package["name"] for package in document["packages"]}
+    features: dict[str, set[str]] = {}
+    for node in document["resolve"]["nodes"]:
+        name = packages.get(node["id"])
+        if name is not None:
+            features.setdefault(name, set()).update(node["features"])
+    return features
 
 
 def core_closure(document: dict) -> tuple[set[str], dict[str, str | None]]:
@@ -159,17 +221,54 @@ def main() -> int:
         repo_root / "fuzz-support" / "Cargo.toml",
         repo_root / "fuzz" / "Cargo.toml",
     ]
-    documents = [
+    targets = tuple(dict.fromkeys((host, *SUPPORTED_CLIENT_TARGETS)))
+    root_documents = {
+        target: metadata(repo_root, arguments.toolchain, target, manifests[0])
+        for target in targets
+    }
+    documents = [root_documents[host]] + [
         metadata(repo_root, arguments.toolchain, host, manifest)
-        for manifest in manifests
+        for manifest in manifests[1:]
     ]
 
     failures: list[str] = []
-    for manifest, document in zip(manifests, documents):
-        forbidden = sorted(filter(is_tls_package, resolved_names(document)))
-        if forbidden:
+    for target, document in root_documents.items():
+        root_names = resolved_names(document)
+        unexpected_root_tls = sorted(
+            name
+            for name in root_names
+            if is_tls_package(name) and name not in APPROVED_CLIENT_TLS
+        )
+        if unexpected_root_tls:
             failures.append(
-                f"resolved TLS dependencies for {manifest}: {', '.join(forbidden)}"
+                f"root graph for {target} contains unapproved TLS dependencies: "
+                + ", ".join(unexpected_root_tls)
+            )
+        forbidden_crypto = sorted(filter(is_forbidden_crypto_package, root_names))
+        if forbidden_crypto:
+            failures.append(
+                f"root graph for {target} contains forbidden crypto backends: "
+                + ", ".join(forbidden_crypto)
+            )
+        actual_features = resolved_features(document)
+        for package, expected in EXPECTED_TLS_FEATURES.items():
+            actual = actual_features.get(package, set())
+            if actual != expected:
+                failures.append(
+                    f"{package} features for {target} are {sorted(actual)}, "
+                    f"expected {sorted(expected)}"
+                )
+
+    for manifest, document in zip(manifests[1:], documents[1:]):
+        forbidden_dependencies = sorted(
+            name
+            for name in resolved_names(document)
+            if is_tls_package(name) or is_forbidden_crypto_package(name)
+        )
+        if forbidden_dependencies:
+            failures.append(
+                f"non-runtime graph contains TLS or forbidden crypto dependencies for "
+                f"{manifest}: " + ", ".join(forbidden_dependencies)
             )
 
     lockfiles = [
@@ -177,22 +276,50 @@ def main() -> int:
         repo_root / "fuzz-support" / "Cargo.lock",
         repo_root / "fuzz" / "Cargo.lock",
     ]
-    for lockfile in lockfiles:
-        forbidden = sorted(filter(is_tls_package, lockfile_package_names(lockfile)))
-        if forbidden:
+    root_lock_tls = {
+        name for name in lockfile_package_names(lockfiles[0]) if is_tls_package(name)
+    }
+    unexpected_lock_tls = sorted(root_lock_tls - APPROVED_CLIENT_TLS)
+    if unexpected_lock_tls:
+        failures.append(
+            "root lockfile contains unapproved TLS dependencies: "
+            + ", ".join(unexpected_lock_tls)
+        )
+    forbidden_lock_crypto = sorted(
+        filter(is_forbidden_crypto_package, lockfile_package_names(lockfiles[0]))
+    )
+    if forbidden_lock_crypto:
+        failures.append(
+            "root lockfile contains forbidden crypto backends: "
+            + ", ".join(forbidden_lock_crypto)
+        )
+
+    for lockfile in lockfiles[1:]:
+        forbidden_dependencies = sorted(
+            name
+            for name in lockfile_package_names(lockfile)
+            if is_tls_package(name) or is_forbidden_crypto_package(name)
+        )
+        if forbidden_dependencies:
             failures.append(
-                f"TLS dependencies retained in {lockfile}: {', '.join(forbidden)}"
+                f"TLS or forbidden crypto dependencies retained in non-runtime "
+                f"{lockfile}: " + ", ".join(forbidden_dependencies)
             )
 
-    core_names, _ = core_closure(documents[0])
-    forbidden_core = sorted(
-        name for name in core_names if name in CORE_FORBIDDEN or is_tls_package(name)
-    )
-    if forbidden_core:
-        failures.append(
-            "fusen-rs resolved dependency closure contains forbidden backends: "
-            + ", ".join(forbidden_core)
-        )
+    for target, document in root_documents.items():
+        core_names, _ = core_closure(document)
+        forbidden_core = sorted(name for name in core_names if name in CORE_FORBIDDEN)
+        if forbidden_core:
+            failures.append(
+                f"fusen-rs dependency closure for {target} contains forbidden backends: "
+                + ", ".join(forbidden_core)
+            )
+        missing_client_stack = sorted(REQUIRED_CLIENT_STACK - core_names)
+        if missing_client_stack:
+            failures.append(
+                f"fusen-rs dependency closure for {target} is missing required client "
+                "TLS packages: " + ", ".join(missing_client_stack)
+            )
 
     if failures:
         for failure in failures:
@@ -200,8 +327,9 @@ def main() -> int:
         return 1
 
     print(
-        "dependency policy passed: resolved root/fuzz graphs are TLS-free and "
-        "fusen-rs is backend-neutral"
+        "dependency policy passed: fusen-rs uses Ring with bundled WebPKI roots, "
+        "native roots/TLS, OpenSSL, platform verifiers, and AWS-LC are absent, "
+        "and fuzz graphs remain TLS-free"
     )
     return 0
 

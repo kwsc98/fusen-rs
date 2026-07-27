@@ -7,6 +7,7 @@
 - patch 版本保持 0.9 公共 Rust API、宏语法和已声明 wire v1 行为兼容；
 - 破坏 Rust API 或提升 MSRV 至少需要新的 minor 版本并记录在 CHANGELOG；
 - wire 兼容由 `FusenV1`、`SpringCloudV1` 的协议版本独立约束，有意破坏语义必须引入新 wire 版本和 ADR；
+- `ServiceEndpoint` 对 canonical `http://`/`https://` 的接受、HTTPS 严格验证与无明文降级属于公开 runtime 行为；内置 Server 不承诺 TLS termination；
 - 未记录为公开扩展面的模块、隐藏宏 ABI 与实现细节不构成稳定契约；
 - 不承诺完整 Spring MVC 兼容，只承诺 golden fixtures 覆盖的 Spring Cloud V1 子集。
 

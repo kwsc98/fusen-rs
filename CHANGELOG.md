@@ -17,7 +17,8 @@
 - 定义 Fusen V1：h2c、固定 v1 URI、按名称 arguments envelope 与 result envelope。
 - 定义 Spring Cloud V1：HTTP/1.1、显式 method/path/query/body mapping 与 raw JSON success。
 - 两种协议统一 request ID、relative timeout、attempt headers 与 RFC 9457 Problem Details；内部 source/panic 永不进入 wire。
-- Core 仅支持 canonical `http://` endpoint，在网络 I/O 前拒绝 HTTPS；移除所有 native TLS/OpenSSL runtime 依赖。
+- Client 支持 canonical `http://`/`https://` endpoint；HTTPS 使用 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots、严格证书/hostname 验证与 Fusen ALPN `h2`，不提供明文降级、自定义 CA 或 mTLS。
+- Server listener 保持明文 HTTP/1.1/h2c；HTTPS advertised endpoint 只表示由 ingress、sidecar、反向代理或 service mesh 提供的外部 TLS 终止地址。
 - Client 使用 logical invocation/attempt 分层，一个 deadline 覆盖 admission、Middleware、retries、backoff、transport 与 decode。
 - 增加 retry token budget、endpoint/service circuit breaker、endpoint bulkhead、有界可选 queue 与全局 request/response byte budgets。
 - Retry-After 同时支持 delta-seconds 与 HTTP-date；可重放请求模板和分段响应从序列化前到 Hyper transport 消费/取消 payload 全程持有 byte permit，framing/codec/socket buffer 作为独立有界 transport overhead。
@@ -41,5 +42,5 @@
 ### Removed
 
 - 删除所有旧服务声明/实现入口、单体错误体系、observer 模型、公开 transport/codec 生命周期细节和旧 wire decoder。
-- 删除不完整协议实现、TLS client stack、无限 queue 语义及兼容 facade。
+- 删除旧的不完整协议与 TLS client stack、无限 queue 语义及兼容 facade；新的 HTTPS client 采用独立审计的 Rustls 边界。
 - 删除独立配置 derive 宏 crate；敏感字段通过普通私有配置类型与显式安全 Debug 管理。
