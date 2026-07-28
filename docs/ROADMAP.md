@@ -20,8 +20,8 @@ M0.11 的冻结 SHA 上重跑全部门禁。
 
 ## Current Snapshot
 
-- 所有发布 crate 已使用 `0.9.0`，但 CHANGELOG 仍为 Unreleased，仓库没有
-  `v0.9.0` tag。
+- 所有发布 crate 已使用 `0.9.0`，CHANGELOG 已建立 `0.9.0` section 但发布日期
+  仍为 placeholder，仓库没有 `v0.9.0` tag。
 - [`9a33478` 的 CI](https://github.com/kwsc98/fusen-rs/actions/runs/30269435114) 中，format、
   MSRV clippy/test/doc、stable Linux/macOS、全部 feature matrix、release-contracts、
   lifecycle repeat 和真实 Nacos 已通过；stable Windows 的 workspace tests 失败。
@@ -30,16 +30,26 @@ M0.11 的冻结 SHA 上重跑全部门禁。
 - [`9a33478` 的 Nightly](https://github.com/kwsc98/fusen-rs/actions/runs/30300364088) 中，
   100 轮真实 socket E2E 已通过；三个 fuzz job 均在 harness 步骤失败，且没有
   crash/timeout artifact。
-- release-contracts 已证明 dependency policy、public API denylist、Markdown、fuzz-support
-  clippy、renamed-runtime、benchmark smoke 和 package archive consumer 可执行。
+- 本地候选已为 Windows workspace tests 增加保留原始退出状态的日志 artifact；必须推送
+  后才能取得失败根因，或确认同一 SHA 的 Windows 已恢复。
+- 本地统一 security 脚本已对 root、fuzz-support、fuzz 分别完成四类 `cargo deny`
+  和 `cargo audit`；确认运行使用 1170 条 RustSec advisories，扫描 220/82/89 个依赖，
+  全部通过。仍需同一 SHA 的 CI security 证据。
+- 本地三个 fuzz target 已各运行 300 秒且无 crash/timeout，当前代码的 100 轮真实 socket
+  E2E 全部通过；Nightly 失败日志和真实退出状态已纳入 artifact，仍需同一 SHA 的
+  Nightly 证据。
 - M0.HTTPS 已实现 Client HTTP/HTTPS、Rustls Ring、bundled roots、TLS 1.2/1.3、
   严格证书/hostname/ALPN 验证与无明文降级；Server listener 保持明文。
 - M0.3 的真实 Nacos registration/discovery/config/cleanup 已在 `9a33478` 通过。
-- 已确认 Spring route 实现没有完整满足“逐段静态优先且不依赖插入顺序”的契约。
-- 已确认 Spring repeated query 的 `Vec<String>` 在 0/1 个值时不能稳定 roundtrip。
-- [性能规范](performance-baseline.md)与当前单场景 benchmark/baseline 覆盖范围不一致。
-- Release Benchmark Gate 尚无历史 run；最终门禁固定覆盖 Fusen 并发
-  `1/100` × small/64 KiB，Spring 矩阵作为非阻塞 artifact。
+- 本地候选已实现 method-specific Spring route trie、repeated-query cardinality、
+  Middleware exactly-once、配置默认值/预算边界和 retry 读取最新 Directory revision；
+  专项测试、workspace tests、Clippy 和 rustdoc 已通过，仍需同一 SHA 的 CI 证据。
+- 性能 gate 已覆盖 Fusen/Spring 的 `1/100` x small/64 KiB 八个真实 socket case，
+  schema v2、五轮原始样本和 10% 判定测试已通过；committed baseline 明确保持
+  `calibration-required`，必须先在固定 runner 上对干净提交生成五轮 baseline。
+- 发布 runbook 已统一 `v0.9.0`，并固定候选证据、七 crate 分层发布、registry
+  传播等待、registry-only consumer、失败恢复和 yank/0.9.1 原则；CHANGELOG 日期
+  必须在 M0.11 冻结前填写。
 
 ## Milestone M0: Publish 0.9.0
 
@@ -50,27 +60,29 @@ M0.11 的冻结 SHA 上重跑全部门禁。
 | --- | --- | --- | --- |
 | M0.1 | NOW | 恢复 Windows workspace tests | 定位具体失败，不跳过或放宽断言；同一 SHA 的 MSRV 与 stable 三平台全绿 |
 | M0.HTTPS | CANDIDATE | 增加 Client 出站 HTTPS，保持 Server 明文 | Direct/Nacos HTTP 与 HTTPS 均可用；Fusen 为 h2c 或 TLS ALPN h2，Spring 为 H1；Rustls Ring、bundled roots、TLS 1.2/1.3、证书/hostname 拒绝及无降级有测试；HTTPS advertisement 只代表外部终止器 |
-| M0.2 | NEXT | 修复 cargo-deny security gate | security job 通过；不使用无依据的 advisory/license 忽略 |
-| M0.10a | NEXT | 补齐三 workspace 安全审计 | root/fuzz-support/fuzz 的 advisories/bans/licenses/sources/audit 均非空执行并阻断失败 |
-| M0.FUZZ | NEXT | 恢复 Nightly fuzz | 三个 target 各运行 300 秒；真实 crash/timeout 先固化为确定性回归；100 轮 E2E 保持通过 |
+| M0.2 | CANDIDATE | 修复 cargo-deny security gate | security job 通过；不使用无依据的 advisory/license 忽略 |
+| M0.10a | CANDIDATE | 补齐三 workspace 安全审计 | root/fuzz-support/fuzz 的 advisories/bans/licenses/sources/audit 均非空执行并阻断失败 |
+| M0.FUZZ | CANDIDATE | 恢复 Nightly fuzz | 三个 target 各运行 300 秒；真实 crash/timeout 先固化为确定性回归；100 轮 E2E 保持通过 |
 | M0.3 | DONE | 锁定真实 Nacos lifecycle gate | registration/discovery/config 与失败后 cleanup 全部通过 |
-| M0.4 | NEXT | 修复 Spring route 逐段静态优先 | 正反插入顺序都选择更具体路由，并新增确定性回归测试 |
-| M0.5 | NEXT | 锁定 repeated-query wire 契约 | 显式 Scalar/Repeated cardinality；`Vec<String>` 的 0/1/N query key 具有 client/server golden roundtrip |
-| M0.6 | NEXT | 锁定 retry 外 Middleware exactly-once | 双 attempt 下 global/local middleware 均只执行一次 |
-| M0.7 | NEXT | 锁定公开配置默认值 | Client/Server 默认值和关键预算关系有表驱动测试 |
-| M0.8 | NEXT | 锁定 retry 时最新 DirectorySnapshot | 两次 attempt 间更新 snapshot，第二次使用新 revision |
-| M0.9 | NEXT | 校准性能发布契约 | Fusen 并发 1/100 × small/64 KiB 为 blocking matrix；baseline 记录不可变 SHA、机器信息和五轮原始结果 |
-| M0.10b | NEXT | 冻结发布 runbook 与文档 | 发布顺序、registry 传播等待、部分发布失败/yank 恢复与 `v0.9.0` tag 命名明确 |
+| M0.4 | CANDIDATE | 修复 Spring route 逐段静态优先 | 正反插入顺序都选择更具体路由，并新增确定性回归测试 |
+| M0.5 | CANDIDATE | 锁定 repeated-query wire 契约 | 显式 Scalar/Repeated cardinality；`Vec<String>` 的 0/1/N query key 具有 client/server golden roundtrip |
+| M0.6 | CANDIDATE | 锁定 retry 外 Middleware exactly-once | 双 attempt 下 global/local middleware 均只执行一次 |
+| M0.7 | CANDIDATE | 锁定公开配置默认值 | Client/Server 默认值和关键预算关系有表驱动测试 |
+| M0.8 | CANDIDATE | 锁定 retry 时最新 DirectorySnapshot | 两次 attempt 间更新 snapshot，第二次使用新 revision |
+| M0.9 | CANDIDATE | 校准性能发布契约 | Fusen 并发 1/100 × small/64 KiB 为 blocking matrix；baseline 记录不可变 SHA、机器信息和五轮原始结果 |
+| M0.10b | CANDIDATE | 冻结发布 runbook 与文档 | 发布顺序、registry 传播等待、部分发布失败/yank 恢复与 `v0.9.0` tag 命名明确 |
 | M0.11 | NEXT | 生成最终候选证据 | 同一 SHA 的 CI、nightly fuzz/E2E、Nacos、package consumer、固定机 benchmark 全绿 |
 | M0.12 | MANUAL | 发布并建立兼容基线 | crates 按依赖顺序可见；GitHub Release 与 `v0.9.0` tag 指向已验证 SHA |
 
 ## Recommended Next Iteration
 
-1. 取得 `stable-windows-latest` 的具体失败日志；如果无法从 API 读取，为 Windows
-   test step 增加失败日志 artifact。
-2. 只修复跨平台根因，不跳过测试、放宽断言或混入 security/fuzz 改动。
-3. 让同一新 SHA 的 MSRV、stable Linux/macOS/Windows 和 HTTPS/H1/h2 契约全绿，
-   然后将 M0.1 与 M0.HTTPS 标记 `DONE`。
+1. 经维护者确认后推送当前干净候选，运行完整 CI 和 Nightly；若 Windows 仍失败，
+   下载 `windows-workspace-tests-<sha>-<attempt>` artifact 取得具体测试日志。
+2. 只修复 Windows 的跨平台根因，不跳过测试或放宽断言；让同一 SHA 的 MSRV、
+   Linux、macOS、Windows、security、Nacos、package consumer、Nightly fuzz/E2E 全绿。
+3. 在固定 `fusen-benchmark-0-9-reference` runner 上以 `calibrate` mode 对干净提交
+   运行五轮，审查并单独提交生成的 baseline；该提交会产生新候选，随后必须重跑
+   完整外部证据和 `compare`，不能沿用 calibration 前的 SHA。
 
 ## Milestone M1: Maintain 0.9.x
 
