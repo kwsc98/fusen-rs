@@ -203,6 +203,7 @@ mod wire {
 }
 
 #[allow(clippy::items_after_test_module)]
+#[cfg(not(test))]
 mod routes {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -321,4 +322,9 @@ pub fn fuzz_spring_path(data: &[u8]) {
 
 pub fn fuzz_problem_details(data: &[u8]) {
     wire::exercise_problem_details(data);
+}
+
+#[cfg(test)]
+mod routes {
+    pub(super) fn exercise_path_and_query(_path: &str, _query: &str) {}
 }

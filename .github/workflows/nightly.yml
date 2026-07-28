@@ -35,20 +35,66 @@ jobs:
         with:
           workspaces: fuzz -> target
       - name: Fuzz the private-source harness
+        id: fuzz_run
         working-directory: fuzz
-        run: >-
-          cargo +nightly fuzz run ${{ matrix.target }} --
-          -max_total_time=300
-          -timeout=10
-          -max_len=65536
-          -rss_limit_mb=4096
-      - name: Upload crashing and timeout inputs
-        if: failure()
+        shell: bash
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -uo pipefail
+
+          log_dir="$GITHUB_WORKSPACE/target/nightly-fuzz-logs"
+          log_file="$log_dir/$FUZZ_TARGET.log"
+          status_file="$log_dir/$FUZZ_TARGET.status"
+          mkdir -p "$log_dir"
+
+          fuzz_command=(
+            cargo +nightly fuzz run "$FUZZ_TARGET" --
+            -max_total_time=300
+            -timeout=10
+            -max_len=65536
+            -rss_limit_mb=4096
+          )
+
+          {
+            printf 'github_sha=%s\n' "$GITHUB_SHA"
+            printf 'runner=%s/%s\n' "$RUNNER_OS" "$RUNNER_ARCH"
+            cargo +nightly --version
+            rustc +nightly --version --verbose
+            cargo +nightly fuzz --version
+            printf 'command:'
+            printf ' %q' "${fuzz_command[@]}"
+            printf '\n'
+          } 2>&1 | tee "$log_file"
+
+          set +e
+          "${fuzz_command[@]}" 2>&1 | tee -a "$log_file"
+          fuzz_exit_status=${PIPESTATUS[0]}
+          set -e
+
+          printf 'exit_status=%s\n' "$fuzz_exit_status" > "$status_file"
+          printf 'exit_status=%s\n' "$fuzz_exit_status" | tee -a "$log_file"
+          exit "$fuzz_exit_status"
+      - name: Upload fuzz failure diagnostics
+        if: failure() && steps.fuzz_run.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-artifacts-${{ matrix.target }}
+          name: >-
+            fuzz-diagnostics-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            target/nightly-fuzz-logs/${{ matrix.target }}.log
+            target/nightly-fuzz-logs/${{ matrix.target }}.status
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload crashing and timeout inputs
+        if: failure() && steps.fuzz_run.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: >-
+            fuzz-artifacts-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
+          retention-days: 14
 
   core-e2e-repeat:
     name: core-e2e-repeat-100
