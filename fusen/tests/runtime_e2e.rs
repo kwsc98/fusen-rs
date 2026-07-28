@@ -1,11 +1,18 @@
 //! Real-socket coverage for both wire protocols and bounded server draining.
 
 use fusen_rs::{
-    ClientRuntime, RpcCategory, RpcError, RpcOrigin, Server, ServerConfig, ServerErrorKind,
-    ServerState, WireProtocol, contract::ProtocolSet, service,
+    ClientConfig, ClientRuntime, Middleware, Next, RetryConfig, RpcCategory, RpcContext, RpcError,
+    RpcOrigin, RpcResult, Server, ServerConfig, ServerErrorKind, ServerState, WireProtocol,
+    contract::ProtocolSet, service,
 };
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::{Barrier, Semaphore};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +85,48 @@ impl PanicService for PanicServiceImpl {
     }
 }
 
+#[service(name = "logical-middleware-e2e")]
+trait LogicalMiddlewareService {
+    #[fusen_rs::method(
+        idempotency = "safe",
+        spring(method = "GET", path = "/logical-middleware")
+    )]
+    async fn execute(&self) -> Result<String, RpcError>;
+}
+
+struct RetryOnceService {
+    attempts: Arc<AtomicUsize>,
+}
+
+impl LogicalMiddlewareService for RetryOnceService {
+    async fn execute(&self) -> Result<String, RpcError> {
+        match self.attempts.fetch_add(1, Ordering::AcqRel) {
+            0 => Err(RpcError::new(
+                RpcCategory::Unavailable,
+                "retry_once",
+                "retry this safe request once",
+            )
+            .unwrap()),
+            1 => Ok("complete".to_owned()),
+            attempt => panic!("unexpected physical attempt {}", attempt + 1),
+        }
+    }
+}
+
+struct InvocationCounter(Arc<AtomicUsize>);
+
+impl Middleware for InvocationCounter {
+    fn handle<'a>(
+        &'a self,
+        context: RpcContext,
+        next: Next<'a>,
+    ) -> impl std::future::Future<Output = RpcResult> + Send + 'a {
+        assert_eq!(context.attempt(), 1, "logical middleware sees attempt one");
+        self.0.fetch_add(1, Ordering::AcqRel);
+        async move { next.run(context).await }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_h2c_and_http1_slices_round_trip() {
     let config = ServerConfig::builder()
@@ -129,6 +178,57 @@ async fn real_h2c_and_http1_slices_round_trip() {
     );
 
     drop((fusen, spring));
+    runtime.shutdown().await.unwrap();
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_middleware_runs_once_around_two_physical_attempts() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let server = Server::builder("127.0.0.1:0")
+        .config(
+            ServerConfig::builder()
+                .protocols(ProtocolSet::ALL)
+                .build()
+                .unwrap(),
+        )
+        .service(LogicalMiddlewareServiceServer::new(RetryOnceService {
+            attempts: attempts.clone(),
+        }))
+        .build()
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let global_calls = Arc::new(AtomicUsize::new(0));
+    let local_calls = Arc::new(AtomicUsize::new(0));
+    let config = ClientConfig::builder()
+        .retry(
+            RetryConfig::default()
+                .max_attempts(2)
+                .backoff(Duration::from_nanos(1), Duration::from_nanos(1)),
+        )
+        .build()
+        .unwrap();
+    let runtime = ClientRuntime::builder()
+        .config(config)
+        .middleware(InvocationCounter(global_calls.clone()))
+        .build()
+        .unwrap();
+    let client = LogicalMiddlewareServiceClient::builder(&runtime)
+        .direct(format!("http://{}", server.local_addr()))
+        .protocol(WireProtocol::SpringCloudV1)
+        .middleware(InvocationCounter(local_calls.clone()))
+        .connect()
+        .await
+        .unwrap();
+
+    assert_eq!(client.execute().await.unwrap(), "complete");
+    assert_eq!(attempts.load(Ordering::Acquire), 2);
+    assert_eq!(global_calls.load(Ordering::Acquire), 1);
+    assert_eq!(local_calls.load(Ordering::Acquire), 1);
+
+    drop(client);
     runtime.shutdown().await.unwrap();
     server.shutdown().await.unwrap();
 }
