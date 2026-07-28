@@ -10,7 +10,7 @@ use fusen_contract::{
 use http::{HeaderMap, Method};
 use serde_json::Value;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     sync::Arc,
 };
 
@@ -23,14 +23,18 @@ pub(crate) struct Route {
     pub middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
 }
 
-#[derive(Clone)]
-struct SpringRoute {
-    method: Method,
-    segments: Vec<Segment>,
+struct SpringRouteLeaf {
     route: Arc<Route>,
+    parameter_names: Vec<String>,
 }
 
-#[derive(Clone)]
+#[derive(Default)]
+struct SpringRouteTrie {
+    literals: BTreeMap<String, SpringRouteTrie>,
+    parameter: Option<Box<SpringRouteTrie>>,
+    leaf: Option<SpringRouteLeaf>,
+}
+
 enum Segment {
     Literal(String),
     Parameter(String),
@@ -43,14 +47,13 @@ pub(crate) struct MatchedRoute {
 
 pub(crate) struct RouteTable {
     fusen: HashMap<(String, Option<String>, Option<String>), Arc<Route>>,
-    spring: Vec<SpringRoute>,
+    spring: HashMap<Method, SpringRouteTrie>,
 }
 
 impl RouteTable {
     pub(crate) fn build(routes: Vec<Route>) -> Result<Self, String> {
         let mut fusen = HashMap::new();
-        let mut spring = Vec::new();
-        let mut spring_keys = HashSet::new();
+        let mut spring = HashMap::new();
         for route in routes {
             let route = Arc::new(route);
             match route.protocol {
@@ -84,48 +87,22 @@ impl RouteTable {
                         );
                     }
                     let segments = parse_template(mapping.path());
-                    let normalized = segments
-                        .iter()
-                        .map(|segment| match segment {
-                            Segment::Literal(value) => value.as_str(),
-                            Segment::Parameter(_) => "{}",
-                        })
-                        .collect::<Vec<_>>()
-                        .join("/");
-                    if !spring_keys.insert((mapping.method().clone(), normalized)) {
+                    let method = mapping.method().clone();
+                    let path = mapping.path().to_owned();
+                    if !spring
+                        .entry(method.clone())
+                        .or_insert_with(SpringRouteTrie::default)
+                        .insert(&segments, route)
+                    {
                         return Err(format!(
                             "duplicate or ambiguous SpringCloudV1 route {} {}",
-                            mapping.method(),
-                            mapping.path()
+                            method, path
                         ));
                     }
-                    spring.push(SpringRoute {
-                        method: mapping.method().clone(),
-                        segments,
-                        route,
-                    });
                 }
                 _ => return Err("unsupported wire protocol in route table".into()),
             }
         }
-        spring.sort_by(|left, right| {
-            left.method
-                .as_str()
-                .cmp(right.method.as_str())
-                .then_with(|| {
-                    let left = left
-                        .segments
-                        .iter()
-                        .filter(|segment| matches!(segment, Segment::Literal(_)))
-                        .count();
-                    let right = right
-                        .segments
-                        .iter()
-                        .filter(|segment| matches!(segment, Segment::Literal(_)))
-                        .count();
-                    right.cmp(&left)
-                })
-        });
         Ok(Self { fusen, spring })
     }
 
@@ -150,32 +127,71 @@ impl RouteTable {
         path: &str,
     ) -> Result<MatchedRoute, RpcError> {
         let request_segments = split_path(path)?;
-        for candidate in &self.spring {
-            if candidate.method != *method || candidate.segments.len() != request_segments.len() {
-                continue;
-            }
-            let mut parameters = HashMap::new();
-            let mut matched = true;
-            for (expected, actual) in candidate.segments.iter().zip(&request_segments) {
-                match expected {
-                    Segment::Literal(value) if value == actual => {}
-                    Segment::Literal(_) => {
-                        matched = false;
-                        break;
-                    }
-                    Segment::Parameter(name) => {
-                        parameters.insert(name.clone(), actual.clone());
-                    }
+        let trie = self.spring.get(method).ok_or_else(not_found)?;
+        let mut parameter_values = Vec::new();
+        let leaf = trie
+            .match_segments(&request_segments, &mut parameter_values)
+            .ok_or_else(not_found)?;
+        debug_assert_eq!(leaf.parameter_names.len(), parameter_values.len());
+        let path_arguments = leaf
+            .parameter_names
+            .iter()
+            .cloned()
+            .zip(parameter_values)
+            .collect();
+        Ok(MatchedRoute {
+            route: leaf.route.clone(),
+            path_arguments,
+        })
+    }
+}
+
+impl SpringRouteTrie {
+    fn insert(&mut self, segments: &[Segment], route: Arc<Route>) -> bool {
+        let mut node = self;
+        let mut parameter_names = Vec::new();
+        for segment in segments {
+            node = match segment {
+                Segment::Literal(value) => node.literals.entry(value.clone()).or_default(),
+                Segment::Parameter(name) => {
+                    parameter_names.push(name.clone());
+                    node.parameter
+                        .get_or_insert_with(|| Box::new(Self::default()))
                 }
-            }
-            if matched {
-                return Ok(MatchedRoute {
-                    route: candidate.route.clone(),
-                    path_arguments: parameters,
-                });
-            }
+            };
         }
-        Err(not_found())
+        if node.leaf.is_some() {
+            return false;
+        }
+        node.leaf = Some(SpringRouteLeaf {
+            route,
+            parameter_names,
+        });
+        true
+    }
+
+    fn match_segments<'a>(
+        &'a self,
+        segments: &[String],
+        parameter_values: &mut Vec<String>,
+    ) -> Option<&'a SpringRouteLeaf> {
+        let Some((segment, remaining)) = segments.split_first() else {
+            return self.leaf.as_ref();
+        };
+
+        if let Some(literal) = self.literals.get(segment)
+            && let Some(matched) = literal.match_segments(remaining, parameter_values)
+        {
+            return Some(matched);
+        }
+
+        let parameter = self.parameter.as_ref()?;
+        parameter_values.push(segment.clone());
+        let matched = parameter.match_segments(remaining, parameter_values);
+        if matched.is_none() {
+            parameter_values.pop();
+        }
+        matched
     }
 }
 
@@ -335,6 +351,170 @@ fn not_found() -> RpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{RpcResult, runtime::BoxFuture, service::ServerInvocation};
+    use fusen_contract::{
+        Idempotency, MethodId, ServiceSelector, SpringCloudMethod, SpringCloudParameter,
+    };
+
+    struct UnusedDispatch;
+
+    impl ErasedDispatch for UnusedDispatch {
+        fn call<'a>(&'a self, _invocation: ServerInvocation) -> BoxFuture<'a, RpcResult> {
+            Box::pin(async { unreachable!("route matching tests never dispatch") })
+        }
+    }
+
+    fn spring_route(service_id: &str, method: Method, path: &str) -> Route {
+        let parameters = parse_template(path)
+            .into_iter()
+            .filter_map(|segment| match segment {
+                Segment::Literal(_) => None,
+                Segment::Parameter(name) => {
+                    Some(SpringCloudParameter::new(name, SpringCloudParameterSource::Path).unwrap())
+                }
+            })
+            .collect();
+        let descriptor: &'static ServiceDescriptor = Box::leak(Box::new(
+            ServiceDescriptor::new(
+                ServiceSelector::new(service_id, None, None).unwrap(),
+                vec![
+                    MethodDescriptor::new(
+                        MethodId::new(0),
+                        service_id,
+                        Idempotency::None,
+                        Some(SpringCloudMethod::new(method, path, parameters).unwrap()),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+        ));
+        Route {
+            protocol: WireProtocol::SpringCloudV1,
+            service: descriptor,
+            method: &descriptor.methods()[0],
+            dispatch: Arc::new(UnusedDispatch),
+            middleware: Arc::from(Vec::<Arc<dyn MiddlewareDyn>>::new()),
+        }
+    }
+
+    #[test]
+    fn spring_routes_use_per_segment_precedence_independent_of_insertion_order() {
+        for parameter_first in [false, true] {
+            let literal_prefix = spring_route(
+                "literal-prefix",
+                Method::GET,
+                "/files/special/{kind}/{value}",
+            );
+            let more_total_literals = spring_route(
+                "more-total-literals",
+                Method::GET,
+                "/files/{id}/details/static",
+            );
+            let routes = if parameter_first {
+                vec![more_total_literals, literal_prefix]
+            } else {
+                vec![literal_prefix, more_total_literals]
+            };
+            let table = RouteTable::build(routes).unwrap();
+
+            let matched = table
+                .match_spring(&Method::GET, "/files/special/details/static")
+                .unwrap();
+            assert_eq!(matched.route.method.fusen_identity(), "literal-prefix");
+            assert_eq!(
+                matched.path_arguments.get("kind").map(String::as_str),
+                Some("details")
+            );
+            assert_eq!(
+                matched.path_arguments.get("value").map(String::as_str),
+                Some("static")
+            );
+        }
+    }
+
+    #[test]
+    fn spring_routes_fall_back_to_a_parameter_after_a_literal_dead_end() {
+        let table = RouteTable::build(vec![
+            spring_route("literal-dead-end", Method::GET, "/catalog/special/details"),
+            spring_route("parameter-fallback", Method::GET, "/catalog/{id}/summary"),
+        ])
+        .unwrap();
+
+        let matched = table
+            .match_spring(&Method::GET, "/catalog/special/summary")
+            .unwrap();
+        assert_eq!(matched.route.method.fusen_identity(), "parameter-fallback");
+        assert_eq!(
+            matched.path_arguments.get("id").map(String::as_str),
+            Some("special")
+        );
+    }
+
+    #[test]
+    fn spring_routes_match_decoded_literal_and_parameter_segments() {
+        let table = RouteTable::build(vec![
+            spring_route("encoded-literal", Method::GET, "/encoded/special"),
+            spring_route("encoded-parameter", Method::GET, "/encoded/{value}"),
+        ])
+        .unwrap();
+
+        let literal = table
+            .match_spring(&Method::GET, "/encoded/%73pecial")
+            .unwrap();
+        assert_eq!(literal.route.method.fusen_identity(), "encoded-literal");
+
+        let parameter = table.match_spring(&Method::GET, "/encoded/a%2Fb").unwrap();
+        assert_eq!(
+            parameter.path_arguments.get("value").map(String::as_str),
+            Some("a/b")
+        );
+    }
+
+    #[test]
+    fn spring_routes_reject_equivalent_dynamic_shapes_across_services() {
+        let result = RouteTable::build(vec![
+            spring_route("route-by-id", Method::GET, "/users/{id}"),
+            spring_route("route-by-name", Method::GET, "/users/{name}"),
+        ]);
+
+        let error = match result {
+            Ok(_) => panic!("equivalent dynamic route shapes must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("duplicate or ambiguous SpringCloudV1 route GET /users/{name}"));
+    }
+
+    #[test]
+    fn spring_route_tries_are_isolated_by_http_method() {
+        let table = RouteTable::build(vec![
+            spring_route("get-route", Method::GET, "/method/{id}"),
+            spring_route("post-route", Method::POST, "/method/{name}"),
+        ])
+        .unwrap();
+
+        let get = table.match_spring(&Method::GET, "/method/value").unwrap();
+        let post = table.match_spring(&Method::POST, "/method/value").unwrap();
+        assert_eq!(get.route.method.fusen_identity(), "get-route");
+        assert_eq!(post.route.method.fusen_identity(), "post-route");
+    }
+
+    #[test]
+    fn fusen_routes_remain_exact() {
+        let mut route = spring_route("fusen-exact", Method::GET, "/unused");
+        route.protocol = WireProtocol::FusenV1;
+        let table = RouteTable::build(vec![route]).unwrap();
+
+        let matched = table
+            .match_fusen("/_fusen/v1/fusen-exact/fusen-exact", &HeaderMap::new())
+            .unwrap();
+        assert_eq!(matched.route.method.fusen_identity(), "fusen-exact");
+        assert!(
+            table
+                .match_fusen("/_fusen/v1/fusen-exact/missing", &HeaderMap::new())
+                .is_err()
+        );
+    }
 
     #[test]
     fn query_pair_limit_is_checked_without_decoding_a_body() {
