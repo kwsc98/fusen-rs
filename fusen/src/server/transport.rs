@@ -74,6 +74,7 @@ pub(crate) struct TransportConfig {
 
 pub(crate) struct DrainCommand {
     pub deadline: Instant,
+    pub listener_closed: oneshot::Sender<()>,
 }
 
 pub(crate) struct AcceptOutcome {
@@ -192,6 +193,11 @@ async fn run_inner(
             deadline_exceeded: true,
         };
     };
+    let DrainCommand {
+        deadline,
+        listener_closed,
+    } = command;
+    let _ = listener_closed.send(());
 
     let graceful_drain = async {
         drain_connection_tasks(&mut tasks).await;
@@ -200,7 +206,7 @@ async fn run_inner(
     let drained = tokio::select! {
         biased;
         () = force_cancel.cancelled() => false,
-        result = tokio::time::timeout_at(command.deadline, graceful_drain) => result.is_ok(),
+        result = tokio::time::timeout_at(deadline, graceful_drain) => result.is_ok(),
     };
     if !drained {
         executor.cancel();

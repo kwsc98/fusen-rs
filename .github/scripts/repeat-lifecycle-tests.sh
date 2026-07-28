@@ -39,7 +39,7 @@ require_test "$runtime_tests" \
     "graceful_shutdown_aborts_a_permanently_pending_stream_at_deadline" \
     "fusen-rs/runtime_e2e"
 require_test "$server_tests" \
-    "shutdown_closes_listener_while_registry_and_connection_drain_in_parallel" \
+    "shutdown_closes_listener_before_registry_and_connection_drain_in_parallel" \
     "fusen-rs/server_registry"
 require_test "$register_tests" \
     "tests::cancelling_last_activation_waiter_requests_late_success_cleanup" \

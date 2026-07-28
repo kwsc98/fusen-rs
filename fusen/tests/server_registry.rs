@@ -217,7 +217,7 @@ async fn registrations_follow_stable_order_and_close_in_reverse() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shutdown_closes_listener_while_registry_and_connection_drain_in_parallel() {
+async fn shutdown_closes_listener_before_registry_and_connection_drain_in_parallel() {
     let entered = Arc::new(Barrier::new(2));
     let service_release = Arc::new(Semaphore::new(0));
     let (close_started_sender, close_started) = oneshot::channel();
@@ -261,12 +261,18 @@ async fn shutdown_closes_listener_while_registry_and_connection_drain_in_paralle
 
     let handle = server.handle();
     let shutdown = tokio::spawn(async move { handle.shutdown().await });
+    wait_for_state(&server, ServerState::Draining).await;
+    let connection = tokio::time::timeout(Duration::from_secs(1), TcpStream::connect(address))
+        .await
+        .expect("post-ack listener probe must complete");
+    assert!(
+        connection.is_err(),
+        "Draining must not be published before the listener is closed"
+    );
     tokio::time::timeout(Duration::from_secs(1), close_started)
         .await
         .expect("registry close must start while the request remains in flight")
         .unwrap();
-    wait_for_state(&server, ServerState::Draining).await;
-    wait_until_listener_is_closed(address).await;
     assert!(
         !shutdown.is_finished(),
         "shutdown must wait for both registry and connection drain"
@@ -470,20 +476,4 @@ async fn wait_for_state(server: &fusen_rs::RunningServer, expected: ServerState)
     })
     .await
     .expect("server lifecycle state must advance");
-}
-
-async fn wait_until_listener_is_closed(address: std::net::SocketAddr) {
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            match TcpStream::connect(address).await {
-                Ok(stream) => {
-                    drop(stream);
-                    tokio::task::yield_now().await;
-                }
-                Err(_) => return,
-            }
-        }
-    })
-    .await
-    .expect("shutdown must close the listener before cleanup completes");
 }

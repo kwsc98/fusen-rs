@@ -663,21 +663,26 @@ async fn drain_runtime(
     fatal: Option<std::io::Error>,
 ) -> Result<(), ServerError> {
     coordinator.readiness.store(DRAINING);
-    set_state(&coordinator.state, ServerState::Draining);
     coordinator.app.begin_draining();
     let deadline = Instant::now() + coordinator.config.graceful_shutdown_timeout();
-    let _ = drain.send(DrainCommand { deadline });
-    let started = StdInstant::now();
-    let close = close_registrations(
-        tracked,
+    let (listener_closed_sender, listener_closed) = oneshot::channel();
+    let _ = drain.send(DrainCommand {
         deadline,
-        coordinator.config.registry().operation_timeout(),
-        coordinator.config.registry().max_concurrent_operations(),
-        coordinator.metrics.clone(),
-    );
+        listener_closed: listener_closed_sender,
+    });
+    let started = StdInstant::now();
     let work = async {
+        let listener_error =
+            publish_draining_after_listener_closed(listener_closed, &coordinator.state).await;
+        let close = close_registrations(
+            tracked,
+            deadline,
+            coordinator.config.registry().operation_timeout(),
+            coordinator.config.registry().max_concurrent_operations(),
+            coordinator.metrics.clone(),
+        );
         let (registry, (), accept) = tokio::join!(close, coordinator.app.drained(), accept);
-        (registry, accept)
+        (registry, accept, listener_error)
     };
     let result = match tokio::time::timeout_at(deadline, work).await {
         Err(_) => {
@@ -687,7 +692,7 @@ async fn drain_runtime(
                 "server graceful shutdown deadline elapsed",
             ))
         }
-        Ok((registry, accept)) => resolve_shutdown_result(
+        Ok((registry, accept, listener_error)) => resolve_shutdown_result(
             registry,
             accept.map_err(|error| {
                 ServerError::with_source(
@@ -697,6 +702,7 @@ async fn drain_runtime(
                 )
             }),
             fatal,
+            listener_error,
         ),
     };
     coordinator.metrics.record(&MetricEvent::ShutdownFinished {
@@ -709,6 +715,23 @@ async fn drain_runtime(
         duration: started.elapsed(),
     });
     result
+}
+
+async fn publish_draining_after_listener_closed(
+    listener_closed: oneshot::Receiver<()>,
+    state: &AtomicU8,
+) -> Option<ServerError> {
+    let error = listener_closed.await.err().map(|error| {
+        ServerError::with_source(
+            ServerErrorKind::Accept,
+            "HTTP accept supervisor ended before confirming listener closure",
+            error,
+        )
+    });
+    if error.is_none() {
+        set_state(state, ServerState::Draining);
+    }
+    error
 }
 
 fn prepare_registrations(
@@ -801,6 +824,7 @@ fn resolve_shutdown_result(
     registry: CloseOutcome,
     accept: Result<AcceptOutcome, ServerError>,
     fatal: Option<std::io::Error>,
+    listener_error: Option<ServerError>,
 ) -> Result<(), ServerError> {
     let (accept_deadline_exceeded, outcome_fatal, completion_error) = match accept {
         Ok(accept) => (accept.deadline_exceeded, accept.fatal_error, None),
@@ -820,6 +844,12 @@ fn resolve_shutdown_result(
                 "accept completion error was overridden by shutdown timeout"
             );
         }
+        if let Some(error) = listener_error.as_ref() {
+            tracing::error!(
+                ?error,
+                "listener closure error was overridden by shutdown timeout"
+            );
+        }
         return Err(ServerError::message(
             ServerErrorKind::Timeout,
             "server graceful shutdown deadline elapsed",
@@ -830,6 +860,12 @@ fn resolve_shutdown_result(
             tracing::error!(
                 ?completion_error,
                 "accept completion error was overridden by the fatal accept failure"
+            );
+        }
+        if let Some(listener_error) = listener_error {
+            tracing::error!(
+                ?listener_error,
+                "listener closure error was overridden by the fatal accept failure"
             );
         }
         if let Some(registry_error) = registry.first_error {
@@ -843,6 +879,21 @@ fn resolve_shutdown_result(
             "HTTP server reached a fatal accept failure",
             error,
         ));
+    }
+    if let Some(error) = listener_error {
+        if let Some(completion_error) = completion_error {
+            tracing::error!(
+                ?completion_error,
+                "accept completion error was overridden by listener closure failure"
+            );
+        }
+        if let Some(registry_error) = registry.first_error {
+            tracing::error!(
+                ?registry_error,
+                "registry error was overridden by listener closure failure"
+            );
+        }
+        return Err(error);
     }
     if let Some(error) = completion_error {
         if let Some(registry_error) = registry.first_error {
@@ -1068,6 +1119,10 @@ mod tests {
                 "accept completion missing",
             )),
             Some(std::io::Error::other("fatal accept")),
+            Some(ServerError::message(
+                ServerErrorKind::Accept,
+                "listener closure missing",
+            )),
         );
         assert_eq!(result.unwrap_err().kind(), ServerErrorKind::Timeout);
     }
@@ -1084,8 +1139,31 @@ mod tests {
                 deadline_exceeded: false,
             }),
             None,
+            None,
         );
         assert_eq!(result.unwrap_err().kind(), ServerErrorKind::Accept);
+    }
+
+    #[test]
+    fn shutdown_result_prioritizes_listener_closure_over_completion_and_registry_errors() {
+        let result = resolve_shutdown_result(
+            CloseOutcome {
+                timed_out: false,
+                first_error: Some(registry_failure()),
+            },
+            Err(ServerError::message(
+                ServerErrorKind::Accept,
+                "accept completion missing",
+            )),
+            None,
+            Some(ServerError::message(
+                ServerErrorKind::Accept,
+                "listener closure missing",
+            )),
+        );
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), ServerErrorKind::Accept);
+        assert_eq!(error.message_ref(), "listener closure missing");
     }
 
     #[test]
@@ -1100,8 +1178,34 @@ mod tests {
                 deadline_exceeded: false,
             }),
             None,
+            None,
         );
         assert_eq!(result.unwrap_err().kind(), ServerErrorKind::Registry);
+    }
+
+    #[tokio::test]
+    async fn draining_state_waits_for_listener_closure_acknowledgement() {
+        let state = AtomicU8::new(ServerState::Ready.as_u8());
+        let (listener_closed, acknowledgement) = oneshot::channel();
+        let publish = publish_draining_after_listener_closed(acknowledgement, &state);
+        tokio::pin!(publish);
+
+        tokio::select! {
+            biased;
+            result = &mut publish => panic!("state advanced before listener ack: {result:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+        assert_eq!(
+            ServerState::from_u8(state.load(Ordering::Acquire)),
+            ServerState::Ready
+        );
+
+        listener_closed.send(()).unwrap();
+        assert!(publish.await.is_none());
+        assert_eq!(
+            ServerState::from_u8(state.load(Ordering::Acquire)),
+            ServerState::Draining
+        );
     }
 
     #[cfg(unix)]
