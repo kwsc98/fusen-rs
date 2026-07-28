@@ -63,7 +63,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +stable test --locked --workspace --all-features
+      - name: Run workspace tests
+        if: runner.os != 'Windows'
+        run: cargo +stable test --locked --workspace --all-features
+      - name: Run workspace tests and capture Windows diagnostics
+        id: windows_tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          New-Item -ItemType Directory -Force -Path target/ci-logs | Out-Null
+          cargo +stable test --locked --workspace --all-features 2>&1 |
+            Tee-Object -FilePath target/ci-logs/windows-workspace-tests.log
+          $testExitCode = $LASTEXITCODE
+          exit $testExitCode
+      - name: Archive failed Windows workspace test output
+        if: >-
+          failure() && runner.os == 'Windows' &&
+          steps.windows_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-workspace-tests-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-logs/windows-workspace-tests.log
+          if-no-files-found: error
+          retention-days: 14
 
   features:
     name: feature-${{ matrix.name }}
