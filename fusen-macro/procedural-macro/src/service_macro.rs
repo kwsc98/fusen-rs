@@ -244,10 +244,15 @@ fn descriptor(
                         validate::ParameterSource::Query => quote!(Query),
                         validate::ParameterSource::Body => quote!(Body),
                     };
+                    let cardinality = match parameter.spring_cardinality {
+                        validate::ParameterCardinality::Scalar => quote!(Scalar),
+                        validate::ParameterCardinality::Repeated => quote!(Repeated),
+                    };
                     quote! {
                         #abi::SpringCloudParameter::new(
                             #name,
                             #abi::SpringCloudParameterSource::#source,
+                            #abi::SpringCloudParameterCardinality::#cardinality,
                         ).expect("the service macro generated a validated Spring parameter")
                     }
                 });
@@ -381,12 +386,17 @@ mod tests {
             pub trait UserService {
                 #[method(
                     idempotency = "safe",
-                    spring(method = "GET", path = "/users/{id}", query = ["expand"])
+                    spring(
+                        method = "GET",
+                        path = "/users/{id}",
+                        query = ["expand", "labels"]
+                    )
                 )]
                 async fn get(
                     &self,
                     id: String,
                     expand: Option<bool>,
+                    labels: Vec<String>,
                 ) -> Result<User, RpcError>;
             }
         })
@@ -399,6 +409,7 @@ mod tests {
         assert!(expansion.contains("UserServiceClientBuilder"));
         assert!(expansion.contains("UserServiceServer"));
         assert!(expansion.contains("SpringCloudMethod"));
+        assert!(expansion.contains("SpringCloudParameterCardinality :: Repeated"));
         assert!(!expansion.contains("decode_result"));
         assert!(expansion.contains("move ||"));
     }

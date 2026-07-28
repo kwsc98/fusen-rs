@@ -7,8 +7,8 @@ use crate::{
 };
 use bytes::{Buf, Bytes};
 use fusen_contract::{
-    Idempotency, MethodDescriptor, ServiceDescriptor, ServiceEndpoint, SpringCloudParameterSource,
-    WireProtocol,
+    Idempotency, MethodDescriptor, ServiceDescriptor, ServiceEndpoint,
+    SpringCloudParameterCardinality, SpringCloudParameterSource, WireProtocol,
 };
 use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, Uri, Version,
@@ -315,9 +315,12 @@ pub(crate) fn encode_request_template(
                             &urlencoding::encode(&value),
                         );
                     }
-                    SpringCloudParameterSource::Query => {
-                        append_query(&mut query, parameter.name(), &value)?
-                    }
+                    SpringCloudParameterSource::Query => append_query(
+                        &mut query,
+                        parameter.name(),
+                        parameter.cardinality(),
+                        &value,
+                    )?,
                     SpringCloudParameterSource::Body => body = Some(value),
                     _ => return Err(unsupported_spring_parameter_source()),
                 }
@@ -347,10 +350,30 @@ pub(crate) fn encode_request_template(
     }
 }
 
-fn append_query(query: &mut Vec<String>, name: &str, value: &Value) -> Result<(), RpcError> {
-    match value {
-        Value::Null => Ok(()),
-        Value::Array(values) => {
+fn append_query(
+    query: &mut Vec<String>,
+    name: &str,
+    cardinality: SpringCloudParameterCardinality,
+    value: &Value,
+) -> Result<(), RpcError> {
+    match cardinality {
+        SpringCloudParameterCardinality::Scalar => match value {
+            Value::Null => Ok(()),
+            Value::Array(_) => Err(invalid_query_cardinality(name, "a scalar or null", value)),
+            value => {
+                let value = scalar_text(value, name)?;
+                query.push(format!(
+                    "{}={}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(&value)
+                ));
+                Ok(())
+            }
+        },
+        SpringCloudParameterCardinality::Repeated => {
+            let Value::Array(values) = value else {
+                return Err(invalid_query_cardinality(name, "an array", value));
+            };
             for value in values {
                 let value = scalar_text(value, name)?;
                 query.push(format!(
@@ -361,16 +384,16 @@ fn append_query(query: &mut Vec<String>, name: &str, value: &Value) -> Result<()
             }
             Ok(())
         }
-        value => {
-            let value = scalar_text(value, name)?;
-            query.push(format!(
-                "{}={}",
-                urlencoding::encode(name),
-                urlencoding::encode(&value)
-            ));
-            Ok(())
-        }
+        _ => Err(unsupported_spring_parameter_source()),
     }
+}
+
+fn invalid_query_cardinality(name: &str, expected: &str, value: &Value) -> RpcError {
+    RpcError::framework(
+        RpcCategory::InvalidArgument,
+        "invalid_spring_parameter",
+        format!("Spring query argument {name} must be {expected}; received {value}"),
+    )
 }
 
 fn scalar_text(value: &Value, name: &str) -> Result<String, RpcError> {
@@ -995,6 +1018,58 @@ mod tests {
             let uri = endpoint_uri(&endpoint, "/items", Some("page=2")).unwrap();
             assert_eq!(uri.to_string(), expected);
         }
+    }
+
+    #[test]
+    fn spring_query_encoding_obeys_declared_cardinality() {
+        let mut query = Vec::new();
+        append_query(
+            &mut query,
+            "enabled",
+            SpringCloudParameterCardinality::Scalar,
+            &Value::Null,
+        )
+        .unwrap();
+        append_query(
+            &mut query,
+            "enabled",
+            SpringCloudParameterCardinality::Scalar,
+            &Value::Bool(true),
+        )
+        .unwrap();
+        append_query(
+            &mut query,
+            "tag",
+            SpringCloudParameterCardinality::Repeated,
+            &serde_json::json!([]),
+        )
+        .unwrap();
+        append_query(
+            &mut query,
+            "tag",
+            SpringCloudParameterCardinality::Repeated,
+            &serde_json::json!(["one", "two words"]),
+        )
+        .unwrap();
+        assert_eq!(query, ["enabled=true", "tag=one", "tag=two%20words"]);
+
+        let scalar_array = append_query(
+            &mut Vec::new(),
+            "enabled",
+            SpringCloudParameterCardinality::Scalar,
+            &serde_json::json!([true]),
+        )
+        .unwrap_err();
+        assert_eq!(scalar_array.code().as_str(), "invalid_spring_parameter");
+
+        let repeated_scalar = append_query(
+            &mut Vec::new(),
+            "tag",
+            SpringCloudParameterCardinality::Repeated,
+            &Value::String("one".into()),
+        )
+        .unwrap_err();
+        assert_eq!(repeated_scalar.code().as_str(), "invalid_spring_parameter");
     }
 
     #[test]

@@ -1,0 +1,5 @@
+error: Spring query parameter `tags` may not use `Option<Vec<T>>`; use `Vec<T>` so omission has one unambiguous empty-list meaning
+ --> tests/ui/fail/optional_repeated_query.rs:8:34
+  |
+8 |     async fn search(&self, tags: Option<Vec<String>>) -> Result<(), RpcError>;
+  |                                  ^^^^^^^^^^^^^^^^^^^

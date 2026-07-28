@@ -31,12 +31,18 @@ pub mod __macro {
         Body,
     }
 
+    pub enum SpringCloudParameterCardinality {
+        Scalar,
+        Repeated,
+    }
+
     pub struct SpringCloudParameter;
 
     impl SpringCloudParameter {
         pub fn new(
             _name: impl Into<String>,
             _source: SpringCloudParameterSource,
+            _cardinality: SpringCloudParameterCardinality,
         ) -> Result<Self, ()> {
             Ok(Self)
         }
@@ -256,12 +262,17 @@ struct CreateUser;
 trait UserService {
     #[fusen_procedural_macro::method(
         idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}", query = ["expand"])
+        spring(
+            method = "GET",
+            path = "/users/{id}",
+            query = ["expand", "labels"]
+        )
     )]
     async fn get(
         &self,
         id: String,
         expand: Option<bool>,
+        labels: Vec<String>,
     ) -> Result<User, __macro::RpcError>;
 
     #[fusen_procedural_macro::method(
@@ -278,6 +289,7 @@ impl UserService for UserServiceImpl {
         &self,
         _id: String,
         _expand: Option<bool>,
+        _labels: Vec<String>,
     ) -> Result<User, __macro::RpcError> {
         Ok(User)
     }

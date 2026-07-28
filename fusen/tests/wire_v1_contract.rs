@@ -49,6 +49,18 @@ trait WireContract {
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "HEAD", path = "/unhealthy"))]
     async fn unhealthy(&self) -> Result<(), RpcError>;
+
+    #[fusen_rs::method(
+        idempotency = "safe",
+        spring(method = "GET", path = "/filters", query = ["enabled"])
+    )]
+    async fn filter(&self, enabled: Option<bool>) -> Result<Option<bool>, RpcError>;
+
+    #[fusen_rs::method(
+        idempotency = "safe",
+        spring(method = "GET", path = "/labels", query = ["label"])
+    )]
+    async fn labels(&self, label: Vec<String>) -> Result<Vec<String>, RpcError>;
 }
 
 struct FailingWireContract;
@@ -81,6 +93,14 @@ impl WireContract for FailingWireContract {
             RpcError::application(StatusCode::CONFLICT, "unhealthy", "health check failed")
                 .unwrap(),
         )
+    }
+
+    async fn filter(&self, enabled: Option<bool>) -> Result<Option<bool>, RpcError> {
+        Ok(enabled)
+    }
+
+    async fn labels(&self, label: Vec<String>) -> Result<Vec<String>, RpcError> {
+        Ok(label)
     }
 }
 
@@ -193,6 +213,54 @@ async fn spring_cloud_v1_path_query_body_and_raw_success_match_the_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spring_cloud_v1_repeated_query_uses_one_key_per_value() {
+    let (addr, mut captured, fixture) =
+        spawn_h1_fixture(JSON_CONTENT_TYPE, br#"["one","two words"]"#).await;
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = WireContractClient::builder(&runtime)
+        .direct(format!("http://{addr}"))
+        .protocol(WireProtocol::SpringCloudV1)
+        .connect()
+        .await
+        .unwrap();
+
+    let labels = vec!["one".to_owned(), "two words".to_owned()];
+    assert_eq!(client.labels(labels.clone()).await.unwrap(), labels);
+    let request = captured.recv().await.expect("fixture captured one request");
+
+    assert_eq!(request.method, Method::GET);
+    assert_eq!(request.version, Version::HTTP_11);
+    assert_eq!(request.uri.path(), "/labels");
+    assert_eq!(request.uri.query(), Some("label=one&label=two%20words"));
+    assert!(request.body.is_empty());
+
+    fixture.await.unwrap();
+    drop(client);
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spring_cloud_v1_empty_repeated_query_omits_the_key() {
+    let (addr, mut captured, fixture) = spawn_h1_fixture(JSON_CONTENT_TYPE, br#"[]"#).await;
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = WireContractClient::builder(&runtime)
+        .direct(format!("http://{addr}"))
+        .protocol(WireProtocol::SpringCloudV1)
+        .connect()
+        .await
+        .unwrap();
+
+    assert!(client.labels(Vec::new()).await.unwrap().is_empty());
+    let request = captured.recv().await.expect("fixture captured one request");
+    assert_eq!(request.uri.path(), "/labels");
+    assert_eq!(request.uri.query(), None);
+
+    fixture.await.unwrap();
+    drop(client);
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_rejects_duplicate_response_content_type() {
     let (addr, fixture) = spawn_h1_duplicate_content_type_fixture().await;
     let runtime = ClientRuntime::builder().build().unwrap();
@@ -244,6 +312,40 @@ async fn spring_cloud_v1_head_uses_a_unit_success_contract() {
 
     drop(client);
     runtime.shutdown().await.unwrap();
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spring_cloud_v1_rejects_duplicate_scalar_query_parameters() {
+    let config = ServerConfig::builder()
+        .protocols(ProtocolSet::ALL)
+        .build()
+        .unwrap();
+    let server = Server::builder("127.0.0.1:0")
+        .config(config)
+        .service(WireContractServer::new(FailingWireContract))
+        .build()
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/filters?enabled=true&enabled=false")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = send_h1(server.local_addr(), request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        PROBLEM_CONTENT_TYPE
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let problem: ProblemDetails = serde_json::from_slice(&body).unwrap();
+    assert_eq!(problem.code.as_str(), "duplicate_query_parameter");
+    assert_eq!(problem.status, StatusCode::BAD_REQUEST.as_u16());
+
     server.shutdown().await.unwrap();
 }
 

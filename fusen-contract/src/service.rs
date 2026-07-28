@@ -278,11 +278,22 @@ pub enum SpringCloudParameterSource {
     Body,
 }
 
+/// The number of values represented by one Spring Cloud V1 parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SpringCloudParameterCardinality {
+    /// At most one scalar value is represented on the wire.
+    Scalar,
+    /// Zero or more query values are represented as repeated keys.
+    Repeated,
+}
+
 /// Spring Cloud V1 wire metadata for one ordered RPC argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpringCloudParameter {
     name: String,
     source: SpringCloudParameterSource,
+    cardinality: SpringCloudParameterCardinality,
 }
 
 impl SpringCloudParameter {
@@ -290,10 +301,12 @@ impl SpringCloudParameter {
     pub fn new(
         name: impl Into<String>,
         source: SpringCloudParameterSource,
+        cardinality: SpringCloudParameterCardinality,
     ) -> Result<Self, ContractError> {
         Ok(Self {
             name: validate_identifier(name.into(), "Spring Cloud parameter name")?,
             source,
+            cardinality,
         })
     }
 
@@ -305,6 +318,11 @@ impl SpringCloudParameter {
     /// Returns the explicit HTTP argument location.
     pub const fn source(&self) -> SpringCloudParameterSource {
         self.source
+    }
+
+    /// Returns whether the wire parameter is scalar or repeated.
+    pub const fn cardinality(&self) -> SpringCloudParameterCardinality {
+        self.cardinality
     }
 }
 
@@ -717,9 +735,21 @@ fn validate_spring_cloud_method(
         }
         match parameter.source() {
             SpringCloudParameterSource::Path => {
+                if parameter.cardinality() == SpringCloudParameterCardinality::Repeated {
+                    return Err(ContractError::InvalidMethod(
+                        "Spring Cloud repeated parameters may use only the Query source".into(),
+                    ));
+                }
                 path_parameters.insert(parameter.name());
             }
-            SpringCloudParameterSource::Body => body_count += 1,
+            SpringCloudParameterSource::Body => {
+                if parameter.cardinality() == SpringCloudParameterCardinality::Repeated {
+                    return Err(ContractError::InvalidMethod(
+                        "Spring Cloud repeated parameters may use only the Query source".into(),
+                    ));
+                }
+                body_count += 1;
+            }
             SpringCloudParameterSource::Query => {}
         }
     }
@@ -839,8 +869,18 @@ mod tests {
         let mapping = spring_get(
             "/users/{id}",
             vec![
-                SpringCloudParameter::new("id", SpringCloudParameterSource::Path).unwrap(),
-                SpringCloudParameter::new("filter", SpringCloudParameterSource::Query).unwrap(),
+                SpringCloudParameter::new(
+                    "id",
+                    SpringCloudParameterSource::Path,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                SpringCloudParameter::new(
+                    "filter",
+                    SpringCloudParameterSource::Query,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
             ],
         );
         assert_eq!(mapping.path(), "/users/{id}");
@@ -848,7 +888,14 @@ mod tests {
         let missing_path = SpringCloudMethod::new(
             Method::GET,
             "/users/{id}",
-            vec![SpringCloudParameter::new("id", SpringCloudParameterSource::Query).unwrap()],
+            vec![
+                SpringCloudParameter::new(
+                    "id",
+                    SpringCloudParameterSource::Query,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+            ],
         );
         assert!(missing_path.is_err());
 
@@ -856,8 +903,18 @@ mod tests {
             Method::POST,
             "/users",
             vec![
-                SpringCloudParameter::new("first", SpringCloudParameterSource::Body).unwrap(),
-                SpringCloudParameter::new("second", SpringCloudParameterSource::Body).unwrap(),
+                SpringCloudParameter::new(
+                    "first",
+                    SpringCloudParameterSource::Body,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                SpringCloudParameter::new(
+                    "second",
+                    SpringCloudParameterSource::Body,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
             ],
         );
         assert!(two_bodies.is_err());
@@ -867,6 +924,39 @@ mod tests {
                 SpringCloudMethod::new(Method::GET, path, Vec::new()).is_err(),
                 "{path}"
             );
+        }
+    }
+
+    #[test]
+    fn spring_repeated_cardinality_is_query_only() {
+        let repeated = SpringCloudParameter::new(
+            "tags",
+            SpringCloudParameterSource::Query,
+            SpringCloudParameterCardinality::Repeated,
+        )
+        .unwrap();
+        assert_eq!(
+            repeated.cardinality(),
+            SpringCloudParameterCardinality::Repeated
+        );
+        assert!(SpringCloudMethod::new(Method::GET, "/items", vec![repeated]).is_ok(),);
+
+        for source in [
+            SpringCloudParameterSource::Path,
+            SpringCloudParameterSource::Body,
+        ] {
+            let parameter = SpringCloudParameter::new(
+                "value",
+                source,
+                SpringCloudParameterCardinality::Repeated,
+            )
+            .unwrap();
+            let path = if source == SpringCloudParameterSource::Path {
+                "/items/{value}"
+            } else {
+                "/items"
+            };
+            assert!(SpringCloudMethod::new(Method::POST, path, vec![parameter]).is_err());
         }
     }
 
@@ -954,7 +1044,14 @@ mod tests {
             Idempotency::Safe,
             Some(spring_get(
                 "/users/{id}",
-                vec![SpringCloudParameter::new("id", SpringCloudParameterSource::Path).unwrap()],
+                vec![
+                    SpringCloudParameter::new(
+                        "id",
+                        SpringCloudParameterSource::Path,
+                        SpringCloudParameterCardinality::Scalar,
+                    )
+                    .unwrap(),
+                ],
             )),
         )
         .unwrap();
@@ -964,7 +1061,14 @@ mod tests {
             Idempotency::Safe,
             Some(spring_get(
                 "/users/{name}",
-                vec![SpringCloudParameter::new("name", SpringCloudParameterSource::Path).unwrap()],
+                vec![
+                    SpringCloudParameter::new(
+                        "name",
+                        SpringCloudParameterSource::Path,
+                        SpringCloudParameterCardinality::Scalar,
+                    )
+                    .unwrap(),
+                ],
             )),
         )
         .unwrap();

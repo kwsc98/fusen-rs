@@ -5,7 +5,8 @@ use crate::{
     wire::{SERVICE_GROUP, SERVICE_VERSION},
 };
 use fusen_contract::{
-    MethodDescriptor, ServiceDescriptor, SpringCloudParameterSource, WireProtocol,
+    MethodDescriptor, ServiceDescriptor, SpringCloudParameterCardinality,
+    SpringCloudParameterSource, WireProtocol,
 };
 use http::{HeaderMap, Method};
 use serde_json::Value;
@@ -232,11 +233,35 @@ impl MatchedRoute {
                     .cloned()
                     .map(Value::String)
                     .unwrap_or(Value::Null),
-                SpringCloudParameterSource::Query => match query_values.remove(parameter.name()) {
-                    None => Value::Null,
-                    Some(mut values) if values.len() == 1 => Value::String(values.remove(0)),
-                    Some(values) => Value::Array(values.into_iter().map(Value::String).collect()),
-                },
+                SpringCloudParameterSource::Query => {
+                    let values = query_values.remove(parameter.name()).unwrap_or_default();
+                    match parameter.cardinality() {
+                        SpringCloudParameterCardinality::Scalar => match values.as_slice() {
+                            [] => Value::Null,
+                            [value] => Value::String(value.clone()),
+                            _ => {
+                                return Err(RpcError::framework(
+                                    RpcCategory::InvalidArgument,
+                                    "duplicate_query_parameter",
+                                    format!(
+                                        "scalar query parameter {} must appear at most once",
+                                        parameter.name()
+                                    ),
+                                ));
+                            }
+                        },
+                        SpringCloudParameterCardinality::Repeated => {
+                            Value::Array(values.into_iter().map(Value::String).collect())
+                        }
+                        _ => {
+                            return Err(RpcError::framework(
+                                RpcCategory::Unimplemented,
+                                "unsupported_spring_parameter_cardinality",
+                                "SpringCloudV1 parameter cardinality is not supported",
+                            ));
+                        }
+                    }
+                }
                 SpringCloudParameterSource::Body => body.clone().unwrap_or(Value::Null),
                 _ => {
                     return Err(RpcError::framework(
@@ -354,6 +379,7 @@ mod tests {
     use crate::{RpcResult, runtime::BoxFuture, service::ServerInvocation};
     use fusen_contract::{
         Idempotency, MethodId, ServiceSelector, SpringCloudMethod, SpringCloudParameter,
+        SpringCloudParameterCardinality,
     };
 
     struct UnusedDispatch;
@@ -369,11 +395,25 @@ mod tests {
             .into_iter()
             .filter_map(|segment| match segment {
                 Segment::Literal(_) => None,
-                Segment::Parameter(name) => {
-                    Some(SpringCloudParameter::new(name, SpringCloudParameterSource::Path).unwrap())
-                }
+                Segment::Parameter(name) => Some(
+                    SpringCloudParameter::new(
+                        name,
+                        SpringCloudParameterSource::Path,
+                        SpringCloudParameterCardinality::Scalar,
+                    )
+                    .unwrap(),
+                ),
             })
             .collect();
+        spring_route_with_parameters(service_id, method, path, parameters)
+    }
+
+    fn spring_route_with_parameters(
+        service_id: &str,
+        method: Method,
+        path: &str,
+        parameters: Vec<SpringCloudParameter>,
+    ) -> Route {
         let descriptor: &'static ServiceDescriptor = Box::leak(Box::new(
             ServiceDescriptor::new(
                 ServiceSelector::new(service_id, None, None).unwrap(),
@@ -514,6 +554,47 @@ mod tests {
                 .match_fusen("/_fusen/v1/fusen-exact/missing", &HeaderMap::new())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn spring_query_cardinality_has_stable_missing_single_and_duplicate_semantics() {
+        let route = spring_route_with_parameters(
+            "query-cardinality",
+            Method::GET,
+            "/query",
+            vec![
+                SpringCloudParameter::new(
+                    "enabled",
+                    SpringCloudParameterSource::Query,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                SpringCloudParameter::new(
+                    "tag",
+                    SpringCloudParameterSource::Query,
+                    SpringCloudParameterCardinality::Repeated,
+                )
+                .unwrap(),
+            ],
+        );
+        let table = RouteTable::build(vec![route]).unwrap();
+        let matched = table.match_spring(&Method::GET, "/query").unwrap();
+
+        let missing = matched.spring_arguments(None, None, 8).unwrap();
+        assert_eq!(missing.get("enabled"), Some(&Value::Null));
+        assert_eq!(missing.get("tag"), Some(&Value::Array(Vec::new())));
+
+        let present = matched
+            .spring_arguments(Some("enabled=true&tag=one&tag=two"), None, 8)
+            .unwrap();
+        assert_eq!(present.get("enabled"), Some(&Value::String("true".into())));
+        assert_eq!(present.get("tag"), Some(&serde_json::json!(["one", "two"])));
+
+        let duplicate = matched
+            .spring_arguments(Some("enabled=true&enabled=false"), None, 8)
+            .unwrap_err();
+        assert_eq!(duplicate.category(), RpcCategory::InvalidArgument);
+        assert_eq!(duplicate.code().as_str(), "duplicate_query_parameter");
     }
 
     #[test]

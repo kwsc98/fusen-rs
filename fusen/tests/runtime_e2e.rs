@@ -33,6 +33,12 @@ trait WireService {
         spring(method = "POST", path = "/users", body = "request")
     )]
     async fn create(&self, request: CreateRequest) -> Result<String, RpcError>;
+
+    #[fusen_rs::method(
+        idempotency = "safe",
+        spring(method = "GET", path = "/tags", query = ["tags"])
+    )]
+    async fn tags(&self, tags: Vec<String>) -> Result<Vec<String>, RpcError>;
 }
 
 struct WireServiceImpl;
@@ -44,6 +50,10 @@ impl WireService for WireServiceImpl {
 
     async fn create(&self, request: CreateRequest) -> Result<String, RpcError> {
         Ok(request.name)
+    }
+
+    async fn tags(&self, tags: Vec<String>) -> Result<Vec<String>, RpcError> {
+        Ok(tags)
     }
 }
 
@@ -167,6 +177,17 @@ async fn real_h2c_and_http1_slices_round_trip() {
             .unwrap(),
         "spring cloud:false"
     );
+    assert_eq!(
+        spring.lookup("missing".into(), None).await.unwrap(),
+        "missing:false"
+    );
+    for tags in [
+        Vec::new(),
+        vec!["one".to_owned()],
+        vec!["one".to_owned(), "two words".to_owned(), "three".to_owned()],
+    ] {
+        assert_eq!(spring.tags(tags.clone()).await.unwrap(), tags);
+    }
     assert_eq!(
         spring
             .create(CreateRequest {

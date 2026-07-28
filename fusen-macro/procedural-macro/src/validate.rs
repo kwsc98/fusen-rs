@@ -40,12 +40,19 @@ pub(crate) enum ParameterSource {
     Body,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParameterCardinality {
+    Scalar,
+    Repeated,
+}
+
 #[derive(Clone)]
 pub(crate) struct Parameter {
     pub(crate) ident: Ident,
     pub(crate) kind: Type,
     pub(crate) wire_name: String,
     pub(crate) spring_source: Option<ParameterSource>,
+    pub(crate) spring_cardinality: ParameterCardinality,
 }
 
 pub(crate) struct SpringMapping {
@@ -339,6 +346,7 @@ fn parameters(signature: &Signature) -> syn::Result<Vec<Parameter>> {
                 kind: input.ty.as_ref().clone(),
                 wire_name,
                 spring_source: None,
+                spring_cardinality: ParameterCardinality::Scalar,
             })
         })
         .collect()
@@ -505,15 +513,62 @@ fn validate_spring(
         ));
     }
     for parameter in parameters {
-        parameter.spring_source = declared
+        let source = declared
             .get(&parameter.wire_name)
             .map(|(source, _)| *source);
+        parameter.spring_source = source;
+        parameter.spring_cardinality = match source {
+            Some(ParameterSource::Query) => query_cardinality(parameter)?,
+            _ => ParameterCardinality::Scalar,
+        };
     }
 
     Ok(SpringMapping {
         method: method_value,
         path: path_value,
     })
+}
+
+fn query_cardinality(parameter: &Parameter) -> syn::Result<ParameterCardinality> {
+    if let Some(inner) = direct_generic_type(&parameter.kind, "Option")
+        && direct_generic_type(inner, "Vec").is_some()
+    {
+        return Err(syn::Error::new_spanned(
+            &parameter.kind,
+            format!(
+                "Spring query parameter `{}` may not use `Option<Vec<T>>`; use `Vec<T>` so omission has one unambiguous empty-list meaning",
+                parameter.wire_name
+            ),
+        ));
+    }
+    Ok(if direct_generic_type(&parameter.kind, "Vec").is_some() {
+        ParameterCardinality::Repeated
+    } else {
+        ParameterCardinality::Scalar
+    })
+}
+
+fn direct_generic_type<'a>(kind: &'a Type, expected: &str) -> Option<&'a Type> {
+    let Type::Path(TypePath {
+        qself: None, path, ..
+    }) = kind
+    else {
+        return None;
+    };
+    let segment = path.segments.last()?;
+    if segment.ident != expected {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    if arguments.args.len() != 1 {
+        return None;
+    }
+    match arguments.args.first()? {
+        GenericArgument::Type(kind) => Some(kind),
+        _ => None,
+    }
 }
 
 fn insert_parameter_source(
@@ -724,6 +779,52 @@ mod tests {
             },
         );
         assert!(missing.is_err());
+    }
+
+    #[test]
+    fn infers_repeated_queries_and_rejects_optional_vectors() {
+        let service = validate_trait(
+            quote!(name = "search"),
+            quote! {
+                trait Search {
+                    #[method(spring(
+                        method = "GET",
+                        path = "/search",
+                        query = ["term", "tags"]
+                    ))]
+                    async fn search(
+                        &self,
+                        term: Option<String>,
+                        tags: Vec<String>,
+                    ) -> Result<(), RpcError>;
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            service.methods[0].parameters[0].spring_cardinality,
+            ParameterCardinality::Scalar
+        );
+        assert_eq!(
+            service.methods[0].parameters[1].spring_cardinality,
+            ParameterCardinality::Repeated
+        );
+
+        let error = validate_trait(
+            quote!(name = "search"),
+            quote! {
+                trait Search {
+                    #[method(spring(method = "GET", path = "/search", query = ["tags"]))]
+                    async fn search(
+                        &self,
+                        tags: Option<Vec<String>>,
+                    ) -> Result<(), RpcError>;
+                }
+            },
+        )
+        .err()
+        .expect("optional repeated queries must be rejected");
+        assert!(error.to_string().contains("may not use `Option<Vec<T>>`"));
     }
 
     #[test]

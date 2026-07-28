@@ -53,7 +53,7 @@ pub mod __macro {
     pub use crate::{RpcResponse as ServerResponse, RpcResult};
     pub use fusen_contract::{
         MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector, SpringCloudMethod,
-        SpringCloudParameter, SpringCloudParameterSource,
+        SpringCloudParameter, SpringCloudParameterCardinality, SpringCloudParameterSource,
     };
     pub use http;
 }
