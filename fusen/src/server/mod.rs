@@ -524,6 +524,7 @@ async fn coordinate(mut coordinator: Coordinator) {
     let (drain_sender, drain_receiver) = mpsc::unbounded_channel();
     let (fatal_sender, mut fatal_receiver) = mpsc::unbounded_channel();
     let (accept_sender, mut accept_receiver) = oneshot::channel();
+    let force_cancel = CancellationToken::new();
     let http = coordinator.config.http();
     let transport_config = TransportConfig {
         max_connections: http.max_connections_value(),
@@ -543,6 +544,7 @@ async fn coordinate(mut coordinator: Coordinator) {
         coordinator.app.clone(),
         transport_config,
         drain_receiver,
+        force_cancel.clone(),
         fatal_sender,
         accept_sender,
     ));
@@ -592,6 +594,7 @@ async fn coordinate(mut coordinator: Coordinator) {
             tracked.clone(),
             &drain_sender,
             &mut accept_receiver,
+            &force_cancel,
             startup_fatal,
         )
         .await
@@ -638,6 +641,7 @@ async fn coordinate(mut coordinator: Coordinator) {
         tracked,
         &drain_sender,
         &mut accept_receiver,
+        &force_cancel,
         fatal,
     )
     .await;
@@ -655,6 +659,7 @@ async fn drain_runtime(
     tracked: Vec<TrackedRegistration>,
     drain: &mpsc::UnboundedSender<DrainCommand>,
     accept: &mut oneshot::Receiver<AcceptOutcome>,
+    force_cancel: &CancellationToken,
     fatal: Option<std::io::Error>,
 ) -> Result<(), ServerError> {
     coordinator.readiness.store(DRAINING);
@@ -675,10 +680,13 @@ async fn drain_runtime(
         (registry, accept)
     };
     let result = match tokio::time::timeout_at(deadline, work).await {
-        Err(_) => Err(ServerError::message(
-            ServerErrorKind::Timeout,
-            "server graceful shutdown deadline elapsed",
-        )),
+        Err(_) => {
+            force_cancel.cancel();
+            Err(ServerError::message(
+                ServerErrorKind::Timeout,
+                "server graceful shutdown deadline elapsed",
+            ))
+        }
         Ok((registry, accept)) => resolve_shutdown_result(
             registry,
             accept.map_err(|error| {

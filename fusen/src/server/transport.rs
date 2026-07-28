@@ -1,15 +1,66 @@
 use super::http::HttpApp;
+use hyper::rt::Executor;
+#[cfg(test)]
+use hyper_util::rt::TokioExecutor;
 use hyper_util::{
-    rt::{TokioExecutor, TokioIo, TokioTimer},
+    rt::{TokioIo, TokioTimer},
     server::conn::auto::Builder,
 };
-use std::{io, sync::Arc, time::Duration};
+use std::{future::Future, io, sync::Arc, time::Duration};
 use tokio::{
     net::TcpListener,
     sync::{Semaphore, broadcast, mpsc, oneshot},
     task::JoinSet,
     time::Instant,
 };
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+// Hyper executes H2 streams outside the connection future, so both task layers
+// must observe the server's force-cancellation signal.
+#[derive(Clone)]
+struct TransportExecutor {
+    cancellation: CancellationToken,
+    tasks: TaskTracker,
+}
+
+impl TransportExecutor {
+    fn new(cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            tasks: TaskTracker::new(),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    fn close(&self) {
+        self.tasks.close();
+    }
+
+    async fn close_and_wait(&self) {
+        self.close();
+        self.tasks.wait().await;
+    }
+}
+
+impl<F> Executor<F> for TransportExecutor
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn execute(&self, future: F) {
+        let cancellation = self.cancellation.clone();
+        let _task = self.tasks.spawn(async move {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled_owned() => {}
+                _ = future => {}
+            }
+        });
+    }
+}
 
 pub(crate) struct TransportConfig {
     pub max_connections: usize,
@@ -35,10 +86,11 @@ pub(crate) async fn run(
     app: HttpApp,
     config: TransportConfig,
     mut drain: mpsc::UnboundedReceiver<DrainCommand>,
+    force_cancel: CancellationToken,
     fatal: mpsc::UnboundedSender<io::Error>,
     completion: oneshot::Sender<AcceptOutcome>,
 ) {
-    let outcome = run_inner(listener, app, config, &mut drain, fatal).await;
+    let outcome = run_inner(listener, app, config, &mut drain, force_cancel, fatal).await;
     let _ = completion.send(outcome);
 }
 
@@ -47,9 +99,11 @@ async fn run_inner(
     app: HttpApp,
     config: TransportConfig,
     drain: &mut mpsc::UnboundedReceiver<DrainCommand>,
+    force_cancel: CancellationToken,
     fatal: mpsc::UnboundedSender<io::Error>,
 ) -> AcceptOutcome {
-    let builder = Arc::new(connection_builder(&config));
+    let executor = TransportExecutor::new(force_cancel.clone());
+    let builder = Arc::new(connection_builder(&config, executor.clone()));
     let connections = Arc::new(Semaphore::new(config.max_connections));
     let (graceful, _) = broadcast::channel::<()>(1);
     let mut tasks = JoinSet::new();
@@ -130,34 +184,49 @@ async fn run_inner(
         (None, None) => None,
     };
     let Some(command) = command else {
+        executor.cancel();
         tasks.abort_all();
+        executor.close();
         return AcceptOutcome {
             fatal_error,
             deadline_exceeded: true,
         };
     };
 
-    let drained = tokio::time::timeout_at(command.deadline, async {
-        while let Some(result) = tasks.join_next().await {
-            if let Err(error) = result {
-                tracing::error!(?error, "HTTP connection task panicked while draining");
-            }
-        }
-    })
-    .await
-    .is_ok();
+    let graceful_drain = async {
+        drain_connection_tasks(&mut tasks).await;
+        executor.close_and_wait().await;
+    };
+    let drained = tokio::select! {
+        biased;
+        () = force_cancel.cancelled() => false,
+        result = tokio::time::timeout_at(command.deadline, graceful_drain) => result.is_ok(),
+    };
     if !drained {
+        executor.cancel();
         tasks.abort_all();
+        // The deadline path stays bounded; cancelled tracked tasks reap themselves.
+        executor.close();
     }
-    drop(tasks);
     AcceptOutcome {
         fatal_error,
         deadline_exceeded: !drained,
     }
 }
 
-fn connection_builder(config: &TransportConfig) -> Builder<TokioExecutor> {
-    let mut builder = Builder::new(TokioExecutor::new());
+async fn drain_connection_tasks(tasks: &mut JoinSet<()>) {
+    while let Some(result) = tasks.join_next().await {
+        if let Err(error) = result {
+            tracing::error!(?error, "HTTP connection task failed while draining");
+        }
+    }
+}
+
+fn connection_builder(
+    config: &TransportConfig,
+    executor: TransportExecutor,
+) -> Builder<TransportExecutor> {
+    let mut builder = Builder::new(executor);
     builder
         .http1()
         .keep_alive(true)
@@ -232,9 +301,18 @@ mod tests {
     use std::{
         convert::Infallible,
         pin::Pin,
+        sync::atomic::{AtomicBool, Ordering},
         task::{Context, Poll},
     };
     use tokio::io::AsyncWriteExt;
+
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     struct DropNotifyingBody {
         inner: GuardedBody,
@@ -292,6 +370,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transport_executor_drops_cancelled_tasks_including_late_spawns() {
+        let executor = TransportExecutor::new(CancellationToken::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task_dropped = dropped.clone();
+        let (entered, entered_receiver) = oneshot::channel();
+        executor.execute(async move {
+            let _probe = DropProbe(task_dropped);
+            let _ = entered.send(());
+            std::future::pending::<()>().await;
+        });
+        entered_receiver.await.unwrap();
+
+        executor.cancel();
+        executor.close_and_wait().await;
+
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(executor.tasks.is_empty());
+
+        let late_dropped = Arc::new(AtomicBool::new(false));
+        let late_probe = DropProbe(late_dropped.clone());
+        executor.execute(async move {
+            let _probe = late_probe;
+            std::future::pending::<()>().await;
+        });
+        executor.close_and_wait().await;
+
+        assert!(late_dropped.load(Ordering::Acquire));
+        assert!(executor.tasks.is_empty());
+    }
+
+    #[tokio::test]
     async fn h2_flow_control_holds_response_budget_until_transport_cancels() {
         const BODY_LENGTH: usize = 128 * 1024;
         const FLOW_WINDOW: u32 = 1024;
@@ -312,9 +421,12 @@ mod tests {
                     )))
                 }
             });
-            connection_builder(&test_transport_config())
-                .serve_connection(TokioIo::new(server_io), service)
-                .await
+            connection_builder(
+                &test_transport_config(),
+                TransportExecutor::new(CancellationToken::new()),
+            )
+            .serve_connection(TokioIo::new(server_io), service)
+            .await
         });
 
         let mut builder = hyper::client::conn::http2::Builder::new(TokioExecutor::new());
@@ -371,9 +483,12 @@ mod tests {
                     )))
                 }
             });
-            connection_builder(&test_transport_config())
-                .serve_connection(TokioIo::new(server_io), service)
-                .await
+            connection_builder(
+                &test_transport_config(),
+                TransportExecutor::new(CancellationToken::new()),
+            )
+            .serve_connection(TokioIo::new(server_io), service)
+            .await
         });
 
         client_io

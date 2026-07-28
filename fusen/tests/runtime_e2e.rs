@@ -13,7 +13,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{Barrier, Semaphore};
+use tokio::sync::{Barrier, Notify, Semaphore};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct CreateRequest {
@@ -66,10 +66,20 @@ trait BlockingService {
 struct BlockingServiceImpl {
     entered: Arc<Barrier>,
     release: Arc<Semaphore>,
+    dropped: Option<Arc<Notify>>,
+}
+
+struct DropProbe(Arc<Notify>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
 }
 
 impl BlockingService for BlockingServiceImpl {
     async fn wait(&self, value: String) -> Result<String, RpcError> {
+        let _probe = self.dropped.as_ref().map(|flag| DropProbe(flag.clone()));
         self.entered.wait().await;
         let _permit = self
             .release
@@ -262,6 +272,7 @@ async fn graceful_shutdown_drains_an_inflight_h2_stream() {
         .service(BlockingServiceServer::new(BlockingServiceImpl {
             entered: entered.clone(),
             release: release.clone(),
+            dropped: None,
         }))
         .build()
         .unwrap()
@@ -292,6 +303,7 @@ async fn graceful_shutdown_drains_an_inflight_h2_stream() {
 async fn graceful_shutdown_aborts_a_permanently_pending_stream_at_deadline() {
     let entered = Arc::new(Barrier::new(2));
     let release = Arc::new(Semaphore::new(0));
+    let handler_dropped = Arc::new(Notify::new());
     let config = ServerConfig::builder()
         .graceful_shutdown_timeout(Duration::from_millis(50))
         .build()
@@ -301,19 +313,27 @@ async fn graceful_shutdown_aborts_a_permanently_pending_stream_at_deadline() {
         .service(BlockingServiceServer::new(BlockingServiceImpl {
             entered: entered.clone(),
             release,
+            dropped: Some(handler_dropped.clone()),
         }))
         .build()
         .unwrap()
         .start()
         .await
         .unwrap();
-    let runtime = ClientRuntime::builder().build().unwrap();
+    let client_config = ClientConfig::builder()
+        .retry(RetryConfig::default().max_attempts(1))
+        .build()
+        .unwrap();
+    let runtime = ClientRuntime::builder()
+        .config(client_config)
+        .build()
+        .unwrap();
     let client = BlockingServiceClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
         .connect()
         .await
         .unwrap();
-    let call = tokio::spawn(async move { client.wait("never".into()).await });
+    let mut call = tokio::spawn(async move { client.wait("never".into()).await });
     entered.wait().await;
 
     let shutdown = tokio::time::timeout(Duration::from_secs(1), server.shutdown())
@@ -321,13 +341,21 @@ async fn graceful_shutdown_aborts_a_permanently_pending_stream_at_deadline() {
         .expect("server shutdown must remain bounded")
         .expect_err("pending stream must exhaust the graceful deadline");
     assert_eq!(shutdown.kind(), ServerErrorKind::Timeout);
-    assert!(
-        tokio::time::timeout(Duration::from_secs(1), call)
-            .await
-            .expect("aborted call must terminate")
-            .unwrap()
-            .is_err()
-    );
+    tokio::time::timeout(Duration::from_secs(1), handler_dropped.notified())
+        .await
+        .expect("pending handler must observe forced shutdown");
+    let call_result = match tokio::time::timeout(Duration::from_secs(1), &mut call).await {
+        Ok(result) => result,
+        Err(error) => {
+            call.abort();
+            let _ = call.await;
+            panic!("aborted call must terminate: {error:?}");
+        }
+    };
+    let call_error = call_result
+        .unwrap()
+        .expect_err("forced shutdown must fail the pending call");
+    assert_eq!(call_error.attempts(), 1);
     runtime.shutdown().await.unwrap();
 }
 
