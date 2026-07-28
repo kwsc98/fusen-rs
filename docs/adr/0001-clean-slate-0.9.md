@@ -16,10 +16,10 @@
 - 不提供 alias、deprecated facade、legacy decoder、公开版本过渡模块或迁移 adapter；
 - 保留 Tokio、JSON、Nacos、Rust 1.97、Edition 2024 与现有 crate 边界；
 - 每阶段直接迁移 workspace、examples、fixtures 与文档，阶段结束必须恢复绿色；
-- `0.9.0` tag 是第一个兼容性 baseline，此前开发提交不构成兼容承诺；
+- `v0.9.0` tag 是第一个兼容性 baseline，此前开发提交不构成兼容承诺；
 - Fusen V1 与 Spring Cloud V1 从本次重构的 golden fixtures 开始形成明确 wire 契约。
 
-0.9 发布后才以该 tag 启用 API semver 检查。后续 wire 破坏必须定义新协议版本，而不是让现有 v1 decoder 猜测格式。
+`v0.9.0` 发布后才以该 tag 启用 API semver 检查。后续 wire 破坏必须定义新协议版本，而不是让现有 v1 decoder 猜测格式。
 
 ## 后果
 

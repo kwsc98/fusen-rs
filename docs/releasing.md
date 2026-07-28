@@ -1,6 +1,6 @@
 # 0.9 发布流程
 
-`0.9.0` 是第一个 compatibility baseline。发布前不运行相对历史开发提交的 semver 检查；tag 完成后以该 tag 配置后续 `cargo-semver-checks`。
+`0.9.0` 是第一个 compatibility baseline。发布前不运行相对历史开发提交的 semver 检查；`v0.9.0` tag 完成后以该 tag 配置后续 `cargo-semver-checks`。
 
 ## Required Checks
 
@@ -70,17 +70,288 @@ python3 .github/scripts/run-benchmark-gate.py \
 
 首个 schema v2 baseline 必须两阶段生成：先提交 benchmark 实现为干净候选 A，再在固定 runner 上以 workflow 的 `calibrate` mode 对 A 运行五轮；审查 artifact 后将生成的 baseline 单独提交。生成文件的完整 `source_commit` 必须等于 A，且 compare 时 A 必须是当前候选 `HEAD` 的 ancestor。committed baseline 仍为 `calibration-required` 时 compare 必须失败，不能发布。完整命令与字段定义见[性能基线](performance-baseline.md)。
 
-## Packaging Order
+## Final Candidate Freeze
 
-按以下依赖顺序检查 archive 内容并执行 dry run：
+最终候选必须已经包含实际发布日期、committed benchmark baseline 和全部发布文档。替换 CHANGELOG 中的 `YYYY-MM-DD`、提交该变更并完成最后一次代码审查后，才记录候选 SHA；发布日期延后或任何后续修改都不能在原候选上补写。
 
-```text
-fusen-contract
-fusen-register / fusen-config / fusen-observability / macro crates
-fusen-nacos
-fusen-rs
+```shell
+set -euo pipefail
+export RELEASE_CANDIDATE_SHA="$(git rev-parse HEAD)"
+[[ "$RELEASE_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+test -z "$(git status --porcelain=v1)"
+if rg -n '^## \[0\.9\.0\] - YYYY-MM-DD$' CHANGELOG.md; then
+  echo "CHANGELOG release date is still a placeholder" >&2
+  exit 1
+fi
 ```
 
-`check-package-consumer.sh` 对每个发布 crate 执行不带 `--no-verify` 的 `cargo package`，随后解包全部 `.crate` 并在七个独立外部 workspace 中逐项编译；`fusen-rs` consumer 同时展开服务宏。前置 crate 可从 registry 解析后再执行 `cargo +1.97.0 publish --locked --dry-run -p <crate>`。不得使用跳过依赖验证伪造成功。
+立即把完整 SHA 写入候选外部记录。以后开始 M0.12 发布会话时，必须从该记录重新设置 `RELEASE_CANDIDATE_SHA`，不能重新用当时的 `HEAD` 推导候选。
 
-确认 README、crate README、CHANGELOG、SECURITY、兼容性、性能记录和文档链接已更新后，维护者手工发布并创建 `0.9.0` tag。发布失败不得覆盖已发布 artifact，应提升 patch 版本重新走完整流程。
+在同一 `RELEASE_CANDIDATE_SHA` 上依次完成完整 CI、Nightly、真实 Nacos、三 workspace security、package archive consumer 和固定机 benchmark compare。每个 run 必须核对 checkout SHA，不允许本地结果替代 Windows、Nightly、Nacos 或固定机器证据。将下表填入 GitHub Release draft 或 workflow summary；不要为了回填 run URL 再提交仓库：
+
+| Evidence | Run URL | Checkout SHA | Artifact / result |
+| --- | --- | --- | --- |
+| CI：MSRV、Linux、macOS、Windows、release contracts |  |  | `benchmark-smoke-<os>-<arch>-<sha>` 及 required jobs 全绿 |
+| CI：三 workspace security |  |  | `security` job 成功，root/fuzz-support/fuzz 的 deny 与 audit 均执行 |
+| CI：真实 Nacos |  |  | `nacos-live-container` job 成功 |
+| CI：七个 package archive consumer |  |  | `release-contracts` 中 package consumer step 成功 |
+| Nightly：三个 fuzz target、100 轮 core E2E |  |  | 三个 target 的日志/artifact 名称与 `core-e2e-repeat-100` 结果 |
+| Release Benchmark Gate |  |  | `release-benchmark-compare-<sha>`、baseline SHA、四个 Fusen case 的 p50/p99 summary |
+
+任意代码、测试、Cargo manifest/lockfile、workflow、CHANGELOG 或发布文档改动都会产生新候选，原候选的全部证据立即失效。新的候选必须从完整 CI 开始重跑所有证据；只修改注释、日期或证据链接也不例外。Release draft、workflow summary 和已有 artifact 是候选外部记录，不提交“证据更新”来改变候选 SHA。
+
+## crates.io Preflight
+
+以下步骤只在 M0.11 的同一 SHA 全绿后执行。本 runbook 要求通过 `CARGO_REGISTRY_TOKEN` 环境变量提供 token，禁止将 token 写入仓库、命令参数、日志或 shell trace；不要执行 `cargo login <token>`。只检查 token 非空并通过 crates.io 身份接口验证，不打印值：
+
+```shell
+set -euo pipefail
+set +x
+test -n "${CARGO_REGISTRY_TOKEN:-}" || {
+  echo "CARGO_REGISTRY_TOKEN is not set" >&2
+  exit 1
+}
+test -n "${CRATES_IO_OWNER:-}" || {
+  echo "CRATES_IO_OWNER is not set" >&2
+  exit 1
+}
+
+auth_response="$(
+  printf 'header = "Authorization: %s"\n' "$CARGO_REGISTRY_TOKEN" |
+    curl --fail --silent --show-error --config - https://crates.io/api/v1/me
+)"
+authenticated_owner="$(
+  printf '%s' "$auth_response" |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["user"]["login"])'
+)"
+unset auth_response
+test "$authenticated_owner" = "$CRATES_IO_OWNER" || {
+  echo "crates.io token owner does not match CRATES_IO_OWNER" >&2
+  exit 1
+}
+echo "crates.io token identity and expected owner login passed preflight; token value was not printed"
+```
+
+在 crates.io token 设置页确认该 token 允许发布新 crate，并允许更新下列全部已有 crate。然后通过公共 API 检查名称和 `0.9.0` 是否已存在；HTTP error 或无法联网必须阻断，不能被解释为名称可用：
+
+```shell
+packages=(
+  fusen-contract
+  fusen-register
+  fusen-config
+  fusen-observability
+  fusen-procedural-macro
+  fusen-nacos
+  fusen-rs
+)
+
+for package in "${packages[@]}"; do
+  name_status="$(curl --silent --show-error --output /dev/null \
+    --write-out '%{http_code}' "https://crates.io/api/v1/crates/$package")"
+  case "$name_status" in
+    200)
+      owners="$(cargo +1.97.0 owner --registry crates-io --list "$package")"
+      printf '%s\n' "$owners"
+      if ! printf '%s\n' "$owners" | rg --fixed-strings -- "$CRATES_IO_OWNER" >/dev/null; then
+        echo "$CRATES_IO_OWNER is not an owner of $package" >&2
+        exit 1
+      fi
+      ;;
+    404)
+      echo "$package is not published yet; re-check token permission to publish a new crate"
+      ;;
+    *)
+      echo "unexpected crates.io status for $package: $name_status" >&2
+      exit 1
+      ;;
+  esac
+
+  version_status="$(curl --silent --show-error --output /dev/null \
+    --write-out '%{http_code}' "https://crates.io/api/v1/crates/$package/0.9.0")"
+  case "$version_status" in
+    404) ;;
+    200)
+      echo "$package 0.9.0 already exists; stop the initial release procedure" >&2
+      exit 1
+      ;;
+    *)
+      echo "unexpected crates.io version status for $package: $version_status" >&2
+      exit 1
+      ;;
+  esac
+done
+```
+
+名称检查只能确认检查时的状态。开始上传前仍需重新确认工作树、候选 SHA 和全部 archive；若新名称在此期间被占用，停止发布并重新规划 crate 名称和版本，不能切换到未审查的包名继续发布。
+
+```shell
+test "$(git rev-parse HEAD)" = "$RELEASE_CANDIDATE_SHA"
+test -z "$(git status --porcelain=v1)"
+bash .github/scripts/check-package-consumer.sh
+```
+
+`check-package-consumer.sh` 对七个发布 crate 执行不带 `--no-verify` 的 `cargo package`，解包每个 `.crate`，并在七个独立外部 workspace 中编译；`fusen-rs` consumer 还会展开服务宏。脚本的 path patches 只用于验证候选 archive，不是 crates.io 传播证据。实际发布命令禁止 `--allow-dirty` 和 `--no-verify`。
+
+## Packaging And Publication Order
+
+按以下四层发布。每层开始前重新核对候选，先对该层全部 crate dry-run，再执行正式 publish；上一层必须全部能从 crates.io 精确解析并下载后，才能 dry-run 下一层。
+
+等待函数使用 `cargo info --registry crates-io <crate>@0.9.0` 同时检查 registry 解析和 archive 下载。超时或返回其他版本均阻断发布：
+
+```shell
+assert_release_candidate() {
+  test "$(git rev-parse HEAD)" = "$RELEASE_CANDIDATE_SHA"
+  test -z "$(git status --porcelain=v1)"
+}
+
+wait_for_crates_io() {
+  package="$1"
+  for attempt in $(seq 1 60); do
+    if cargo +1.97.0 info --registry crates-io "${package}@0.9.0"; then
+      return 0
+    fi
+    echo "waiting for $package 0.9.0 registry propagation ($attempt/60)" >&2
+    sleep 10
+  done
+  echo "$package 0.9.0 did not propagate within 10 minutes" >&2
+  return 1
+}
+```
+
+第一层：
+
+```shell
+assert_release_candidate
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-contract
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-contract
+wait_for_crates_io fusen-contract
+```
+
+第二层：
+
+```shell
+assert_release_candidate
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-register
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-config
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-observability
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-procedural-macro
+
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-register
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-config
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-observability
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-procedural-macro
+
+wait_for_crates_io fusen-register
+wait_for_crates_io fusen-config
+wait_for_crates_io fusen-observability
+wait_for_crates_io fusen-procedural-macro
+```
+
+第三层：
+
+```shell
+assert_release_candidate
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-nacos
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-nacos
+wait_for_crates_io fusen-nacos
+```
+
+第四层：
+
+```shell
+assert_release_candidate
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-rs
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-rs
+wait_for_crates_io fusen-rs
+```
+
+## Registry-only Consumer
+
+七个 crate 可见后，在 repository 外创建没有 path dependency、没有 `[patch.crates-io]` 的 consumer。依赖必须精确固定为 crates.io 的 `fusen-rs = "=0.9.0"`；成功生成 lockfile、下载依赖并展开宏后，才允许创建 tag：
+
+```shell
+registry_consumer_dir="$(mktemp -d "${TMPDIR:-/tmp}/fusen-registry-consumer.XXXXXX")"
+cargo +1.97.0 init --lib --edition 2024 \
+  --name fusen_registry_consumer "$registry_consumer_dir"
+cargo +1.97.0 add --manifest-path "$registry_consumer_dir/Cargo.toml" \
+  --registry crates-io 'fusen-rs@=0.9.0'
+
+cat >"$registry_consumer_dir/src/lib.rs" <<'RUST'
+use fusen_rs::{RpcError, service};
+
+#[service(name = "registry-consumer")]
+pub trait RegistryConsumerService {
+    #[fusen_rs::method(idempotency = "safe")]
+    async fn ping(&self, value: String) -> Result<String, RpcError>;
+}
+RUST
+
+cargo +1.97.0 generate-lockfile \
+  --manifest-path "$registry_consumer_dir/Cargo.toml"
+cargo +1.97.0 check --locked \
+  --manifest-path "$registry_consumer_dir/Cargo.toml"
+```
+
+审查生成的 consumer manifest 和 lockfile，确认没有本地 path、patch 或非 `0.9.0` 的 fusen crate。将命令结果记录到外部 release evidence，不回填仓库。
+
+## Failure And Recovery
+
+crates.io version 不可覆盖或删除。上传命令因网络中断、超时或 registry 传播延迟失败时，先用 `cargo info --registry crates-io <crate>@0.9.0` 判断该版本是否已经成功上传；如果候选源码没有变化，只重试尚未发布的命令，并继续等待传播，不重复发布已经存在的版本。
+
+第一个 crate 上传后，只要后续步骤需要修改代码、测试、manifest、lockfile、workflow 或发布文档，立即终止整个 `0.9.0` 发布。不得从新 SHA 继续发布剩余 `0.9.0` crate，也不得用本地 patch 掩盖 registry 状态。
+
+Yank 只用于已经发布且存在严重正确性或安全缺陷的版本，不用于普通网络失败、传播延迟或文档瑕疵。Yank 不删除 archive，也不能让同一版本重新上传；逐个记录受影响 crate、原因和执行结果：
+
+```shell
+package_to_yank="fusen-contract"
+cargo +1.97.0 yank --registry crates-io \
+  --version 0.9.0 "$package_to_yank"
+```
+
+一旦因源码改动放弃 `0.9.0`，将全部七个发布 crate 的 package version、所有 workspace/path dependency version、renamed-runtime/fuzz-support/fuzz metadata 和相关文档整体提升到 `0.9.1`，重新生成三套 lockfile 与 package archive。即使某些 crate 的 `0.9.0` 从未上传，也不能让 `0.9.1` 与残留的本地 `0.9.0` 混发。随后从 M0.11 重新冻结候选并重跑完整 CI、Nightly、Nacos、security、package consumer 和固定机 benchmark 证据。
+
+## Tag And GitHub Release
+
+只有七个 crate 都已从 crates.io 解析、下载，并且 registry-only consumer 通过后，才能创建 annotated tag。tag 必须显式指向记录的候选 SHA，而不是隐式使用当时的 `HEAD`：
+
+```shell
+assert_release_candidate
+if git rev-parse --verify --quiet refs/tags/v0.9.0 >/dev/null; then
+  echo "local v0.9.0 tag already exists" >&2
+  exit 1
+fi
+if ! remote_tag="$(git ls-remote --tags origin refs/tags/v0.9.0)"; then
+  echo "could not check the remote v0.9.0 tag" >&2
+  exit 1
+fi
+test -z "$remote_tag" || {
+  echo "remote v0.9.0 tag already exists" >&2
+  exit 1
+}
+git tag --annotate v0.9.0 "$RELEASE_CANDIDATE_SHA" \
+  --message "fusen-rs v0.9.0"
+test "$(git rev-parse 'v0.9.0^{commit}')" = "$RELEASE_CANDIDATE_SHA"
+git push origin refs/tags/v0.9.0
+remote_commit="$(
+  git ls-remote --tags origin 'refs/tags/v0.9.0^{}' | awk '{print $1}'
+)"
+test "$remote_commit" = "$RELEASE_CANDIDATE_SHA"
+```
+
+推送 tag 后再次确认远端 `v0.9.0` 指向候选 SHA。发布已有的 GitHub Release draft，或使用包含 M0.11 证据表的外部 notes file 创建 Release；命令路径要求预先安装并认证 GitHub CLI，`--verify-tag` 防止 GitHub 代建其他 tag：
+
+```shell
+command -v gh >/dev/null
+gh auth status --hostname github.com
+test -n "${RELEASE_NOTES_FILE:-}" || {
+  echo "RELEASE_NOTES_FILE is not set" >&2
+  exit 1
+}
+gh release create v0.9.0 \
+  --repo kwsc98/fusen-rs \
+  --verify-tag \
+  --title "fusen-rs v0.9.0" \
+  --notes-file "$RELEASE_NOTES_FILE"
+```
+
+GitHub Release 的 target、annotated `v0.9.0` tag 和所有候选证据必须指向同一个 `RELEASE_CANDIDATE_SHA`。如果已经建立 draft，不要再执行第二次 `gh release create`；核对 draft target 和 notes 后通过 GitHub UI 发布它。
