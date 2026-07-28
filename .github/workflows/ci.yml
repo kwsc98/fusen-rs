@@ -209,5 +209,5 @@ jobs:
       - run: cargo +1.97.0 fetch --locked --manifest-path fuzz-support/Cargo.toml
       - run: cargo +1.97.0 fetch --locked --manifest-path fuzz/Cargo.toml
       - run: bash .github/scripts/check-dependency-policy.sh
-      - run: cargo deny check advisories bans licenses sources
-      - run: cargo audit
+      - name: Audit all Cargo workspaces
+        run: bash .github/scripts/check-security.sh

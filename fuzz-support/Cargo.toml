@@ -3,6 +3,7 @@ name = "fusen-fuzz-support"
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.97"
+license = "Apache-2.0"
 publish = false
 
 [workspace]
@@ -10,7 +11,7 @@ resolver = "3"
 
 [dependencies]
 bytes = "1.12.1"
-fusen-contract = { path = "../fusen-contract" }
+fusen-contract = { path = "../fusen-contract", version = "0.9.0" }
 http = "1.4.2"
 http-body-util = "0.1.4"
 hyper = { version = "1.11.0", features = ["http1", "http2"] }
