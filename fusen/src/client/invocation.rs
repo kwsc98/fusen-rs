@@ -837,7 +837,11 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-    use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
+    use tokio::{
+        net::TcpListener,
+        sync::{mpsc, oneshot},
+        task::JoinHandle,
+    };
 
     #[derive(Debug)]
     struct CapturedAttempt {
@@ -1123,6 +1127,54 @@ mod tests {
                         Err(io::Error::new(
                             io::ErrorKind::ConnectionReset,
                             "controlled response reset",
+                        )),
+                    ]);
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .header(CONTENT_TYPE, JSON_CONTENT_TYPE)
+                            .header(CONTENT_LENGTH, "8")
+                            .body(StreamBody::new(frames))
+                            .unwrap(),
+                    )
+                }
+            });
+            let mut builder = hyper::server::conn::http1::Builder::new();
+            builder.keep_alive(false);
+            let _ = builder
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+        (endpoint, fixture)
+    }
+
+    async fn spawn_gated_broken_body_endpoint(
+        captured: mpsc::UnboundedSender<CapturedAttempt>,
+        failure_release: oneshot::Receiver<()>,
+    ) -> (ServiceEndpoint, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let failure_release = Arc::new(Mutex::new(Some(failure_release)));
+        let fixture = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let service = service_fn(move |request| {
+                let captured = captured.clone();
+                let failure_release = failure_release
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("gated endpoint receives one request");
+                async move {
+                    capture_request("old", request, &captured).await;
+                    failure_release
+                        .await
+                        .expect("test releases the first failed attempt");
+                    let frames = stream::iter([
+                        Ok::<_, io::Error>(Frame::data(Bytes::from_static(b"\""))),
+                        Err(io::Error::new(
+                            io::ErrorKind::ConnectionReset,
+                            "controlled response reset after directory update",
                         )),
                     ]);
                     Ok::<_, Infallible>(
@@ -1449,6 +1501,66 @@ mod tests {
 
         broken_fixture.await.unwrap();
         healthy_fixture.await.unwrap();
+        drop(client);
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_selects_from_a_newer_directory_snapshot_after_a_failed_attempt() {
+        let (captured_tx, mut captured_rx) = mpsc::unbounded_channel();
+        let (release_failure, failure_release) = oneshot::channel();
+        let (old_endpoint, old_fixture) =
+            spawn_gated_broken_body_endpoint(captured_tx.clone(), failure_release).await;
+        let (new_endpoint, new_fixture) = spawn_full_endpoint(
+            "new",
+            StatusCode::OK,
+            Bytes::from_static(br#""new-snapshot""#),
+            None,
+            captured_tx,
+        )
+        .await;
+        let config = resilience_config(
+            Duration::from_secs(2),
+            RetryConfig::default().backoff(Duration::from_nanos(1), Duration::from_nanos(1)),
+        );
+        let runtime = ClientRuntime::builder().config(config).build().unwrap();
+        let (publisher, client) =
+            discovered_client(&runtime, vec![instance("old", old_endpoint.clone())]);
+        let initial_revision = match &client.inner.source {
+            EndpointSource::Discovery(directory) => directory.snapshot().revision(),
+            EndpointSource::Direct(_) => unreachable!("fixture uses service discovery"),
+        };
+
+        let invocation = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .invoke::<Value, _>(MethodId::new(0), || Ok(Arguments::new()))
+                    .await
+            }
+        });
+        let first = captured_rx.recv().await.unwrap();
+        assert_eq!((first.endpoint, first.attempt), ("old", 1));
+
+        let latest_instances = vec![instance("new", new_endpoint.clone())];
+        runtime.inner.endpoint_breakers.replace_discovery(
+            resilience_service().selector(),
+            WireProtocol::SpringCloudV1,
+            &latest_instances,
+        );
+        let latest = publisher.publish_ready(latest_instances).unwrap();
+        assert!(latest.revision() > initial_revision);
+        assert_eq!(latest.instances()[0].endpoint(), &new_endpoint);
+        release_failure.send(()).unwrap();
+
+        let value = invocation.await.unwrap().unwrap();
+        assert_eq!(value, json!("new-snapshot"));
+        let second = captured_rx.recv().await.unwrap();
+        assert_eq!((second.endpoint, second.attempt), ("new", 2));
+        assert_eq!(first.request_id, second.request_id);
+
+        old_fixture.await.unwrap();
+        new_fixture.await.unwrap();
         drop(client);
         runtime.shutdown().await.unwrap();
     }
