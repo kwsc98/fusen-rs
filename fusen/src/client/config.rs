@@ -860,14 +860,245 @@ impl ClientConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Debug;
+
+    fn assert_default_cases<T>(cases: &[(&str, T, T)])
+    where
+        T: Debug + PartialEq,
+    {
+        for (name, actual, expected) in cases {
+            assert_eq!(actual, expected, "unexpected default for {name}");
+        }
+    }
 
     #[test]
-    fn defaults_match_the_runtime_contract() {
+    fn public_default_getters_match_the_runtime_contract() {
         let config = ClientConfig::default();
-        assert_eq!(config.request_timeout(), Duration::from_secs(10));
-        assert_eq!(config.retry().max_attempts_value(), 3);
-        assert_eq!(config.admission().queue_value().capacity(), 0);
-        assert!(config.validate().is_ok());
+        let admission = config.admission();
+        let queue = admission.queue_config();
+        let discovery = config.discovery();
+        let retry = config.retry();
+        let breaker = config.circuit_breaker();
+        let endpoint_breaker = breaker.endpoint_threshold();
+        let service_breaker = breaker.service_threshold();
+        let http = config.http();
+
+        assert_default_cases(&[
+            (
+                "client.request_timeout",
+                config.request_timeout(),
+                Duration::from_secs(10),
+            ),
+            (
+                "client.connect_timeout",
+                config.connect_timeout(),
+                Duration::from_secs(3),
+            ),
+            (
+                "client.shutdown_timeout",
+                config.shutdown_timeout(),
+                Duration::from_secs(30),
+            ),
+            (
+                "admission.queue.max_wait",
+                queue.max_wait(),
+                Duration::from_millis(50),
+            ),
+            (
+                "discovery.initial_timeout",
+                discovery.initial_timeout_value_public(),
+                Duration::from_secs(5),
+            ),
+            (
+                "discovery.operation_timeout",
+                discovery.operation_timeout_value_public(),
+                Duration::from_secs(5),
+            ),
+            (
+                "discovery.close_timeout",
+                discovery.close_timeout_value_public(),
+                Duration::from_secs(5),
+            ),
+            (
+                "discovery.max_staleness",
+                discovery.max_staleness_value_public(),
+                Duration::from_secs(30),
+            ),
+            (
+                "circuit_breaker.endpoint.window",
+                endpoint_breaker.window_value(),
+                Duration::from_secs(10),
+            ),
+            (
+                "circuit_breaker.endpoint.open_duration",
+                endpoint_breaker.open_duration_value(),
+                Duration::from_secs(10),
+            ),
+            (
+                "circuit_breaker.service.window",
+                service_breaker.window_value(),
+                Duration::from_secs(30),
+            ),
+            (
+                "circuit_breaker.service.open_duration",
+                service_breaker.open_duration_value(),
+                Duration::from_secs(15),
+            ),
+            (
+                "circuit_breaker.max_open_duration",
+                breaker.max_open_duration(),
+                Duration::from_secs(120),
+            ),
+            (
+                "circuit_breaker.idle_eviction",
+                breaker.idle_eviction(),
+                Duration::from_secs(600),
+            ),
+            (
+                "http.http2_keep_alive_timeout",
+                http.http2_keep_alive_timeout(),
+                Duration::from_secs(20),
+            ),
+        ]);
+        assert_default_cases(&[
+            (
+                "admission.max_in_flight",
+                admission.max_in_flight_value_public(),
+                1024,
+            ),
+            (
+                "admission.max_in_flight_per_endpoint",
+                admission.max_in_flight_per_endpoint_value_public(),
+                128,
+            ),
+            (
+                "admission.max_request_body_bytes",
+                admission.max_request_body_bytes_value(),
+                2 * MIB,
+            ),
+            (
+                "admission.max_response_body_bytes",
+                admission.max_response_body_bytes_value(),
+                2 * MIB,
+            ),
+            (
+                "admission.max_inflight_request_body_bytes",
+                admission.max_inflight_request_body_bytes_value(),
+                64 * MIB,
+            ),
+            (
+                "admission.max_inflight_response_body_bytes",
+                admission.max_inflight_response_body_bytes_value(),
+                64 * MIB,
+            ),
+            ("admission.queue.capacity", queue.capacity(), 0),
+            (
+                "discovery.max_subscriptions",
+                discovery.max_subscriptions_value_public(),
+                1024,
+            ),
+            (
+                "circuit_breaker.max_endpoint_entries",
+                breaker.max_endpoint_entries(),
+                10_000,
+            ),
+            (
+                "http.http1_max_idle_per_host",
+                http.http1_max_idle_per_host(),
+                128,
+            ),
+            (
+                "http.http2_connections_per_host",
+                http.http2_connections_per_host(),
+                1,
+            ),
+        ]);
+        assert_default_cases(&[
+            (
+                "retry.max_attempts",
+                retry.max_attempts_value_public(),
+                3_u8,
+            ),
+            (
+                "circuit_breaker.endpoint.buckets",
+                endpoint_breaker.buckets_value(),
+                10,
+            ),
+            (
+                "circuit_breaker.service.buckets",
+                service_breaker.buckets_value(),
+                10,
+            ),
+        ]);
+        assert_default_cases(&[
+            (
+                "circuit_breaker.endpoint.minimum_samples",
+                endpoint_breaker.minimum_samples_value(),
+                20_u32,
+            ),
+            (
+                "circuit_breaker.endpoint.half_open_probes",
+                endpoint_breaker.half_open_probes_value(),
+                1,
+            ),
+            (
+                "circuit_breaker.endpoint.close_successes",
+                endpoint_breaker.close_successes_value(),
+                2,
+            ),
+            (
+                "circuit_breaker.service.minimum_samples",
+                service_breaker.minimum_samples_value(),
+                50,
+            ),
+            (
+                "circuit_breaker.service.half_open_probes",
+                service_breaker.half_open_probes_value(),
+                2,
+            ),
+            (
+                "circuit_breaker.service.close_successes",
+                service_breaker.close_successes_value(),
+                3,
+            ),
+        ]);
+        assert_default_cases(&[
+            (
+                "circuit_breaker.endpoint.failure_ratio",
+                endpoint_breaker.failure_ratio_value(),
+                0.5_f64,
+            ),
+            (
+                "circuit_breaker.service.failure_ratio",
+                service_breaker.failure_ratio_value(),
+                0.6,
+            ),
+        ]);
+        assert_default_cases(&[
+            (
+                "discovery.reconnect_backoff",
+                discovery.reconnect_backoff_bounds(),
+                (Duration::from_millis(100), Duration::from_secs(30)),
+            ),
+            (
+                "retry.backoff",
+                retry.backoff_value(),
+                (Duration::from_millis(10), Duration::from_millis(200)),
+            ),
+        ]);
+        assert_default_cases(&[("retry.budget", retry.budget_value(), (100_u32, 10_u32))]);
+        assert_default_cases(&[
+            (
+                "http.pool_idle_timeout",
+                http.pool_idle_timeout(),
+                Some(Duration::from_secs(90)),
+            ),
+            (
+                "http.http2_keep_alive_interval",
+                http.http2_keep_alive_interval(),
+                None,
+            ),
+        ]);
     }
 
     #[test]
@@ -877,5 +1108,98 @@ mod tests {
             .build()
             .unwrap_err();
         assert_eq!(error.kind(), ClientErrorKind::Build);
+    }
+
+    #[test]
+    fn cross_field_boundaries_pass_and_one_step_overages_fail() {
+        const BODY_BUDGET: usize = 1024;
+        const BACKOFF_CAP: Duration = Duration::from_millis(10);
+        const ONE_NANOSECOND: Duration = Duration::from_nanos(1);
+
+        let cases = [
+            (
+                "request body limit and global budget",
+                ClientConfig::builder()
+                    .admission(
+                        ClientAdmissionConfig::default()
+                            .max_request_body_bytes(BODY_BUDGET)
+                            .max_inflight_request_body_bytes(BODY_BUDGET),
+                    )
+                    .build(),
+                ClientConfig::builder()
+                    .admission(
+                        ClientAdmissionConfig::default()
+                            .max_request_body_bytes(BODY_BUDGET + 1)
+                            .max_inflight_request_body_bytes(BODY_BUDGET),
+                    )
+                    .build(),
+            ),
+            (
+                "response body limit and global budget",
+                ClientConfig::builder()
+                    .admission(
+                        ClientAdmissionConfig::default()
+                            .max_response_body_bytes(BODY_BUDGET)
+                            .max_inflight_response_body_bytes(BODY_BUDGET),
+                    )
+                    .build(),
+                ClientConfig::builder()
+                    .admission(
+                        ClientAdmissionConfig::default()
+                            .max_response_body_bytes(BODY_BUDGET + 1)
+                            .max_inflight_response_body_bytes(BODY_BUDGET),
+                    )
+                    .build(),
+            ),
+            (
+                "discovery reconnect base and cap",
+                ClientConfig::builder()
+                    .discovery(
+                        DiscoveryConfig::default().reconnect_backoff(BACKOFF_CAP, BACKOFF_CAP),
+                    )
+                    .build(),
+                ClientConfig::builder()
+                    .discovery(
+                        DiscoveryConfig::default()
+                            .reconnect_backoff(BACKOFF_CAP + ONE_NANOSECOND, BACKOFF_CAP),
+                    )
+                    .build(),
+            ),
+            (
+                "retry backoff base and cap",
+                ClientConfig::builder()
+                    .retry(RetryConfig::default().backoff(BACKOFF_CAP, BACKOFF_CAP))
+                    .build(),
+                ClientConfig::builder()
+                    .retry(
+                        RetryConfig::default().backoff(BACKOFF_CAP + ONE_NANOSECOND, BACKOFF_CAP),
+                    )
+                    .build(),
+            ),
+            (
+                "queue capacity and wait",
+                ClientConfig::builder()
+                    .admission(
+                        ClientAdmissionConfig::default()
+                            .queue(QueueConfig::disabled().with_max_wait(Duration::ZERO)),
+                    )
+                    .build(),
+                ClientConfig::builder()
+                    .admission(
+                        ClientAdmissionConfig::default()
+                            .queue(QueueConfig::bounded(1).with_max_wait(Duration::ZERO)),
+                    )
+                    .build(),
+            ),
+        ];
+
+        for (name, boundary, one_step_over) in cases {
+            assert!(
+                boundary.is_ok(),
+                "{name} equality/disabled boundary must be accepted: {boundary:?}"
+            );
+            let error = one_step_over.expect_err("one-step overage must be rejected");
+            assert_eq!(error.kind(), ClientErrorKind::Build, "{name}");
+        }
     }
 }

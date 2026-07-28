@@ -402,6 +402,115 @@ impl ServerConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Debug;
+
+    fn assert_default_cases<T>(cases: &[(&str, T, T)])
+    where
+        T: Debug + PartialEq,
+    {
+        for (name, actual, expected) in cases {
+            assert_eq!(actual, expected, "unexpected default for {name}");
+        }
+    }
+
+    #[test]
+    fn public_default_getters_match_the_runtime_contract() {
+        let config = ServerConfig::default();
+        let request = config.request();
+        let http = config.http();
+        let registry = config.registry();
+
+        assert_default_cases(&[(
+            "server.protocols",
+            config.protocols(),
+            ProtocolSet::FUSEN_V1,
+        )]);
+        assert_default_cases(&[
+            (
+                "request.timeout",
+                request.request_timeout(),
+                Duration::from_secs(30),
+            ),
+            (
+                "request.queue_max_wait",
+                request.queue_max_wait(),
+                Duration::from_millis(50),
+            ),
+            (
+                "http.http1_header_read_timeout",
+                http.http1_header_read_timeout_value(),
+                Duration::from_secs(10),
+            ),
+            (
+                "http.http2_keep_alive_timeout",
+                http.http2_keep_alive_timeout(),
+                Duration::from_secs(10),
+            ),
+            (
+                "registry.startup_timeout",
+                registry.startup_timeout(),
+                Duration::from_secs(30),
+            ),
+            (
+                "registry.operation_timeout",
+                registry.operation_timeout(),
+                Duration::from_secs(5),
+            ),
+            (
+                "server.graceful_shutdown_timeout",
+                config.graceful_shutdown_timeout(),
+                Duration::from_secs(30),
+            ),
+        ]);
+        assert_default_cases(&[
+            (
+                "request.max_concurrent_requests",
+                request.max_concurrent_requests_value(),
+                1024,
+            ),
+            (
+                "request.max_request_body_bytes",
+                request.max_request_body_bytes(),
+                2 * MIB,
+            ),
+            (
+                "request.max_response_body_bytes",
+                request.max_response_body_bytes(),
+                2 * MIB,
+            ),
+            (
+                "request.max_inflight_request_body_bytes",
+                request.max_inflight_request_body_bytes(),
+                64 * MIB,
+            ),
+            (
+                "request.max_inflight_response_body_bytes",
+                request.max_inflight_response_body_bytes(),
+                64 * MIB,
+            ),
+            ("request.queue_capacity", request.queue_capacity(), 0),
+            ("http.max_connections", http.max_connections_value(), 2048),
+            ("http.max_uri_bytes", http.max_uri_bytes(), 8 * 1024),
+            ("http.max_query_pairs", http.max_query_pairs(), 128),
+            ("http.max_headers", http.max_headers(), 64),
+            ("http.max_header_bytes", http.max_header_bytes(), 32 * 1024),
+            (
+                "registry.max_concurrent_operations",
+                registry.max_concurrent_operations(),
+                8,
+            ),
+        ]);
+        assert_default_cases(&[(
+            "http.http2_max_concurrent_streams",
+            http.http2_max_concurrent_streams(),
+            128_u32,
+        )]);
+        assert_default_cases(&[(
+            "http.http2_keep_alive_interval",
+            http.http2_keep_alive_interval(),
+            Some(Duration::from_secs(30)),
+        )]);
+    }
 
     #[test]
     fn invalid_limits_return_a_typed_validation_error() {
@@ -410,5 +519,65 @@ mod tests {
             .build()
             .unwrap_err();
         assert_eq!(error.kind(), ServerErrorKind::Validation);
+    }
+
+    #[test]
+    fn cross_field_boundaries_pass_and_one_step_overages_fail() {
+        const BODY_BUDGET: usize = 1024;
+
+        let cases = [
+            (
+                "request body limit and global budget",
+                ServerConfig::builder()
+                    .request(
+                        ServerRequestConfig::default()
+                            .body_limits(BODY_BUDGET, 2 * MIB)
+                            .inflight_body_budgets(BODY_BUDGET, 64 * MIB),
+                    )
+                    .build(),
+                ServerConfig::builder()
+                    .request(
+                        ServerRequestConfig::default()
+                            .body_limits(BODY_BUDGET + 1, 2 * MIB)
+                            .inflight_body_budgets(BODY_BUDGET, 64 * MIB),
+                    )
+                    .build(),
+            ),
+            (
+                "response body limit and global budget",
+                ServerConfig::builder()
+                    .request(
+                        ServerRequestConfig::default()
+                            .body_limits(2 * MIB, BODY_BUDGET)
+                            .inflight_body_budgets(64 * MIB, BODY_BUDGET),
+                    )
+                    .build(),
+                ServerConfig::builder()
+                    .request(
+                        ServerRequestConfig::default()
+                            .body_limits(2 * MIB, BODY_BUDGET + 1)
+                            .inflight_body_budgets(64 * MIB, BODY_BUDGET),
+                    )
+                    .build(),
+            ),
+            (
+                "queue capacity and wait",
+                ServerConfig::builder()
+                    .request(ServerRequestConfig::default().queue(0, Duration::ZERO))
+                    .build(),
+                ServerConfig::builder()
+                    .request(ServerRequestConfig::default().queue(1, Duration::ZERO))
+                    .build(),
+            ),
+        ];
+
+        for (name, boundary, one_step_over) in cases {
+            assert!(
+                boundary.is_ok(),
+                "{name} equality/disabled boundary must be accepted: {boundary:?}"
+            );
+            let error = one_step_over.expect_err("one-step overage must be rejected");
+            assert_eq!(error.kind(), ServerErrorKind::Validation, "{name}");
+        }
     }
 }
