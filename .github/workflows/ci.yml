@@ -142,18 +142,28 @@ jobs:
           --all-targets -- -D warnings
       - name: Compile the renamed-runtime macro consumer
         run: cargo +1.97.0 test --locked --offline -p fusen-macro-renamed-runtime
+      - name: Test the benchmark schema and regression gate
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python3 -m unittest discover
+          -s .github/scripts -p 'test_run_benchmark_gate.py' -v
       - name: Run and record the release benchmark smoke sample
         run: >-
           python3 .github/scripts/run-benchmark-gate.py
           --host-id ci-${RUNNER_OS}-${RUNNER_ARCH}
           --runs 1
-          --output-dir target/benchmark-smoke
+          --warmup-iterations 25
+          --small-iterations 200
+          --large-iterations 100
+          --output-dir
+          target/benchmark-smoke/${{ github.run_id }}-${{ github.run_attempt }}
       - name: Archive the benchmark smoke sample
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-smoke-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          path: target/benchmark-smoke
+          path: target/benchmark-smoke/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 14
       - name: Compile an external consumer from package archives

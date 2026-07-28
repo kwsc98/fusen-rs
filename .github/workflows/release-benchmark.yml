@@ -2,6 +2,15 @@ name: Release Benchmark Gate
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Compare with the committed baseline or generate its five-run replacement
+        required: true
+        default: compare
+        type: choice
+        options:
+          - compare
+          - calibrate
 
 permissions:
   contents: read
@@ -12,28 +21,42 @@ concurrency:
 
 jobs:
   invocation-regression:
-    name: release-benchmark-10pct
+    name: release-benchmark-${{ inputs.mode }}
     runs-on: [self-hosted, fusen-benchmark-0-9-reference]
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo +1.97.0 fetch --locked
       - name: Run five same-host samples and enforce the committed baseline
+        if: inputs.mode == 'compare'
         run: >-
           python3 .github/scripts/run-benchmark-gate.py
           --host-id fusen-0.9-reference-macos-arm64
           --runs 5
           --baseline .github/benchmarks/fusen-0.9-reference-macos-arm64.json
-          --output-dir target/release-benchmark-gate
+          --output-dir
+          target/release-benchmark-gate/${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Generate a five-run baseline candidate from this clean SHA
+        if: inputs.mode == 'calibrate'
+        run: >-
+          python3 .github/scripts/run-benchmark-gate.py
+          --host-id fusen-0.9-reference-macos-arm64
+          --runs 5
+          --write-baseline
+          target/release-benchmark-gate/${{ github.run_id }}-${{ github.run_attempt }}/fusen-0.9-reference-macos-arm64.json
+          --output-dir
+          target/release-benchmark-gate/${{ github.run_id }}-${{ github.run_attempt }}
       - name: Archive raw samples and comparison summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-benchmark-${{ github.sha }}
-          path: target/release-benchmark-gate
+          name: release-benchmark-${{ inputs.mode }}-${{ github.sha }}
+          path: target/release-benchmark-gate/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 90

@@ -20,6 +20,7 @@ bash .github/scripts/check-security.sh
 bash .github/scripts/check-dependency-policy.sh
 bash .github/scripts/check-public-api-denylist.sh
 bash .github/scripts/check-package-consumer.sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts -p 'test_run_benchmark_gate.py' -v
 cargo +1.97.0 clippy --locked --offline --manifest-path fuzz-support/Cargo.toml --all-targets -- -D warnings
 ```
 
@@ -37,7 +38,7 @@ CI 还必须通过 Linux/macOS/Windows、feature matrix、renamed-runtime macro 
 - HTTPS 测试确认 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots、无明文 fallback；Server listener 仍不加载证书或私钥；
 - 永久 pending request/registry/config cleanup 在 deadline 内有界返回；
 - lifecycle、retry、breaker 与 byte-budget tests 不依赖 correctness sleep 或预占端口；
-- 在绑定参考机器上执行 `Release Benchmark Gate`，direct single-attempt p50/p99 相对 committed baseline 回退不超过 10%，原始五轮日志与 JSON summary 已归档。
+- 在绑定参考机器上执行 `Release Benchmark Gate`，四个 Fusen `c1/c100 × small/64 KiB` case 的 p50/p99 相对 committed baseline 回退均不超过 10%；Spring H1 同矩阵、QPS、原始五轮日志与 JSON summary 已归档。
 
 真实 Nacos container tests 是 required release gate。CI 固定启动 Nacos `v2.4.3` standalone service container，测试同时覆盖 registration/discovery 和 config publish/listen，并在主流程失败后继续关闭 handle、注销 instance 和删除 config。资源名由 GitHub run id、进程 id 和时间戳组成，不复用共享名称。
 
@@ -53,7 +54,7 @@ bash .github/scripts/run-live-nacos-tests.sh
 
 ## Performance Gate
 
-普通托管 CI 会真实运行一轮 benchmark smoke sample 并上传 `target/benchmark-smoke`，用于确认 socket benchmark 可执行和输出格式稳定；不同托管机器之间的绝对延迟不用于 10% 判定。
+普通托管 CI 会运行一轮缩短参数但 case 完整的 benchmark smoke，并从按 `run_id-run_attempt` 隔离的目录上传 artifact，用于确认 Fusen h2c、Spring H1、并发/大 payload 和 schema 可执行；不同托管机器之间的绝对延迟不用于 10% 判定。
 
 正式比较由 [release-benchmark.yml](../.github/workflows/release-benchmark.yml) 在带有 `fusen-benchmark-0-9-reference` label 的固定 self-hosted runner 上执行。该 runner 必须是建立 [committed baseline](../.github/benchmarks/fusen-0.9-reference-macos-arm64.json) 的同一参考机器：
 
@@ -62,10 +63,12 @@ python3 .github/scripts/run-benchmark-gate.py \
   --host-id fusen-0.9-reference-macos-arm64 \
   --runs 5 \
   --baseline .github/benchmarks/fusen-0.9-reference-macos-arm64.json \
-  --output-dir target/release-benchmark-gate
+  --output-dir target/release-benchmark-gate/manual-compare-001
 ```
 
-比较器拒绝 host id、toolchain、schema、run count 不匹配和缺失 baseline；p50 或 p99 任一中位数回退超过 10% 即非零退出。发布负责人必须保留 workflow artifact，并确认 checkout SHA 是待发布 commit。
+每次运行必须使用全新或空的 output directory；workflow 使用 `run_id-run_attempt` 唯一路径，防止失败 artifact 混入旧证据。比较器拒绝脏工作树，以及 host id、CPU、OS、toolchain、rustc、schema、参数、五轮原始样本不匹配，并要求 baseline `source_commit` 是当前候选 `HEAD` 的 ancestor；四个 Fusen case 的 p50 或 p99 任一中位数回退严格超过 10% 即非零退出。QPS 只记录，Spring H1 的四个 case 只归档。发布负责人必须保留 workflow artifact，并确认 checkout SHA 是待发布 commit。
+
+首个 schema v2 baseline 必须两阶段生成：先提交 benchmark 实现为干净候选 A，再在固定 runner 上以 workflow 的 `calibrate` mode 对 A 运行五轮；审查 artifact 后将生成的 baseline 单独提交。生成文件的完整 `source_commit` 必须等于 A，且 compare 时 A 必须是当前候选 `HEAD` 的 ancestor。committed baseline 仍为 `calibration-required` 时 compare 必须失败，不能发布。完整命令与字段定义见[性能基线](performance-baseline.md)。
 
 ## Packaging Order
 

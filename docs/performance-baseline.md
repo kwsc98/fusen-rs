@@ -1,58 +1,78 @@
 # 0.9 性能基线
 
-0.9 clean-slate 不把重构前的内部微基准当作发布基线。首个 baseline 由 `0.9.0` release candidate 的 direct、single-attempt、无日志真实 socket 场景建立，并与最终 tag 一起归档。
+`0.9.0` 使用 direct、single-attempt、无 registry 的真实 loopback socket 矩阵。正式比较只能在带有 `fusen-benchmark-0-9-reference` label 的固定 self-hosted runner 上进行；GitHub hosted runner 只验证 benchmark 和 schema 可执行。
 
-## Release Gate
+## Release Matrix
 
-同一机器、Rust 1.97、相同 release profile、相同 CPU 电源策略和相同 payload 下，对候选提交至少重复 5 轮，分别记录 p50/p99 latency、成功 QPS、错误数和应用层 JSON bytes。相对当前 0.9 baseline，direct single-attempt benchmark 的 p50 或 p99 不得回退超过 10%。参考机器由稳定 host id 与 self-hosted runner label 绑定；GitHub hosted runner 的结果只做 smoke artifact，禁止跨机器套用绝对延迟 baseline。
+每轮依次执行以下场景，全部请求必须成功：
 
-比较必须满足：
+| Protocol | Transport | Concurrency | Payload | Release threshold |
+| --- | --- | ---: | ---: | --- |
+| Fusen V1 | h2c | 1 / 100 | small / 64 KiB | p50、p99 五轮中位数不得回退超过 10% |
+| Spring Cloud V1 | HTTP/1.1 | 1 / 100 | small / 64 KiB | 仅归档，不执行回退判定 |
 
-- Direct endpoint，单 logical invocation，关闭 retry 与外部 registry；
-- 分别测试并发 1 与 100，至少覆盖小 payload 和 64 KiB payload；
-- 服务端与客户端固定在同一组 CPU/网络条件，关闭逐请求日志与 exporter；
-- 所有请求成功，permit、连接与 task 数量在测试后回到稳定值；
-- 报告 before/after commit、操作系统、CPU、Rust 版本、命令、原始结果和中位数；
-- 没有可执行 baseline 时不得声称通过回退门槛，应先建立并归档 baseline。
+默认每轮每个 small case 测量 10,000 次、每个 64 KiB case 测量 1,000 次，并在每个 case 前预热 500 次。参数会写入 summary 和 baseline；比较时必须完全一致。客户端显式配置一次 attempt，服务端同时启用 Fusen V1 与 Spring Cloud V1。
 
-## E2E 命令
+每个 case 记录：
 
-主 release benchmark 使用真实 loopback h2c socket，并直接报告 mean/p50/p99。正式 gate 运行五轮、保存逐轮 log 与 summary，并校验 committed baseline：
+- `iterations`、`errors`、总 `duration_ns`；
+- 双向 echo payload 的 UTF-8 `bytes`，不包含 JSON quoting、协议 envelope、HTTP framing 或 TCP/IP；
+- 成功 `qps`，仅记录，不作为 0.9 的阻塞阈值；
+- 成功请求 latency 的 nearest-rank `p50_ns` 和 `p99_ns`。
+
+机器行固定为：
+
+```text
+benchmark-result case=... protocol=... transport=... concurrency=... payload=... payload_bytes=... iterations=... bytes=... errors=... duration_ns=... qps=... p50_ns=... p99_ns=...
+```
+
+gate 要求每轮恰好包含 8 个唯一 case，拒绝缺失 case、重复 case、非零 errors、错误字节数、无效 percentile 或不一致 QPS。
+
+## Baseline Schema
+
+schema v2 baseline 必须包含：
+
+- 产生测量的完整 `source_commit`，并能在完整 checkout 中解析为当前候选 `HEAD` 的 ancestor；
+- 固定 `host.id`、CPU、OS，以及 toolchain 和完整 `rustc -Vv`；
+- warmup、small/64 KiB iterations、concurrency 和 payload bytes；
+- 8 个 case 各自连续五轮的原始 metrics 与聚合中位数；
+- `required_runs = 5` 和固定为 10% 的 threshold。
+
+比较器拒绝脏工作树、host/CPU/OS/rustc/参数不一致、不是恰好五轮、placeholder SHA、缺少原始样本或聚合值不能由原始样本复算的 baseline。四个 Fusen case 的 p50 或 p99 任一中位数严格超过 baseline 的 110% 时失败；正好 110% 通过。Spring latency 和全部 QPS 不参与判定，但保留在相同 artifact 中。
+
+## Two-Phase Calibration
+
+baseline 必须在实现提交之后生成，不能在未提交代码上预填数字：
+
+1. 将 benchmark、gate、测试、workflow 和文档提交为干净候选 A。
+2. 在固定 runner 上对候选 A 运行五轮 calibration；生成文件中的 `source_commit` 必须等于 A。
+3. 从 workflow artifact 取出 `fusen-0.9-reference-macos-arm64.json`，审查五轮 log 和 summary 后单独提交 baseline。
+4. 对包含 baseline 的候选重新运行 `compare`；gate 验证 A 是当前候选 `HEAD` 的 ancestor，并归档成功 artifact。
+
+固定机本地 calibration 命令：
+
+```bash
+python3 .github/scripts/run-benchmark-gate.py \
+  --host-id fusen-0.9-reference-macos-arm64 \
+  --runs 5 \
+  --write-baseline target/release-benchmark-gate/manual-calibrate-001/fusen-0.9-reference-macos-arm64.json \
+  --output-dir target/release-benchmark-gate/manual-calibrate-001
+```
+
+等价的 GitHub Actions 入口是 `Release Benchmark Gate` 的 `calibrate` mode。当前 committed baseline 只要仍是 `calibration-required`，compare 就会明确失败，不能发布。
+
+## Comparison
+
+baseline 提交后运行：
 
 ```bash
 python3 .github/scripts/run-benchmark-gate.py \
   --host-id fusen-0.9-reference-macos-arm64 \
   --runs 5 \
   --baseline .github/benchmarks/fusen-0.9-reference-macos-arm64.json \
-  --output-dir target/release-benchmark-gate
+  --output-dir target/release-benchmark-gate/manual-compare-001
 ```
 
-只查看单轮原始输出时仍可直接运行 `cargo +1.97.0 bench --locked -p fusen-rs --bench invocation`。机器可读行固定为 `direct/fusen-v1 iterations=... mean_ns=... p50_ns=... p99_ns=...`，gate 要求每轮恰好一行且所有数值为正。
+每次命令必须使用全新或空的 output directory。固定 workflow 使用 `run_id-run_attempt` 唯一路径、完整 Git 历史和 ancestor check 验证 baseline SHA，并上传五轮 log、`summary.json` 和 comparison。普通 CI 使用较短参数运行同一 8-case 矩阵，同时执行 `.github/scripts/test_run_benchmark_gate.py`；托管机器结果不能更新 reference baseline。
 
-双协议吞吐与成功率矩阵使用 examples runner：
-
-```bash
-cargo +1.97.0 run --release -p examples --bin host-server-pt
-
-PT_PROTOCOL=both \
-PT_CONCURRENCY=1,100 \
-PT_ROUNDS=5 \
-PT_REQUESTS_PER_TASK=10000 \
-cargo +1.97.0 run --release -p examples --bin host-client-pt
-```
-
-`PT_PROTOCOL=h2` 测试 `FusenV1`，`PT_PROTOCOL=h1` 测试 `SpringCloudV1`。统计的 JSON bytes 不包含 HTTP framing、HPACK 或 TCP/IP；需要线速数据时使用独立 socket/packet instrumentation，不修改稳定 wire。
-
-## Baseline Record
-
-0.9 reference baseline 的机器可读记录保存在 [`.github/benchmarks/fusen-0.9-reference-macos-arm64.json`](../.github/benchmarks/fusen-0.9-reference-macos-arm64.json)。数据来自同一 macOS 26.5 arm64 参考机器、Rust 1.97.0、release profile 的连续五轮真实 loopback h2c 测量；baseline 文件与产生它的 0.9 clean-slate commit 一起冻结。
-
-| Commit | Platform | Protocol | Payload | Concurrency | p50 | p99 | QPS | Errors |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| baseline file commit | macOS 26.5 arm64 | Fusen V1 | small | 1 | 59,583 ns | 73,667 ns | 16,714.97 | 0 |
-
-五轮 p50 为 `60,417 / 59,583 / 59,584 / 59,167 / 59,375 ns`，p99 为 `75,000 / 75,167 / 73,167 / 73,667 / 73,083 ns`。发布比较使用各列中位数，单轮 outlier 不直接决定 gate；任何一列中位数超过 baseline 的 110% 仍会失败。
-
-Spring Cloud V1 的吞吐/成功率矩阵与大 payload 数据作为同一 release artifact 归档；扩展为稳定 latency gate 前，必须先为该 case 建立可重复 baseline。
-
-Retry、breaker、admission、codec 和 middleware 可以增加独立 microbench，但不能代替真实 H1/H2 release gate。Benchmark 代码不得暴露私有 transport/codec API 只为方便测量。
+Retry、breaker、admission、codec 和 middleware 可以增加独立 microbenchmark，但不能代替这套真实 H1/h2c release gate。Benchmark 代码不得为了测量而暴露私有 transport 或 codec API。
