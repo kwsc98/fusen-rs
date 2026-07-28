@@ -48,8 +48,16 @@ jobs:
           status_file="$log_dir/$FUZZ_TARGET.status"
           mkdir -p "$log_dir"
 
+          # Prebuilt cargo-fuzz binaries can default to their musl build triple.
+          # ASan must instead target the runner's dynamically linked host.
+          fuzz_host="$(rustc +nightly -vV | sed -n 's/^host: //p')"
+          if [[ -z "$fuzz_host" ]]; then
+            printf 'could not determine the nightly rustc host target\n' >&2
+            exit 1
+          fi
+
           fuzz_command=(
-            cargo +nightly fuzz run "$FUZZ_TARGET" --
+            cargo +nightly fuzz run --target "$fuzz_host" "$FUZZ_TARGET" --
             -max_total_time=300
             -timeout=10
             -max_len=65536
