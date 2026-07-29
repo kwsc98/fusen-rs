@@ -28,6 +28,8 @@ runtime_tests="$(cargo "+$rust_toolchain" test --locked --offline \
     --package fusen-rs --test runtime_e2e -- --list)"
 server_tests="$(cargo "+$rust_toolchain" test --locked --offline \
     --package fusen-rs --test server_registry -- --list)"
+startup_tests="$(cargo "+$rust_toolchain" test --locked --offline \
+    --package fusen-rs --test server_startup -- --list)"
 register_tests="$(cargo "+$rust_toolchain" test --locked --offline \
     --package fusen-register --lib -- --list)"
 config_tests="$(cargo "+$rust_toolchain" test --locked --offline \
@@ -41,6 +43,9 @@ require_test "$runtime_tests" \
 require_test "$server_tests" \
     "shutdown_closes_listener_before_registry_and_connection_drain_in_parallel" \
     "fusen-rs/server_registry"
+require_test "$startup_tests" \
+    "aborting_start_compensates_a_late_registration_success_exactly_once" \
+    "fusen-rs/server_startup"
 require_test "$register_tests" \
     "tests::cancelling_last_activation_waiter_requests_late_success_cleanup" \
     "fusen-register/lib"
@@ -66,6 +71,8 @@ for ((iteration = 1; iteration <= repeat_count; iteration++)); do
         --package fusen-rs --test runtime_e2e -- --test-threads=1
     cargo "+$rust_toolchain" test --locked --offline \
         --package fusen-rs --test server_registry -- --test-threads=1
+    cargo "+$rust_toolchain" test --locked --offline \
+        --package fusen-rs --test server_startup -- --test-threads=1
     cargo "+$rust_toolchain" test --locked --offline \
         --package fusen-register --lib \
         tests::cancelling_last_activation_waiter_requests_late_success_cleanup -- \

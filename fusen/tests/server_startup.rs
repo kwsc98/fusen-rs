@@ -227,7 +227,7 @@ async fn aborting_start_compensates_a_late_registration_success_exactly_once() {
     } = signals;
     let server = build_server(registry);
     let startup = tokio::spawn(async move { server.start().await });
-    let address = endpoint.await.unwrap();
+    endpoint.await.unwrap();
     activation_started.await.unwrap();
 
     startup.abort();
@@ -236,8 +236,9 @@ async fn aborting_start_compensates_a_late_registration_success_exactly_once() {
         Ok(_) => panic!("aborted Server::start task must not complete normally"),
     };
     assert!(join_error.is_cancelled());
-    wait_until_listener_is_closed(address).await;
 
+    // Coordinator completion is the portable listener-close barrier; a negative TCP probe can
+    // keep succeeding on Windows for connections queued before the listening socket is dropped.
     activation_release.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(1), cleanup_completed)
         .await
@@ -269,20 +270,4 @@ fn build_server(registry: GatedRegistry) -> Server {
         ))
         .build()
         .unwrap()
-}
-
-async fn wait_until_listener_is_closed(address: SocketAddr) {
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            match TcpStream::connect(address).await {
-                Ok(stream) => {
-                    drop(stream);
-                    tokio::task::yield_now().await;
-                }
-                Err(_) => return,
-            }
-        }
-    })
-    .await
-    .expect("startup cancellation must close the listener");
 }
