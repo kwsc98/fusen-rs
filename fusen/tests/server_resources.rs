@@ -13,6 +13,7 @@ use fusen_rs::{
     service,
 };
 use std::{
+    io,
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
@@ -315,8 +316,16 @@ async fn request_byte_budget_is_restored_after_body_timeout() {
     timed_out.write_all(b"\"").await.unwrap();
     assert_request_budget_is_held(addr).await;
 
-    let response = read_response(&mut timed_out).await;
-    assert_problem(&response, 504, "deadline_exceeded");
+    match try_read_response(&mut timed_out).await {
+        Ok(response) => assert_problem(&response, 504, "deadline_exceeded"),
+        Err(error) if cfg!(windows) && error.kind() == io::ErrorKind::ConnectionAborted => {
+            // Windows can abort an HTTP/1 connection whose request body remains unread when the
+            // timeout response closes it. Budget recovery below remains the portable contract.
+        }
+        Err(error) => {
+            panic!("timed-out request must return a response or close on Windows: {error}")
+        }
+    }
     assert_echo_succeeds(addr, "after-timeout").await;
 
     server.shutdown().await.unwrap();
@@ -645,16 +654,22 @@ async fn exchange(addr: SocketAddr, head: String, body: &[u8]) -> RawResponse {
 }
 
 async fn read_response(stream: &mut TcpStream) -> RawResponse {
+    try_read_response(stream)
+        .await
+        .expect("server response must be readable")
+}
+
+async fn try_read_response(stream: &mut TcpStream) -> io::Result<RawResponse> {
     tokio::time::timeout(Duration::from_secs(2), read_response_inner(stream))
         .await
         .expect("server must answer without waiting for unsent request bytes")
 }
 
-async fn read_response_inner(stream: &mut TcpStream) -> RawResponse {
+async fn read_response_inner(stream: &mut TcpStream) -> io::Result<RawResponse> {
     let mut received = Vec::new();
     let mut buffer = [0u8; 2048];
     loop {
-        let read = stream.read(&mut buffer).await.unwrap();
+        let read = stream.read(&mut buffer).await?;
         assert!(read > 0, "HTTP response ended before its headers completed");
         received.extend_from_slice(&buffer[..read]);
         let Some(head_end) = find_bytes(&received, b"\r\n\r\n") else {
@@ -678,14 +693,14 @@ async fn read_response_inner(stream: &mut TcpStream) -> RawResponse {
             })
             .expect("bounded server responses carry Content-Length");
         while received.len() < body_start + content_length {
-            let read = stream.read(&mut buffer).await.unwrap();
+            let read = stream.read(&mut buffer).await?;
             assert!(read > 0, "HTTP response ended before its body completed");
             received.extend_from_slice(&buffer[..read]);
         }
-        return RawResponse {
+        return Ok(RawResponse {
             status,
             body: received[body_start..body_start + content_length].to_vec(),
-        };
+        });
     }
 }
 
