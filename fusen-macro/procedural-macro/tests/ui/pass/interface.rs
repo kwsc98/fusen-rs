@@ -1,6 +1,6 @@
 extern crate self as fusen_rs;
 
-use fusen_procedural_macro::{RpcMessage, interface};
+use fusen_procedural_macro::interface;
 
 pub mod __macro {
     pub mod v1 {
@@ -37,23 +37,12 @@ pub mod __macro {
 
         impl RpcField {
             pub const fn new(
-                _rust_name: &'static str,
                 _name: &'static str,
                 _source: RpcFieldSource,
                 _repeated: bool,
                 _parse_spring_json_primitive: bool,
             ) -> Self {
                 Self
-            }
-        }
-
-        pub trait RpcMessage: Send + 'static {
-            fn fields() -> &'static [RpcField];
-        }
-
-        impl RpcMessage for () {
-            fn fields() -> &'static [RpcField] {
-                &[]
             }
         }
 
@@ -83,9 +72,10 @@ pub mod __macro {
 
         pub struct SpringCloudMethod;
 
-        pub fn spring_method<T: RpcMessage>(
+        pub fn spring_method(
             _method: http::Method,
             _path: &str,
+            _fields: &[RpcField],
         ) -> Result<SpringCloudMethod, String> {
             Ok(SpringCloudMethod)
         }
@@ -126,16 +116,26 @@ pub mod __macro {
             }
         }
 
-        pub struct RpcRequest<T>(T);
+        pub struct RpcCall;
 
-        impl<T> RpcRequest<T> {
-            pub fn new(body: T) -> Self {
-                Self(body)
+        impl RpcCall {
+            pub fn new() -> Self {
+                Self
+            }
+        }
+
+        pub struct RpcArguments;
+
+        impl RpcArguments {
+            pub fn new() -> Self {
+                Self
             }
 
-            pub fn into_body(self) -> T {
-                self.0
-            }
+            pub fn insert(&mut self, _name: String, _value: ()) {}
+        }
+
+        pub fn encode_argument<T>(_value: &T) -> Result<(), RpcError> {
+            Ok(())
         }
 
         pub struct RpcResponse<T>(T);
@@ -153,13 +153,14 @@ pub mod __macro {
         pub struct ServiceClient;
 
         impl ServiceClient {
-            pub async fn invoke<M, T>(
+            pub async fn invoke<T, F>(
                 &self,
                 _method: MethodId,
-                _request: RpcRequest<M>,
+                _call: RpcCall,
+                _encode: F,
             ) -> Result<RpcResponse<T>, RpcError>
             where
-                M: RpcMessage,
+                F: FnOnce() -> Result<RpcArguments, RpcError>,
             {
                 unimplemented!()
             }
@@ -192,8 +193,20 @@ pub mod __macro {
                 MethodId::new(0)
             }
 
-            pub fn decode_request<T: RpcMessage>(&mut self) -> Result<RpcRequest<T>, RpcError> {
+            pub fn rpc_call(&self) -> RpcCall {
+                RpcCall
+            }
+
+            pub fn decode_argument<T>(
+                &mut self,
+                _name: &str,
+                _parse_primitive: bool,
+            ) -> Result<T, RpcError> {
                 unimplemented!()
+            }
+
+            pub fn finish_arguments(&self) -> Result<(), RpcError> {
+                Ok(())
             }
 
             pub fn encode_response<T>(self, _response: RpcResponse<T>) -> MiddlewareResult {
@@ -240,15 +253,7 @@ pub mod __macro {
     }
 }
 
-pub use __macro::v1::{RpcError, RpcRequest, RpcResponse};
-
-#[derive(RpcMessage)]
-struct GetUserRequest {
-    #[rpc(path)]
-    id: String,
-    #[rpc(query)]
-    expand: Option<bool>,
-}
+pub use __macro::v1::{RpcCall, RpcError, RpcResponse};
 
 struct User(String);
 
@@ -260,7 +265,18 @@ trait UserApi {
     )]
     async fn get(
         &self,
-        request: RpcRequest<GetUserRequest>,
+        #[rpc(call)] call: RpcCall,
+        #[rpc(path)] id: String,
+        #[rpc(query)] expand: Option<bool>,
+    ) -> Result<RpcResponse<User>, RpcError>;
+
+    #[fusen_procedural_macro::method(
+        idempotency = "none",
+        spring(method = "POST", path = "/users/batch")
+    )]
+    async fn batch(
+        &self,
+        #[rpc(body)] names: Vec<String>,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 
@@ -269,9 +285,15 @@ struct Handler;
 impl UserApi for Handler {
     async fn get(
         &self,
-        request: RpcRequest<GetUserRequest>,
+        _call: RpcCall,
+        id: String,
+        _expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError> {
-        Ok(RpcResponse::new(User(request.into_body().id)))
+        Ok(RpcResponse::new(User(id)))
+    }
+
+    async fn batch(&self, names: Vec<String>) -> Result<RpcResponse<User>, RpcError> {
+        Ok(RpcResponse::new(User(names.join(","))))
     }
 }
 

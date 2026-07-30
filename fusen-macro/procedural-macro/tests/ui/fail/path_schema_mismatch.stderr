@@ -1,0 +1,5 @@
+error: Spring path parameter `id` requires a matching #[rpc(path)] method parameter
+  --> tests/ui/fail/path_schema_mismatch.rs:10:39
+   |
+10 |         spring(method = "GET", path = "/users/{id}")
+   |                                       ^^^^^^^^^^^^^

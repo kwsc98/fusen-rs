@@ -5,11 +5,8 @@ use examples::middleware::{
     log::{LogMetricsRecorder, init_tracing},
     tracing::TracingMiddleware,
 };
-use examples::{
-    DemoService, DemoServiceClient, DemoServiceV2, DemoServiceV2Client, DivideRequest,
-    GreetingRequest, HelloRequest, RequestDto,
-};
-use fusen_rs::{ClientRuntime, RpcRequest};
+use examples::{DemoService, DemoServiceClient, DemoServiceV2, DemoServiceV2Client, RequestDto};
+use fusen_rs::ClientRuntime;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,45 +26,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect()
         .await?;
 
-    println!(
-        "{}",
-        client.say_hello_v4(RpcRequest::new(())).await?.into_body()
-    );
-    println!(
-        "{}",
-        client
-            .divide(RpcRequest::new(DivideRequest { a: 6, b: 2 }))
-            .await?
-            .into_body()
-    );
-    println!(
-        "{}",
-        client
-            .say_hello(RpcRequest::new(HelloRequest {
-                name: "host".to_owned()
-            }))
-            .await?
-            .into_body()
-    );
+    println!("{}", client.say_hello_v4().await?.into_body());
+    println!("{}", client.divide(6, 2).await?.into_body());
+    println!("{}", client.say_hello("host".to_owned()).await?.into_body());
     println!(
         "{:?}",
         client
-            .say_hello_v2(RpcRequest::new(GreetingRequest {
-                request: RequestDto {
-                    str: "host".to_owned(),
-                }
-            }))
+            .say_hello_v2(RequestDto {
+                str: "host".to_owned(),
+            })
             .await?
             .into_body()
     );
     println!(
         "{:?}",
         client_v2
-            .say_hello_v3(RpcRequest::new(GreetingRequest {
-                request: RequestDto {
-                    str: "host-v2".to_owned(),
-                }
-            }))
+            .say_hello_v3(RequestDto {
+                str: "host-v2".to_owned(),
+            })
             .await?
             .into_body()
     );

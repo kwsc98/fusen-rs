@@ -11,7 +11,7 @@
 ### Public Contract
 
 - Workspace 统一为 Rust 1.97、Edition 2024、resolver 3、禁止 unsafe，并集中 lint policy。
-- 接口声明统一为 `#[interface]` trait 宏、`#[method]` 元数据和 `RpcMessage` DTO schema；Client 与 Handler 实现同一个 trait，方法统一使用 `RpcRequest<T>` 和 `Result<RpcResponse<T>, RpcError>`。
+- 接口声明统一为 `#[interface]` trait 宏和 `#[method]` 元数据；Client 与 Handler 实现同一个 trait，方法直接接收零到多个参数并返回 `Result<RpcResponse<T>, RpcError>`。业务参数用 `#[rpc(path/query/body)]` 声明 wire 角色，可选 `#[rpc(call)] RpcCall` 传递调用元数据。
 - 调用错误拆分为 `RpcError`、`ClientError`、`ServerError`、`RegistryError` 与 `ConfigError`，字段私有并提供稳定分类/getter。
 - 公开扩展面收敛为 Middleware、Registry、InstanceRouter、LoadBalancer、RetryPolicy、ConfigSource 与 MetricsRecorder；transport/codec/acceptor/pool/lifecycle internals 全部私有。
 - 所有配置采用私有字段、`Default`、builder/setter 与 getter；可扩展 enum/error 标记为 non-exhaustive。

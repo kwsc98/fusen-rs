@@ -2,8 +2,8 @@
 
 use std::{env, io, time::Instant};
 
-use examples::{DemoService, DemoServiceClient, GreetingRequest, RequestDto};
-use fusen_rs::{ClientRuntime, RpcRequest, contract::WireProtocol};
+use examples::{DemoService, DemoServiceClient, RequestDto};
+use fusen_rs::{ClientRuntime, contract::WireProtocol};
 use tokio::task::JoinSet;
 
 const DEFAULT_CONCURRENCIES: &[usize] = &[1, 100];
@@ -157,11 +157,9 @@ async fn warm_up(
         let client = client.clone();
         tasks.spawn(async move {
             client
-                .say_hello_v2(RpcRequest::new(GreetingRequest {
-                    request: RequestDto {
-                        str: REQUEST_VALUE.to_owned(),
-                    },
-                }))
+                .say_hello_v2(RequestDto {
+                    str: REQUEST_VALUE.to_owned(),
+                })
                 .await
                 .map(|_| ())
         });
@@ -186,11 +184,9 @@ async fn run_benchmark(
             let mut stats = TaskStats::default();
             for _ in 0..requests_per_task {
                 match client
-                    .say_hello_v2(RpcRequest::new(GreetingRequest {
-                        request: RequestDto {
-                            str: REQUEST_VALUE.to_owned(),
-                        },
-                    }))
+                    .say_hello_v2(RequestDto {
+                        str: REQUEST_VALUE.to_owned(),
+                    })
                     .await
                 {
                     Ok(response) => {

@@ -13,10 +13,7 @@ mod lookalike {
 
 #[interface(name = "user")]
 trait UserService {
-    async fn get(
-        &self,
-        request: rpc::RpcRequest<()>,
-    ) -> lookalike::Result<rpc::RpcResponse<()>, rpc::RpcError>;
+    async fn get(&self) -> lookalike::Result<rpc::RpcResponse<()>, rpc::RpcError>;
 }
 
 fn main() {}

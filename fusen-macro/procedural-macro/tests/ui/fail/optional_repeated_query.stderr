@@ -1,5 +1,5 @@
-error: query fields may not use Option<Vec<T>>; use Vec<T> so omission has one unambiguous empty-list meaning
- --> tests/ui/fail/optional_repeated_query.rs:6:11
-  |
-6 |     tags: Option<Vec<String>>,
-  |           ^^^^^^^^^^^^^^^^^^^
+error: query parameters may not use Option<Vec<T>>; use Vec<T> so omission has one unambiguous empty-list meaning
+  --> tests/ui/fail/optional_repeated_query.rs:10:29
+   |
+10 |         #[rpc(query)] tags: Option<Vec<String>>,
+   |                             ^^^^^^^^^^^^^^^^^^^

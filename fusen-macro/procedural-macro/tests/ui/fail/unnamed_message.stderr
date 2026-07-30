@@ -1,5 +1,0 @@
-error: RpcMessage may only be derived for structs with named fields; use `()` for an empty request
- --> tests/ui/fail/unnamed_message.rs:4:15
-  |
-4 | struct Unnamed(String);
-  |               ^^^^^^^^

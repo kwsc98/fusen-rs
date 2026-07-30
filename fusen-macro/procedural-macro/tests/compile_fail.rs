@@ -1,4 +1,4 @@
-//! Compile-time contract coverage for the clean-slate interface and message macros.
+//! Compile-time contract coverage for the clean-slate interface macros.
 
 #[test]
 fn validates_macro_contracts() {

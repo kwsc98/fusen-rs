@@ -14,26 +14,17 @@
 
 ## Interface Contract
 
-One trait macro defines the shared client/server interface. Every RPC method accepts exactly one `RpcRequest<T>` and returns `Result<RpcResponse<T>, RpcError>`.
+One trait macro defines the shared client/server interface. Every RPC method accepts zero or more owned, named parameters and returns `Result<RpcResponse<T>, RpcError>`.
 
 ```rust,no_run
-use fusen_rs::{RpcError, RpcRequest, RpcResponse, interface};
+use fusen_rs::{RpcError, RpcResponse, interface};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct User { pub id: String }
 
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
-pub struct GetUserRequest {
-    #[rpc(path)]
-    pub id: String,
-    #[rpc(query)]
-    pub expand: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+#[derive(Serialize, Deserialize)]
 pub struct CreateUser {
-    #[rpc(body)]
     pub id: String,
 }
 
@@ -45,7 +36,8 @@ pub trait UserApi {
     )]
     async fn get(
         &self,
-        request: RpcRequest<GetUserRequest>,
+        #[rpc(path)] id: String,
+        #[rpc(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
     #[fusen_rs::method(
@@ -54,12 +46,12 @@ pub trait UserApi {
     )]
     async fn create(
         &self,
-        request: RpcRequest<CreateUser>,
+        #[rpc(body)] user: CreateUser,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-The macro generates `UserApiClient` and `UserApiServer<T>`. The generated client and user handler both implement `UserApi`; all clients use the generic `ClientBuilder<UserApiClient>`. `RpcMessage` fields declare Spring roles with `#[rpc(path)]`, `#[rpc(query)]`, or `#[rpc(body)]`, while Fusen V1 always encodes every DTO field into its `arguments` object. DTO attribute errors fail during derive; cross-type path/schema inconsistencies return classified errors from client connect or server build before network I/O.
+The macro generates `UserApiClient` and `UserApiServer<T>`. The generated client and user handler both implement `UserApi`; all clients use the generic `ClientBuilder<UserApiClient>`. Each business parameter declares its Spring role with `#[rpc(path)]`, `#[rpc(query)]`, or `#[rpc(body)]`, and may override its wire name with `name = "..."`. A method may have at most one body parameter; repeated query values use `Vec<T>`. Path and query values must serialize as JSON scalars, while the body may be any JSON value. Methods that need request headers, extensions, or framework call information may additionally declare one `#[rpc(call)] call: RpcCall` parameter. Zero-argument methods require no placeholder parameter. Fusen V1 always encodes every business parameter by name in its `arguments` object. Invalid parameter mappings fail during macro expansion, and invalid serialized values fail locally before network I/O.
 
 ## Client
 
@@ -164,7 +156,7 @@ Byte budgets cover decoded/encoded payload retained by the runtime and queued bo
 | `fusen-config` | Static parsing and last-good hot configuration |
 | `fusen-nacos` | Nacos registry and configuration adapters |
 | `fusen-observability` | Metrics SPI and optional telemetry adapters |
-| `fusen-procedural-macro` | Interface declaration, message derive, and generated wrappers |
+| `fusen-procedural-macro` | Interface declaration, parameter validation, and generated wrappers |
 | `fusen-rs` | HTTP/HTTPS client, plaintext HTTP server, middleware, and policy runtimes |
 
 See [architecture](docs/architecture.md), [module contracts](docs/modules/README.md), [compatibility](docs/compatibility.md), and [examples](examples/README.md).

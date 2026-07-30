@@ -1,5 +1,5 @@
 error: RPC methods must return Result<RpcResponse<T>, RpcError>
-  --> tests/ui/lookalike_result.rs:19:10
+  --> tests/ui/lookalike_result.rs:16:28
    |
-19 |     ) -> lookalike::Result<rpc::RpcResponse<()>, rpc::RpcError>;
-   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16 |     async fn get(&self) -> lookalike::Result<rpc::RpcResponse<()>, rpc::RpcError>;
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

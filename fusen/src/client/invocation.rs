@@ -7,7 +7,7 @@ use super::{
 use crate::RetryHint;
 use crate::{
     InstanceRouter, InstanceSnapshot, LoadBalancer, Middleware, MiddlewareStage, RouteRequest,
-    RpcBody, RpcCategory, RpcContext, RpcError, RpcMessage, RpcOrigin, RpcRequest, RpcResponse,
+    RpcArguments, RpcBody, RpcCall, RpcCategory, RpcContext, RpcError, RpcOrigin, RpcResponse,
     RpcSide,
     context::RpcContextParts,
     middleware::{MiddlewareResult, Next, Terminal},
@@ -71,14 +71,15 @@ pub(crate) struct ServiceClientInner {
 
 impl ServiceClient {
     /// Executes one typed logical invocation within the logical deadline.
-    pub async fn invoke<M, T>(
+    pub async fn invoke<T, F>(
         &self,
         method_id: MethodId,
-        request: RpcRequest<M>,
+        call: RpcCall,
+        encode: F,
     ) -> Result<RpcResponse<T>, RpcError>
     where
-        M: RpcMessage,
         T: DeserializeOwned,
+        F: FnOnce() -> Result<RpcArguments, RpcError> + Send,
     {
         let method = self
             .inner
@@ -111,10 +112,8 @@ impl ServiceClient {
             method = method.fusen_identity(),
         );
         let invocation = async move {
-            let (message, headers, extensions) = request.into_parts();
-            let arguments = match catch_unwind(AssertUnwindSafe(|| {
-                crate::interface::encode_message(&message)
-            })) {
+            let (headers, extensions) = call.into_parts();
+            let arguments = match catch_unwind(AssertUnwindSafe(encode)) {
                 Ok(result) => result?,
                 Err(_) => {
                     tracing::error!("RPC argument serialization panicked");
@@ -919,7 +918,7 @@ mod tests {
     use crate::{
         BreakerThreshold, CircuitBreakerConfig, ClientConfig, ClientRuntime, ErrorCode,
         InstanceRouter, InstanceSnapshot, LoadBalancer, MiddlewareFuture, RetryConfig,
-        RouteRequest, RpcArguments, RpcRequest,
+        RouteRequest, RpcArguments, RpcCall,
         middleware::erase_middleware,
         resilience::breaker::BreakerState,
         rpc::ProblemDetails,
@@ -961,6 +960,10 @@ mod tests {
         sync::{mpsc, oneshot},
         task::JoinHandle,
     };
+
+    fn empty_arguments() -> Result<RpcArguments, RpcError> {
+        Ok(RpcArguments::new())
+    }
 
     #[derive(Debug)]
     struct CapturedAttempt {
@@ -1484,7 +1487,7 @@ mod tests {
         Arc::get_mut(&mut router_client.inner).unwrap().routers =
             Arc::from([Arc::new(PanickingRouter) as Arc<dyn InstanceRouter>]);
         let error = router_client
-            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
+            .invoke::<Value, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
             .await
             .unwrap_err();
         assert_eq!(error.code().as_str(), "router_panic");
@@ -1494,13 +1497,33 @@ mod tests {
             .unwrap()
             .load_balancer = Arc::new(PanickingLoadBalancer);
         let error = load_balancer_client
-            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
+            .invoke::<Value, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
             .await
             .unwrap_err();
         assert_eq!(error.code().as_str(), "load_balancer_panic");
 
         drop(router_client);
         drop(load_balancer_client);
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn argument_serialization_panic_is_isolated_before_network_io() {
+        let endpoint: ServiceEndpoint = "http://127.0.0.1:1".parse().unwrap();
+        let runtime = ClientRuntime::builder().build().unwrap();
+        let client = direct_client(&runtime, endpoint);
+
+        let error = client
+            .invoke::<Value, _>(MethodId::new(0), RpcCall::new(), || {
+                panic!("private argument serializer panic");
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code().as_str(), "serialization_panic");
+        assert_eq!(error.attempts(), 1);
+        assert!(!error.message().contains("private argument serializer"));
+
+        drop(client);
         runtime.shutdown().await.unwrap();
     }
 
@@ -1541,7 +1564,7 @@ mod tests {
         let client = direct_client(&runtime, endpoint);
 
         let error = client
-            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
+            .invoke::<Value, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
             .await
             .unwrap_err();
         assert_eq!(error.code().as_str(), "retry_policy_panic");
@@ -1584,7 +1607,7 @@ mod tests {
         );
 
         let value = client
-            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
+            .invoke::<Value, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
             .await
             .unwrap()
             .into_body();
@@ -1662,7 +1685,7 @@ mod tests {
             let client = client.clone();
             async move {
                 client
-                    .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
+                    .invoke::<Value, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
                     .await
             }
         });
@@ -1728,7 +1751,7 @@ mod tests {
         let client = direct_client(&runtime, endpoint);
 
         let error = client
-            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
+            .invoke::<Value, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
             .await
             .expect_err("Retry-After does not fit in the logical deadline");
         assert_eq!(error.attempts(), 1);
@@ -1764,7 +1787,7 @@ mod tests {
         let client = direct_client(&runtime, endpoint);
 
         let error = client
-            .invoke::<(), StructuredResult>(MethodId::new(0), RpcRequest::new(()))
+            .invoke::<StructuredResult, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
             .await
             .expect_err("a scalar result cannot decode into the generated object type");
         assert_eq!(error.category(), RpcCategory::DataLoss);
@@ -1819,7 +1842,7 @@ mod tests {
             Arc::from([erase_middleware(ReplaceRemoteResult)]);
 
         let error = client
-            .invoke::<(), StructuredResult>(MethodId::new(0), RpcRequest::new(()))
+            .invoke::<StructuredResult, _>(MethodId::new(0), RpcCall::new(), empty_arguments)
             .await
             .expect_err("middleware replacement does not match the generated return type");
         assert_eq!(error.category(), RpcCategory::DataLoss);

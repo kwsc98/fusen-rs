@@ -13,16 +13,7 @@ baseline and is intentionally incompatible with releases before 0.9.
 One trait declares the shared client and server contract:
 
 ```rust
-use fusen_rs::{RpcError, RpcRequest, RpcResponse};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
-pub struct GetUserRequest {
-    #[rpc(path)]
-    pub id: String,
-    #[rpc(query)]
-    pub expand: Option<bool>,
-}
+use fusen_rs::{RpcError, RpcResponse};
 
 #[fusen_rs::interface(name = "user", group = "prod", version = "1")]
 pub trait UserApi {
@@ -32,15 +23,18 @@ pub trait UserApi {
     )]
     async fn get(
         &self,
-        request: RpcRequest<GetUserRequest>,
+        #[rpc(path)] id: String,
+        #[rpc(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-Every RPC accepts exactly one `RpcRequest<T>` and returns
-`Result<RpcResponse<T>, RpcError>`. The macro generates `UserApiClient` and
-`UserApiServer<T>`; both the generated client and a user handler implement
-`UserApi`. Clients use the generic `ClientBuilder<UserApiClient>`.
+Every RPC accepts zero or more owned, named parameters and returns
+`Result<RpcResponse<T>, RpcError>`. Business parameters declare one of
+`#[rpc(path)]`, `#[rpc(query)]`, or `#[rpc(body)]`; a method needing request
+metadata may also declare one `#[rpc(call)] RpcCall`. The macro generates
+`UserApiClient` and `UserApiServer<T>`; both the generated client and a user
+handler implement `UserApi`. Clients use the generic `ClientBuilder<UserApiClient>`.
 
 ## Runtime lifecycle
 

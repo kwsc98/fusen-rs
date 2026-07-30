@@ -139,6 +139,14 @@ fn generated_trait(
         method
             .attrs
             .retain(|attribute| !validate::is_method_attr(attribute));
+        for input in method.sig.inputs.iter_mut().skip(1) {
+            let syn::FnArg::Typed(input) = input else {
+                unreachable!("the interface validator rejected extra receivers")
+            };
+            input
+                .attrs
+                .retain(|attribute| !validate::is_rpc_attr(attribute));
+        }
         let response = &contract.response;
         method.sig.asyncness = None;
         method.sig.output = parse_quote!(
@@ -166,7 +174,6 @@ fn descriptor(
     let methods = interface.methods.iter().enumerate().map(|(index, method)| {
         let identity = method.ident.to_string();
         let identity = identity.trim_start_matches("r#");
-        let request = &method.request;
         let idempotency = match method.idempotency {
             validate::Idempotency::None => quote!(None),
             validate::Idempotency::Idempotent => quote!(Idempotent),
@@ -177,8 +184,34 @@ fn descriptor(
             |spring| {
                 let http_method = format_ident!("{}", spring.method);
                 let path = &spring.path;
+                let fields = method.parameters.iter().filter_map(|parameter| {
+                    if parameter.source == validate::ParameterSource::Call {
+                        return None;
+                    }
+                    let name = &parameter.wire_name;
+                    let source = match parameter.source {
+                        validate::ParameterSource::Path => quote!(Path),
+                        validate::ParameterSource::Query => quote!(Query),
+                        validate::ParameterSource::Body => quote!(Body),
+                        validate::ParameterSource::Call => unreachable!(),
+                    };
+                    let repeated = parameter.repeated;
+                    let parse_primitive = parameter.parse_spring_json_primitive;
+                    Some(quote! {
+                        #abi::RpcField::new(
+                            #name,
+                            #abi::RpcFieldSource::#source,
+                            #repeated,
+                            #parse_primitive,
+                        )
+                    })
+                });
                 quote! {
-                    Some(#abi::spring_method::<#request>(#abi::http::Method::#http_method, #path)?)
+                    Some(#abi::spring_method(
+                        #abi::http::Method::#http_method,
+                        #path,
+                        &[#(#fields),*],
+                    )?)
                 }
             },
         );
@@ -217,16 +250,52 @@ fn client_methods(
                 .iter()
                 .filter(|attribute| !validate::is_method_attr(attribute));
             let ident = &method.ident;
-            let request = &method.request;
             let response = &method.response;
+            let parameters = method.parameters.iter().map(|parameter| {
+                let ident = &parameter.ident;
+                let kind = &parameter.kind;
+                quote!(#ident: #kind)
+            });
+            let call = method
+                .parameters
+                .iter()
+                .find(|parameter| parameter.source == validate::ParameterSource::Call)
+                .map_or_else(
+                    || quote!(#abi::RpcCall::new()),
+                    |parameter| {
+                        let ident = &parameter.ident;
+                        quote!(#ident)
+                    },
+                );
+            let arguments = method.parameters.iter().filter_map(|parameter| {
+                if parameter.source == validate::ParameterSource::Call {
+                    return None;
+                }
+                let ident = &parameter.ident;
+                let name = &parameter.wire_name;
+                Some(quote! {
+                    arguments.insert(
+                        ::std::string::String::from(#name),
+                        #abi::encode_argument(&#ident)?,
+                    );
+                })
+            });
             quote! {
                 #(#attributes)*
                 async fn #ident(
                     &self,
-                    request: #abi::RpcRequest<#request>,
+                    #(#parameters),*
                 ) -> ::core::result::Result<#abi::RpcResponse<#response>, #abi::RpcError> {
                     self.inner
-                        .invoke::<#request, #response>(#abi::MethodId::new(#index as u16), request)
+                        .invoke::<#response, _>(
+                            #abi::MethodId::new(#index as u16),
+                            #call,
+                            move || {
+                                let mut arguments = #abi::RpcArguments::new();
+                                #(#arguments)*
+                                Ok(arguments)
+                            },
+                        )
                         .await
                 }
             }
@@ -245,11 +314,33 @@ fn dispatch_arms(
         .map(|(index, method)| {
             let method_id = index as u16;
             let ident = &method.ident;
-            let request = &method.request;
+            let declarations = method.parameters.iter().map(|parameter| {
+                let ident = &parameter.ident;
+                let kind = &parameter.kind;
+                if parameter.source == validate::ParameterSource::Call {
+                    quote! {
+                        let #ident: #kind = invocation.rpc_call();
+                    }
+                } else {
+                    let name = &parameter.wire_name;
+                    let parse_primitive = parameter.parse_spring_json_primitive;
+                    quote! {
+                        let #ident: #kind = invocation.decode_argument(
+                            #name,
+                            #parse_primitive,
+                        )?;
+                    }
+                }
+            });
+            let arguments = method.parameters.iter().map(|parameter| &parameter.ident);
             quote! {
                 #method_id => {
-                    let request = invocation.decode_request::<#request>()?;
-                    let response = <T as #trait_ident>::#ident(handler, request).await?;
+                    #(#declarations)*
+                    invocation.finish_arguments()?;
+                    let response = <T as #trait_ident>::#ident(
+                        handler,
+                        #(#arguments),*
+                    ).await?;
                     invocation.encode_response(response)
                 }
             }
@@ -273,7 +364,8 @@ mod tests {
                 )]
                 async fn get(
                     &self,
-                    request: RpcRequest<GetUserRequest>,
+                    #[rpc(path)] id: String,
+                    #[rpc(query)] expand: Option<bool>,
                 ) -> Result<RpcResponse<User>, RpcError>;
             }
         })

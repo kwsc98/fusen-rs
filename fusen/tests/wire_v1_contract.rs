@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 use fusen_rs::{
-    ClientRuntime, RpcCategory, RpcError, RpcErrorDetails, RpcRequest, RpcResponse, Server,
-    ServerConfig, WireProtocol, contract::ProtocolSet, interface,
+    ClientRuntime, RpcCategory, RpcError, RpcErrorDetails, RpcResponse, Server, ServerConfig,
+    WireProtocol, contract::ProtocolSet, interface,
 };
 use http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version, header::CONTENT_TYPE};
 use http_body_util::{BodyExt, Full};
@@ -36,78 +36,50 @@ struct CreateUser {
     name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct EchoRequest {
-    #[rpc(path)]
-    name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct CreateRequest {
-    #[rpc(path)]
-    id: String,
-    #[rpc(query)]
-    expand: Option<bool>,
-    #[rpc(body)]
-    request: CreateUser,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct FilterRequest {
-    #[rpc(query)]
-    enabled: Option<bool>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct LabelsRequest {
-    #[rpc(query)]
-    label: Vec<String>,
-}
-
 #[interface(name = "wire-contract", group = "prod", version = "1")]
 trait WireContract {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/echo/{name}"))]
-    async fn echo(&self, request: RpcRequest<EchoRequest>)
-    -> Result<RpcResponse<String>, RpcError>;
+    async fn echo(&self, #[rpc(path)] name: String) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(idempotency = "none", spring(method = "POST", path = "/users/{id}"))]
     async fn create(
         &self,
-        request: RpcRequest<CreateRequest>,
+        #[rpc(path)] id: String,
+        #[rpc(query)] expand: Option<bool>,
+        #[rpc(body)] request: CreateUser,
     ) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "HEAD", path = "/health"))]
-    async fn health(&self, request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError>;
+    async fn health(&self) -> Result<RpcResponse<()>, RpcError>;
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "HEAD", path = "/unhealthy"))]
-    async fn unhealthy(&self, request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError>;
+    async fn unhealthy(&self) -> Result<RpcResponse<()>, RpcError>;
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/filters"))]
     async fn filter(
         &self,
-        request: RpcRequest<FilterRequest>,
+        #[rpc(query)] enabled: Option<bool>,
     ) -> Result<RpcResponse<Option<bool>>, RpcError>;
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/labels"))]
     async fn labels(
         &self,
-        request: RpcRequest<LabelsRequest>,
+        #[rpc(query)] label: Vec<String>,
     ) -> Result<RpcResponse<Vec<String>>, RpcError>;
 }
 
 struct FailingWireContract;
 
 impl WireContract for FailingWireContract {
-    async fn echo(
-        &self,
-        request: RpcRequest<EchoRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().name))
+    async fn echo(&self, name: String) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(name))
     }
 
     async fn create(
         &self,
-        _request: RpcRequest<CreateRequest>,
+        _id: String,
+        _expand: Option<bool>,
+        _request: CreateUser,
     ) -> Result<RpcResponse<String>, RpcError> {
         let mut details = RpcErrorDetails::new();
         details.insert("field", json!("id"));
@@ -125,29 +97,23 @@ impl WireContract for FailingWireContract {
         Err(error)
     }
 
-    async fn health(&self, _request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError> {
+    async fn health(&self) -> Result<RpcResponse<()>, RpcError> {
         Ok(RpcResponse::new(()))
     }
 
-    async fn unhealthy(&self, _request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError> {
+    async fn unhealthy(&self) -> Result<RpcResponse<()>, RpcError> {
         Err(
             RpcError::application(StatusCode::CONFLICT, "unhealthy", "health check failed")
                 .unwrap(),
         )
     }
 
-    async fn filter(
-        &self,
-        request: RpcRequest<FilterRequest>,
-    ) -> Result<RpcResponse<Option<bool>>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().enabled))
+    async fn filter(&self, enabled: Option<bool>) -> Result<RpcResponse<Option<bool>>, RpcError> {
+        Ok(RpcResponse::new(enabled))
     }
 
-    async fn labels(
-        &self,
-        request: RpcRequest<LabelsRequest>,
-    ) -> Result<RpcResponse<Vec<String>>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().label))
+    async fn labels(&self, label: Vec<String>) -> Result<RpcResponse<Vec<String>>, RpcError> {
+        Ok(RpcResponse::new(label))
     }
 }
 
@@ -161,7 +127,7 @@ struct CapturedRequest {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fusen_v1_request_headers_and_envelopes_match_the_contract() {
+async fn fusen_v1_named_parameters_and_envelopes_match_the_contract() {
     let (addr, mut captured, fixture) =
         spawn_h2_fixture(FUSEN_CONTENT_TYPE, br#"{"result":"fusen-response"}"#).await;
     let runtime = ClientRuntime::builder().build().unwrap();
@@ -174,9 +140,13 @@ async fn fusen_v1_request_headers_and_envelopes_match_the_contract() {
 
     assert_eq!(
         client
-            .echo(RpcRequest::new(EchoRequest {
-                name: "Ada Lovelace".into()
-            }))
+            .create(
+                "user-7".into(),
+                Some(true),
+                CreateUser {
+                    name: "Ada Lovelace".into(),
+                },
+            )
             .await
             .unwrap()
             .into_body(),
@@ -188,7 +158,7 @@ async fn fusen_v1_request_headers_and_envelopes_match_the_contract() {
     assert_eq!(request.version, Version::HTTP_2);
     assert_eq!(
         request.uri.path_and_query().unwrap().as_str(),
-        "/_fusen/v1/wire-contract/echo"
+        "/_fusen/v1/wire-contract/create"
     );
     assert_eq!(request.uri.scheme_str(), Some("http"));
     assert_eq!(
@@ -205,7 +175,13 @@ async fn fusen_v1_request_headers_and_envelopes_match_the_contract() {
     assert_valid_timeout(&request.headers);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&request.body).unwrap(),
-        json!({"arguments": {"name": "Ada Lovelace"}})
+        json!({
+            "arguments": {
+                "expand": true,
+                "id": "user-7",
+                "request": {"name": "Ada Lovelace"}
+            }
+        })
     );
 
     fixture.abort();
@@ -227,13 +203,13 @@ async fn spring_cloud_v1_path_query_body_and_raw_success_match_the_contract() {
         .unwrap();
 
     let response = client
-        .create(RpcRequest::new(CreateRequest {
-            id: "Ada Lovelace/analytical engine".into(),
-            expand: Some(true),
-            request: CreateUser {
+        .create(
+            "Ada Lovelace/analytical engine".into(),
+            Some(true),
+            CreateUser {
                 name: "Charles Babbage".into(),
             },
-        }))
+        )
         .await
         .unwrap();
     assert_eq!(response.into_body(), "spring-response");
@@ -279,13 +255,7 @@ async fn spring_cloud_v1_repeated_query_uses_one_key_per_value() {
 
     let labels = vec!["one".to_owned(), "two words".to_owned()];
     assert_eq!(
-        client
-            .labels(RpcRequest::new(LabelsRequest {
-                label: labels.clone()
-            }))
-            .await
-            .unwrap()
-            .into_body(),
+        client.labels(labels.clone()).await.unwrap().into_body(),
         labels
     );
     let request = captured.recv().await.expect("fixture captured one request");
@@ -314,7 +284,7 @@ async fn spring_cloud_v1_empty_repeated_query_omits_the_key() {
 
     assert!(
         client
-            .labels(RpcRequest::new(LabelsRequest { label: Vec::new() }))
+            .labels(Vec::new())
             .await
             .unwrap()
             .into_body()
@@ -341,9 +311,7 @@ async fn client_rejects_duplicate_response_content_type() {
         .unwrap();
 
     let error = client
-        .echo(RpcRequest::new(EchoRequest {
-            name: "duplicate-content-type".into(),
-        }))
+        .echo("duplicate-content-type".into())
         .await
         .unwrap_err();
     assert_eq!(error.category(), RpcCategory::DataLoss);
@@ -376,8 +344,8 @@ async fn spring_cloud_v1_head_uses_a_unit_success_contract() {
         .await
         .unwrap();
 
-    client.health(RpcRequest::new(())).await.unwrap();
-    let error = client.unhealthy(RpcRequest::new(())).await.unwrap_err();
+    client.health().await.unwrap();
+    let error = client.unhealthy().await.unwrap_err();
     assert_eq!(error.code().as_str(), "remote_head_error");
     assert_eq!(error.status(), StatusCode::CONFLICT);
 
@@ -525,11 +493,11 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
         .await
         .unwrap();
     let error = client
-        .create(RpcRequest::new(CreateRequest {
-            id: "conflict".into(),
-            expand: Some(false),
-            request: CreateUser { name: "Ada".into() },
-        }))
+        .create(
+            "conflict".into(),
+            Some(false),
+            CreateUser { name: "Ada".into() },
+        )
         .await
         .expect_err("the application fixture always rejects create");
     assert_eq!(error.category(), RpcCategory::Application);

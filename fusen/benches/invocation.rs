@@ -1,10 +1,9 @@
 //! Direct single-attempt socket matrix used by the 0.9 release gate.
 
 use fusen_rs::{
-    ClientConfig, ClientRuntime, RetryConfig, RpcError, RpcRequest, RpcResponse, Server,
-    ServerConfig, WireProtocol, contract::ProtocolSet, interface,
+    ClientConfig, ClientRuntime, RetryConfig, RpcError, RpcResponse, Server, ServerConfig,
+    WireProtocol, contract::ProtocolSet, interface,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     env,
     error::Error,
@@ -21,30 +20,20 @@ const DEFAULT_LARGE_ITERATIONS: usize = 1_000;
 const LARGE_PAYLOAD_BYTES: usize = 64 * 1024;
 const CONCURRENCIES: [usize; 2] = [1, 100];
 
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct EchoRequest {
-    #[rpc(body)]
-    value: String,
-}
-
 #[interface(name = "benchmark")]
 trait BenchmarkService {
     #[method(
         idempotency = "none",
         spring(method = "POST", path = "/benchmark/echo")
     )]
-    async fn echo(&self, request: RpcRequest<EchoRequest>)
-    -> Result<RpcResponse<String>, RpcError>;
+    async fn echo(&self, #[rpc(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct BenchmarkServiceImpl;
 
 impl BenchmarkService for BenchmarkServiceImpl {
-    async fn echo(
-        &self,
-        request: RpcRequest<EchoRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().value))
+    async fn echo(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(value))
     }
 }
 
@@ -294,10 +283,7 @@ async fn execute_requests(
             for _ in 0..worker_iterations {
                 let request = payload.as_ref().clone();
                 let started = Instant::now();
-                match client
-                    .echo(RpcRequest::new(EchoRequest { value: request }))
-                    .await
-                {
+                match client.echo(request).await {
                     Ok(response) if response.body() == payload.as_ref() => {
                         black_box(response.body());
                         result

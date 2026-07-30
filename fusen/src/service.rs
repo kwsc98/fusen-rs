@@ -1,6 +1,6 @@
 use crate::{
-    Middleware, MiddlewareFuture, MiddlewareResult, RpcCategory, RpcContext, RpcError, RpcMessage,
-    RpcRequest, RpcResponse, middleware::erase_middleware,
+    Middleware, MiddlewareFuture, MiddlewareResult, RpcArguments, RpcCall, RpcCategory, RpcContext,
+    RpcError, RpcResponse, middleware::erase_middleware,
 };
 use fusen_contract::{MethodId, ServiceDescriptor};
 use futures_util::FutureExt;
@@ -11,18 +11,21 @@ use std::{panic::AssertUnwindSafe, sync::Arc};
 #[doc(hidden)]
 pub struct ServerInvocation {
     context: RpcContext,
+    arguments: RpcArguments,
     max_response_body: usize,
     response_budget: Arc<crate::runtime::budget::ByteBudget>,
 }
 
 impl ServerInvocation {
     pub(crate) fn new(
-        context: RpcContext,
+        mut context: RpcContext,
         max_response_body: usize,
         response_budget: Arc<crate::runtime::budget::ByteBudget>,
     ) -> Self {
+        let arguments = context.take_arguments().unwrap_or_default();
         Self {
             context,
+            arguments,
             max_response_body,
             response_budget,
         }
@@ -33,13 +36,35 @@ impl ServerInvocation {
         self.context.method().id()
     }
 
-    /// Decodes the single typed request declared by an interface method.
+    /// Returns server-bound call metadata for an explicit `#[rpc(call)]` parameter.
     #[doc(hidden)]
-    pub fn decode_request<T: RpcMessage>(&mut self) -> Result<RpcRequest<T>, RpcError> {
+    pub fn rpc_call(&self) -> RpcCall {
+        RpcCall::from_server(&self.context)
+    }
+
+    /// Removes and decodes one named method argument.
+    #[doc(hidden)]
+    pub fn decode_argument<T: serde::de::DeserializeOwned>(
+        &mut self,
+        name: &str,
+        parse_spring_json_primitive: bool,
+    ) -> Result<T, RpcError> {
         let protocol = self.context.protocol();
-        let arguments = self.context.take_arguments().unwrap_or_default();
-        let body = crate::interface::decode_message(arguments, protocol)?;
-        Ok(RpcRequest::from_server(body, &self.context))
+        let value = self
+            .arguments
+            .remove(name)
+            .unwrap_or(serde_json::Value::Null);
+        crate::interface::decode_argument(value, protocol, parse_spring_json_primitive)
+    }
+
+    /// Rejects arguments that are absent from the generated method schema.
+    #[doc(hidden)]
+    pub fn finish_arguments(&self) -> Result<(), RpcError> {
+        if self.arguments.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::interface::unknown_argument())
+        }
     }
 
     /// Encodes a handler response without an unbudgeted JSON buffer.

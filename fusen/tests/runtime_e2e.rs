@@ -2,8 +2,8 @@
 
 use fusen_rs::{
     ClientConfig, ClientRuntime, Middleware, MiddlewareFuture, Next, RetryConfig, RpcCategory,
-    RpcContext, RpcError, RpcOrigin, RpcRequest, RpcResponse, Server, ServerConfig,
-    ServerErrorKind, ServerState, WireProtocol, contract::ProtocolSet, interface,
+    RpcContext, RpcError, RpcOrigin, RpcResponse, Server, ServerConfig, ServerErrorKind,
+    ServerState, WireProtocol, contract::ProtocolSet, interface,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -20,56 +20,25 @@ struct CreateRequest {
     name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct LookupRequest {
-    #[rpc(path)]
-    id: String,
-    #[rpc(query)]
-    expanded: Option<bool>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct CreateRpcRequest {
-    #[rpc(body)]
-    request: CreateRequest,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct TagsRequest {
-    #[rpc(query)]
-    tags: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct ValueRequest {
-    #[rpc(body)]
-    value: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct PanicRequest {
-    #[rpc(body)]
-    should_panic: bool,
-}
-
 #[interface(name = "wire-e2e")]
 trait WireService {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/users/{id}"))]
     async fn lookup(
         &self,
-        request: RpcRequest<LookupRequest>,
+        #[rpc(path)] id: String,
+        #[rpc(query)] expanded: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(idempotency = "none", spring(method = "POST", path = "/users"))]
     async fn create(
         &self,
-        request: RpcRequest<CreateRpcRequest>,
+        #[rpc(body)] request: CreateRequest,
     ) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/tags"))]
     async fn tags(
         &self,
-        request: RpcRequest<TagsRequest>,
+        #[rpc(query)] tags: Vec<String>,
     ) -> Result<RpcResponse<Vec<String>>, RpcError>;
 }
 
@@ -78,38 +47,29 @@ struct WireServiceImpl;
 impl WireService for WireServiceImpl {
     async fn lookup(
         &self,
-        request: RpcRequest<LookupRequest>,
+        id: String,
+        expanded: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError> {
-        let request = request.into_body();
         Ok(RpcResponse::new(format!(
             "{}:{}",
-            request.id,
-            request.expanded.unwrap_or(false)
+            id,
+            expanded.unwrap_or(false)
         )))
     }
 
-    async fn create(
-        &self,
-        request: RpcRequest<CreateRpcRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().request.name))
+    async fn create(&self, request: CreateRequest) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(request.name))
     }
 
-    async fn tags(
-        &self,
-        request: RpcRequest<TagsRequest>,
-    ) -> Result<RpcResponse<Vec<String>>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().tags))
+    async fn tags(&self, tags: Vec<String>) -> Result<RpcResponse<Vec<String>>, RpcError> {
+        Ok(RpcResponse::new(tags))
     }
 }
 
 #[interface(name = "blocking-e2e")]
 trait BlockingService {
     #[fusen_rs::method(idempotency = "safe")]
-    async fn wait(
-        &self,
-        request: RpcRequest<ValueRequest>,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    async fn wait(&self, #[rpc(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct BlockingServiceImpl {
@@ -127,11 +87,7 @@ impl Drop for DropProbe {
 }
 
 impl BlockingService for BlockingServiceImpl {
-    async fn wait(
-        &self,
-        request: RpcRequest<ValueRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        let value = request.into_body().value;
+    async fn wait(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
         let _probe = self.dropped.as_ref().map(|flag| DropProbe(flag.clone()));
         self.entered.wait().await;
         let _permit = self
@@ -148,18 +104,14 @@ trait PanicService {
     #[fusen_rs::method(idempotency = "safe")]
     async fn execute(
         &self,
-        request: RpcRequest<PanicRequest>,
+        #[rpc(body)] should_panic: bool,
     ) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct PanicServiceImpl;
 
 impl PanicService for PanicServiceImpl {
-    async fn execute(
-        &self,
-        request: RpcRequest<PanicRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        let should_panic = request.into_body().should_panic;
+    async fn execute(&self, should_panic: bool) -> Result<RpcResponse<String>, RpcError> {
         assert!(!should_panic, "private panic payload");
         Ok(RpcResponse::new("healthy".to_owned()))
     }
@@ -171,7 +123,7 @@ trait LogicalMiddlewareService {
         idempotency = "safe",
         spring(method = "GET", path = "/logical-middleware")
     )]
-    async fn execute(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
+    async fn execute(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct RetryOnceService {
@@ -179,7 +131,7 @@ struct RetryOnceService {
 }
 
 impl LogicalMiddlewareService for RetryOnceService {
-    async fn execute(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+    async fn execute(&self) -> Result<RpcResponse<String>, RpcError> {
         match self.attempts.fetch_add(1, Ordering::AcqRel) {
             0 => Err(RpcError::new(
                 RpcCategory::Unavailable,
@@ -238,10 +190,7 @@ async fn real_h2c_and_http1_slices_round_trip() {
 
     assert_eq!(
         fusen
-            .lookup(RpcRequest::new(LookupRequest {
-                id: "fusen".into(),
-                expanded: Some(true)
-            }))
+            .lookup("fusen".into(), Some(true))
             .await
             .unwrap()
             .into_body(),
@@ -249,10 +198,7 @@ async fn real_h2c_and_http1_slices_round_trip() {
     );
     assert_eq!(
         fusen
-            .lookup(RpcRequest::new(LookupRequest {
-                id: "0".into(),
-                expanded: Some(false),
-            }))
+            .lookup("0".into(), Some(false))
             .await
             .unwrap()
             .into_body(),
@@ -260,10 +206,7 @@ async fn real_h2c_and_http1_slices_round_trip() {
     );
     assert_eq!(
         spring
-            .lookup(RpcRequest::new(LookupRequest {
-                id: "spring cloud".into(),
-                expanded: Some(false)
-            }))
+            .lookup("spring cloud".into(), Some(false))
             .await
             .unwrap()
             .into_body(),
@@ -271,10 +214,7 @@ async fn real_h2c_and_http1_slices_round_trip() {
     );
     assert_eq!(
         spring
-            .lookup(RpcRequest::new(LookupRequest {
-                id: "missing".into(),
-                expanded: None
-            }))
+            .lookup("missing".into(), None)
             .await
             .unwrap()
             .into_body(),
@@ -285,22 +225,13 @@ async fn real_h2c_and_http1_slices_round_trip() {
         vec!["one".to_owned()],
         vec!["one".to_owned(), "two words".to_owned(), "three".to_owned()],
     ] {
-        assert_eq!(
-            spring
-                .tags(RpcRequest::new(TagsRequest { tags: tags.clone() }))
-                .await
-                .unwrap()
-                .into_body(),
-            tags
-        );
+        assert_eq!(spring.tags(tags.clone()).await.unwrap().into_body(), tags);
     }
     assert_eq!(
         spring
-            .create(RpcRequest::new(CreateRpcRequest {
-                request: CreateRequest {
-                    name: "created".into()
-                }
-            }))
+            .create(CreateRequest {
+                name: "created".into(),
+            })
             .await
             .unwrap()
             .into_body(),
@@ -356,14 +287,7 @@ async fn client_middleware_runs_once_around_two_physical_attempts() {
         .await
         .unwrap();
 
-    assert_eq!(
-        client
-            .execute(RpcRequest::new(()))
-            .await
-            .unwrap()
-            .into_body(),
-        "complete"
-    );
+    assert_eq!(client.execute().await.unwrap().into_body(), "complete");
     assert_eq!(attempts.load(Ordering::Acquire), 2);
     assert_eq!(global_calls.load(Ordering::Acquire), 1);
     assert_eq!(local_calls.load(Ordering::Acquire), 1);
@@ -395,13 +319,7 @@ async fn graceful_shutdown_drains_an_inflight_h2_stream() {
         .await
         .unwrap();
 
-    let call = tokio::spawn(async move {
-        client
-            .wait(RpcRequest::new(ValueRequest {
-                value: "complete".into(),
-            }))
-            .await
-    });
+    let call = tokio::spawn(async move { client.wait("complete".into()).await });
     entered.wait().await;
     let handle = server.handle();
     let shutdown = tokio::spawn(async move { handle.shutdown().await });
@@ -448,13 +366,7 @@ async fn graceful_shutdown_aborts_a_permanently_pending_stream_at_deadline() {
         .connect()
         .await
         .unwrap();
-    let mut call = tokio::spawn(async move {
-        client
-            .wait(RpcRequest::new(ValueRequest {
-                value: "never".into(),
-            }))
-            .await
-    });
+    let mut call = tokio::spawn(async move { client.wait("never".into()).await });
     entered.wait().await;
 
     let shutdown = tokio::time::timeout(Duration::from_secs(1), server.shutdown())
@@ -496,27 +408,13 @@ async fn a_panicking_h2_stream_does_not_poison_other_streams() {
         .await
         .unwrap();
 
-    let (failed, healthy) = tokio::join!(
-        client.execute(RpcRequest::new(PanicRequest { should_panic: true })),
-        client.execute(RpcRequest::new(PanicRequest {
-            should_panic: false
-        })),
-    );
+    let (failed, healthy) = tokio::join!(client.execute(true), client.execute(false),);
     let failed = failed.expect_err("panic must become a sanitized RPC error");
     assert_eq!(failed.category(), RpcCategory::Internal);
     assert_eq!(failed.origin(), RpcOrigin::Remote);
     assert!(!failed.message().contains("private panic payload"));
     assert_eq!(healthy.unwrap().into_body(), "healthy");
-    assert_eq!(
-        client
-            .execute(RpcRequest::new(PanicRequest {
-                should_panic: false
-            }))
-            .await
-            .unwrap()
-            .into_body(),
-        "healthy"
-    );
+    assert_eq!(client.execute(false).await.unwrap().into_body(), "healthy");
 
     drop(client);
     runtime.shutdown().await.unwrap();

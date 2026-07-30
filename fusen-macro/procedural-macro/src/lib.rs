@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Procedural macros for declaring clean-slate Fusen 0.9 interfaces and messages.
+//! Procedural macros for declaring clean-slate Fusen 0.9 interfaces.
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -7,7 +7,6 @@ use quote::{format_ident, quote};
 use syn::parse_macro_input;
 
 mod args;
-mod rpc_message;
 mod service_macro;
 mod validate;
 
@@ -39,12 +38,6 @@ pub fn method(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote!(#error #item).into()
         }
     }
-}
-
-/// Derives the named-field request schema used by generated RPC interfaces.
-#[proc_macro_derive(RpcMessage, attributes(rpc))]
-pub fn rpc_message(item: TokenStream) -> TokenStream {
-    rpc_message::expand(item)
 }
 
 fn runtime_path() -> proc_macro2::TokenStream {

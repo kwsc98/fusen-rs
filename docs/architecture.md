@@ -35,7 +35,7 @@ ClientRuntime / Server runtime
 | `fusen-config` | 静态解析、last-good 热配置及显式关闭 |
 | `fusen-nacos` | Nacos naming/config provider adapter |
 | `fusen-observability` | 同步非阻塞 `MetricsRecorder` 及可选 backend adapter |
-| `fusen-procedural-macro` | `interface`/`method`/`RpcMessage` 解析和 wrapper 生成 |
+| `fusen-procedural-macro` | `interface`/`method` 参数解析、校验和 wrapper 生成 |
 | `fusen-rs` | HTTP/HTTPS Client、明文 HTTP Server、策略与 Middleware runtime |
 
 Core 不依赖 Nacos、OpenSSL/native-tls、系统证书加载器、进程级 tracing subscriber 或 OTel backend。Client 内部使用 Rustls Ring 和 bundled Mozilla WebPKI roots 实现 TLS 1.2/1.3；Server acceptor 仍为明文 HTTP/1.1 与 h2c。宏生成代码只通过版本化的 `fusen_rs::__macro::v1` ABI 使用 runtime internals。

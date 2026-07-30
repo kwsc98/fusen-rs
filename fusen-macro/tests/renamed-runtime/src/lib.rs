@@ -1,18 +1,6 @@
 //! Compile-time consumer proving that generated code honors a renamed `fusen-rs` dependency.
 
-use rpc::{RpcError, RpcRequest, RpcResponse, interface};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, rpc::RpcMessage)]
-/// Request used to verify path and optional query macro expansion.
-pub struct LookupRequest {
-    /// Required route identifier.
-    #[rpc(path)]
-    pub id: String,
-    /// Optional expansion flag.
-    #[rpc(query)]
-    pub expand: Option<bool>,
-}
+use rpc::{RpcError, RpcResponse, interface};
 
 #[interface(name = "renamed", group = "test", version = "1")]
 /// Interface contract used to prove dependency-renamed macro expansion.
@@ -21,7 +9,8 @@ pub trait RenamedRuntimeApi {
     /// Looks up one value through both generated protocol mappings.
     async fn lookup(
         &self,
-        request: RpcRequest<LookupRequest>,
+        #[rpc(path)] id: String,
+        #[rpc(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError>;
 }
 
@@ -31,9 +20,10 @@ pub struct Handler;
 impl RenamedRuntimeApi for Handler {
     async fn lookup(
         &self,
-        request: RpcRequest<LookupRequest>,
+        id: String,
+        _expand: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().id))
+        Ok(RpcResponse::new(id))
     }
 }
 

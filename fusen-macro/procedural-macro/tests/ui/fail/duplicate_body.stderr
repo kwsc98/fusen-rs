@@ -1,6 +1,5 @@
-error: an RpcMessage may declare at most one #[rpc(body)] field
- --> tests/ui/fail/duplicate_body.rs:7:5
-  |
-7 | /     #[rpc(body)]
-8 | |     second: String,
-  | |__________________^
+error: an RPC method may declare at most one #[rpc(body)] parameter
+  --> tests/ui/fail/duplicate_body.rs:11:9
+   |
+11 |         #[rpc(body)] second: String,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^

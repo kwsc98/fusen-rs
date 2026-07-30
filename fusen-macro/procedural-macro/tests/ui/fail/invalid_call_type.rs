@@ -3,12 +3,11 @@ use fusen_procedural_macro::interface;
 struct RpcError;
 struct RpcResponse<T>(T);
 
-#[interface(name = "duplicate-body")]
-trait DuplicateBody {
+#[interface(name = "invalid-call")]
+trait InvalidCallType {
     async fn call(
         &self,
-        #[rpc(body)] first: String,
-        #[rpc(body)] second: String,
+        #[rpc(call)] call: String,
     ) -> Result<RpcResponse<()>, RpcError>;
 }
 

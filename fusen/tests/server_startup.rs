@@ -5,8 +5,8 @@ use fusen_register::{
     error::RegistryError, provider,
 };
 use fusen_rs::{
-    RpcError, RpcRequest, RpcResponse, Server, ServerConfig, ServerRegistryConfig,
-    contract::ProtocolSet, interface,
+    RpcError, RpcResponse, Server, ServerConfig, ServerRegistryConfig, contract::ProtocolSet,
+    interface,
 };
 use serde_json::Value;
 use std::{
@@ -26,13 +26,13 @@ use tokio::{
 #[interface(name = "startup-lifecycle-e2e")]
 trait StartupLifecycleService {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/startup"))]
-    async fn check(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
+    async fn check(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct StartupLifecycleServiceImpl;
 
 impl StartupLifecycleService for StartupLifecycleServiceImpl {
-    async fn check(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+    async fn check(&self) -> Result<RpcResponse<String>, RpcError> {
         Ok(RpcResponse::new("ready".to_owned()))
     }
 }

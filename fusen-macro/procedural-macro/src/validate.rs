@@ -3,7 +3,7 @@ use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::visit::Visit;
 use syn::{
-    Attribute, FnArg, GenericArgument, GenericParam, Generics, Ident, ItemTrait, Meta,
+    Attribute, FnArg, GenericArgument, GenericParam, Generics, Ident, ItemTrait, Meta, Pat,
     PathArguments, ReturnType, Signature, TraitItem, Type, TypePath, WherePredicate,
 };
 
@@ -38,9 +38,27 @@ pub(crate) struct SpringMapping {
     pub(crate) path: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParameterSource {
+    Call,
+    Path,
+    Query,
+    Body,
+}
+
+#[derive(Clone)]
+pub(crate) struct Parameter {
+    pub(crate) ident: Ident,
+    pub(crate) kind: Type,
+    pub(crate) wire_name: String,
+    pub(crate) source: ParameterSource,
+    pub(crate) repeated: bool,
+    pub(crate) parse_spring_json_primitive: bool,
+}
+
 pub(crate) struct Method {
     pub(crate) ident: Ident,
-    pub(crate) request: Type,
+    pub(crate) parameters: Vec<Parameter>,
     pub(crate) response: Type,
     pub(crate) idempotency: Idempotency,
     pub(crate) spring: Option<SpringMapping>,
@@ -105,7 +123,9 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
                 "RPC methods must not provide default implementations",
             ));
         }
-        let (request, response) = validate_signature(&method.sig)?;
+        validate_signature(&method.sig)?;
+        let parameters = parameters(&method.sig)?;
+        let response = response_type(&method.sig.output)?;
         validate_identity(
             method.sig.ident.to_string().trim_start_matches("r#"),
             "method name",
@@ -115,7 +135,7 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
         let idempotency = Idempotency::parse(method_args.idempotency.as_ref())?;
         let spring = method_args
             .spring
-            .map(|spring| validate_spring(spring, idempotency, &method.sig.ident))
+            .map(|spring| validate_spring(spring, idempotency, &parameters, &method.sig.ident))
             .transpose()?;
         if spring
             .as_ref()
@@ -141,7 +161,7 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
         }
         methods.push(Method {
             ident: method.sig.ident.clone(),
-            request,
+            parameters,
             response,
             idempotency,
             spring,
@@ -226,7 +246,7 @@ fn validate_trait_generics(generics: &Generics) -> syn::Result<()> {
     Ok(())
 }
 
-fn validate_signature(signature: &Signature) -> syn::Result<(Type, Type)> {
+fn validate_signature(signature: &Signature) -> syn::Result<()> {
     if signature.asyncness.is_none()
         || signature.constness.is_some()
         || matches!(signature.safety, syn::Safety::Unsafe(_))
@@ -264,21 +284,186 @@ fn validate_signature(signature: &Signature) -> syn::Result<(Type, Type)> {
             "RPC methods must have an immutable &self receiver without an explicit lifetime",
         ));
     }
-    if signature.inputs.len() != 2 {
-        return Err(syn::Error::new_spanned(
-            &signature.inputs,
-            "RPC methods must receive exactly one RpcRequest<T> after &self",
-        ));
+    for input in signature.inputs.iter().skip(1) {
+        let FnArg::Typed(input) = input else {
+            return Err(syn::Error::new_spanned(
+                input,
+                "RPC methods may declare only one receiver",
+            ));
+        };
+        validate_owned_type(&input.ty)?;
     }
-    let FnArg::Typed(request) = &signature.inputs[1] else {
-        unreachable!("the second input cannot be a receiver")
-    };
-    let request = wrapper_inner(&request.ty, "RpcRequest", "request parameter")?;
-    validate_owned_type(&request)?;
 
-    let ReturnType::Type(_, output) = &signature.output else {
+    Ok(())
+}
+
+fn parameters(signature: &Signature) -> syn::Result<Vec<Parameter>> {
+    let mut parameters = Vec::with_capacity(signature.inputs.len().saturating_sub(1));
+    let mut names = BTreeSet::new();
+    let mut body = None;
+    let mut call = None;
+
+    for input in signature.inputs.iter().skip(1) {
+        let FnArg::Typed(input) = input else {
+            unreachable!("the signature validator rejected extra receivers")
+        };
+        let Pat::Ident(pattern) = input.pat.as_ref() else {
+            return Err(syn::Error::new_spanned(
+                &input.pat,
+                "RPC parameters must use plain immutable identifier patterns",
+            ));
+        };
+        if pattern.by_ref.is_some() || pattern.mutability.is_some() || pattern.subpat.is_some() {
+            return Err(syn::Error::new_spanned(
+                pattern,
+                "RPC parameters must use plain immutable identifier patterns",
+            ));
+        }
+
+        let mut source = None;
+        let mut wire_name = None;
+        for attribute in input
+            .attrs
+            .iter()
+            .filter(|attribute| is_rpc_attr(attribute))
+        {
+            attribute.parse_nested_meta(|meta| {
+                if meta.path.is_ident("call")
+                    || meta.path.is_ident("path")
+                    || meta.path.is_ident("query")
+                    || meta.path.is_ident("body")
+                {
+                    if source.is_some() {
+                        return Err(meta.error(
+                            "each RPC parameter must declare exactly one of call, path, query, or body",
+                        ));
+                    }
+                    source = Some(if meta.path.is_ident("call") {
+                        ParameterSource::Call
+                    } else if meta.path.is_ident("path") {
+                        ParameterSource::Path
+                    } else if meta.path.is_ident("query") {
+                        ParameterSource::Query
+                    } else {
+                        ParameterSource::Body
+                    });
+                    Ok(())
+                } else if meta.path.is_ident("name") {
+                    if wire_name.is_some() {
+                        return Err(meta.error("duplicate rpc name"));
+                    }
+                    wire_name = Some(meta.value()?.parse::<syn::LitStr>()?);
+                    Ok(())
+                } else {
+                    Err(meta.error("unknown rpc parameter field; expected call, path, query, body, or name"))
+                }
+            })?;
+        }
+        let source = source.ok_or_else(|| {
+            syn::Error::new_spanned(
+                input,
+                "each RPC parameter must declare #[rpc(call)], #[rpc(path)], #[rpc(query)], or #[rpc(body)]",
+            )
+        })?;
+        let rust_name = pattern
+            .ident
+            .to_string()
+            .trim_start_matches("r#")
+            .to_owned();
+
+        if source == ParameterSource::Call {
+            if wire_name.is_some() {
+                return Err(syn::Error::new_spanned(
+                    input,
+                    "#[rpc(call)] parameters must not declare a wire name",
+                ));
+            }
+            if call.replace(pattern.ident.span()).is_some() {
+                return Err(syn::Error::new_spanned(
+                    input,
+                    "an RPC method may declare at most one #[rpc(call)] parameter",
+                ));
+            }
+            let Type::Path(kind) = input.ty.as_ref() else {
+                return Err(syn::Error::new_spanned(
+                    &input.ty,
+                    "#[rpc(call)] parameters must use the RpcCall type",
+                ));
+            };
+            if !is_runtime_type_path(&kind.path, "RpcCall") {
+                return Err(syn::Error::new_spanned(
+                    &input.ty,
+                    "#[rpc(call)] parameters must use the RpcCall type",
+                ));
+            }
+            parameters.push(Parameter {
+                ident: pattern.ident.clone(),
+                kind: input.ty.as_ref().clone(),
+                wire_name: String::new(),
+                source,
+                repeated: false,
+                parse_spring_json_primitive: false,
+            });
+            continue;
+        }
+
+        let wire_name = wire_name.map_or_else(|| rust_name.clone(), |name| name.value());
+        validate_identity(&wire_name, "RPC parameter name", pattern.ident.span())?;
+        if !names.insert(wire_name.clone()) {
+            return Err(syn::Error::new_spanned(
+                input,
+                format!("duplicate RPC wire parameter name `{wire_name}`"),
+            ));
+        }
+        if source == ParameterSource::Body && body.replace(pattern.ident.span()).is_some() {
+            return Err(syn::Error::new_spanned(
+                input,
+                "an RPC method may declare at most one #[rpc(body)] parameter",
+            ));
+        }
+        let repeated = if source == ParameterSource::Query {
+            if direct_generic_type(&input.ty, "Option")
+                .and_then(|inner| direct_generic_type(inner, "Vec"))
+                .is_some()
+            {
+                return Err(syn::Error::new_spanned(
+                    &input.ty,
+                    "query parameters may not use Option<Vec<T>>; use Vec<T> so omission has one unambiguous empty-list meaning",
+                ));
+            }
+            direct_generic_type(&input.ty, "Vec").is_some()
+        } else {
+            if source == ParameterSource::Path
+                && (direct_generic_type(&input.ty, "Option").is_some()
+                    || direct_generic_type(&input.ty, "Vec").is_some())
+            {
+                return Err(syn::Error::new_spanned(
+                    &input.ty,
+                    "path parameters must be required scalar values",
+                ));
+            }
+            false
+        };
+        let scalar_type = direct_generic_type(&input.ty, "Option").unwrap_or(&input.ty);
+        let scalar_type = direct_generic_type(scalar_type, "Vec").unwrap_or(scalar_type);
+        parameters.push(Parameter {
+            ident: pattern.ident.clone(),
+            kind: input.ty.as_ref().clone(),
+            wire_name,
+            source,
+            repeated,
+            parse_spring_json_primitive: source != ParameterSource::Body
+                && is_json_primitive_type(scalar_type),
+        });
+    }
+
+    Ok(parameters)
+}
+
+fn response_type(output: &ReturnType) -> syn::Result<Type> {
+    let ReturnType::Type(_, output) = output else {
         return Err(syn::Error::new_spanned(
-            &signature.output,
+            output,
             "RPC methods must return Result<RpcResponse<T>, RpcError>",
         ));
     };
@@ -324,7 +509,7 @@ fn validate_signature(signature: &Signature) -> syn::Result<(Type, Type)> {
             "RPC methods must use RpcError as their error type",
         ));
     }
-    Ok((request, response))
+    Ok(response)
 }
 
 fn is_standard_result_path(path: &syn::Path) -> bool {
@@ -395,6 +580,7 @@ fn wrapper_inner(kind: &Type, wrapper: &str, position: &str) -> syn::Result<Type
 fn validate_spring(
     args: SpringArgs,
     idempotency: Idempotency,
+    parameters: &[Parameter],
     method_ident: &Ident,
 ) -> syn::Result<SpringMapping> {
     let method = args.method.ok_or_else(|| {
@@ -440,14 +626,41 @@ fn validate_spring(
         _ => {}
     }
     let path_value = path.value();
-    validate_route(&path_value, path.span())?;
+    let placeholders = validate_route(&path_value, path.span())?;
+    let wire_parameters = parameters
+        .iter()
+        .filter(|parameter| parameter.source != ParameterSource::Call)
+        .collect::<Vec<_>>();
+    for placeholder in &placeholders {
+        if !wire_parameters.iter().any(|parameter| {
+            parameter.source == ParameterSource::Path && parameter.wire_name == *placeholder
+        }) {
+            return Err(syn::Error::new_spanned(
+                &path,
+                format!(
+                    "Spring path parameter `{placeholder}` requires a matching #[rpc(path)] method parameter"
+                ),
+            ));
+        }
+    }
+    if let Some(parameter) = wire_parameters.iter().find(|parameter| {
+        parameter.source == ParameterSource::Path && !placeholders.contains(&parameter.wire_name)
+    }) {
+        return Err(syn::Error::new(
+            parameter.ident.span(),
+            format!(
+                "#[rpc(path)] parameter `{}` is absent from the Spring path template",
+                parameter.wire_name
+            ),
+        ));
+    }
     Ok(SpringMapping {
         method: method_value,
         path: path_value,
     })
 }
 
-fn validate_route(path: &str, span: proc_macro2::Span) -> syn::Result<()> {
+fn validate_route(path: &str, span: proc_macro2::Span) -> syn::Result<BTreeSet<String>> {
     if !path.starts_with('/')
         || path.contains(['?', '#'])
         || path.contains("//")
@@ -482,7 +695,63 @@ fn validate_route(path: &str, span: proc_macro2::Span) -> syn::Result<()> {
             ));
         }
     }
-    Ok(())
+    Ok(names)
+}
+
+pub(crate) fn is_rpc_attr(attribute: &Attribute) -> bool {
+    attribute.path().is_ident("rpc")
+}
+
+fn direct_generic_type<'a>(kind: &'a Type, expected: &str) -> Option<&'a Type> {
+    let Type::Path(TypePath {
+        qself: None, path, ..
+    }) = kind
+    else {
+        return None;
+    };
+    let segment = path.segments.last()?;
+    if segment.ident != expected {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    if arguments.args.len() != 1 {
+        return None;
+    }
+    match arguments.args.first()? {
+        GenericArgument::Type(kind) => Some(kind),
+        _ => None,
+    }
+}
+
+fn is_json_primitive_type(kind: &Type) -> bool {
+    let Type::Path(TypePath {
+        qself: None, path, ..
+    }) = kind
+    else {
+        return false;
+    };
+    path.segments.last().is_some_and(|segment| {
+        matches!(
+            segment.ident.to_string().as_str(),
+            "bool"
+                | "i8"
+                | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f32"
+                | "f64"
+        )
+    })
 }
 
 fn route_shape(path: &str) -> String {

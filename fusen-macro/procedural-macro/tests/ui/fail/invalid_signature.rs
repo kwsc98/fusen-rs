@@ -7,7 +7,7 @@ struct RpcResponse<T>(T);
 
 #[interface(name = "invalid")]
 trait InvalidSignature {
-    async fn call(&self, request: Input) -> Result<RpcResponse<Output>, RpcError>;
+    async fn call(&self, #[rpc(body)] request: Input) -> Result<Output, RpcError>;
 }
 
 fn main() {}

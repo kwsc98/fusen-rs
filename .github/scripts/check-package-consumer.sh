@@ -70,18 +70,18 @@ EOF
 
     if [[ "$package" == "fusen-rs" ]]; then
         cat >"$consumer_dir/src/lib.rs" <<'EOF'
-use fusen_rs::{ClientBuilder, ClientRuntime, RpcError, RpcRequest, RpcResponse, interface};
+use fusen_rs::{ClientBuilder, ClientRuntime, RpcError, RpcResponse, interface};
 
 #[interface(name = "package-consumer")]
 pub trait PackageConsumerApi {
     #[fusen_rs::method(idempotency = "safe")]
-    async fn ping(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
+    async fn ping(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 
 pub struct PackageConsumerHandler;
 
 impl PackageConsumerApi for PackageConsumerHandler {
-    async fn ping(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+    async fn ping(&self) -> Result<RpcResponse<String>, RpcError> {
         Ok(RpcResponse::new("pong".to_owned()))
     }
 }

@@ -7,7 +7,7 @@ extern crate self as fusen_rs;
 mod client;
 mod context;
 mod error;
-/// Interface DTO schema and message encoding contracts.
+/// Interface parameter schema and argument encoding contracts.
 pub mod interface;
 /// Shared client/server middleware API.
 pub mod middleware;
@@ -28,7 +28,7 @@ pub use client::{
     QueueConfigBuilder, RetryConfig, RetryConfigBuilder,
 };
 pub use context::{
-    CallInfo, MiddlewareStage, RpcArguments, RpcBody, RpcContext, RpcRequest, RpcResponse, RpcSide,
+    CallInfo, MiddlewareStage, RpcArguments, RpcBody, RpcCall, RpcContext, RpcResponse, RpcSide,
 };
 pub use error::{
     ClientError, ClientErrorKind, ConfigValidationError, ConfigValidationErrorKind, ServerError,
@@ -37,9 +37,8 @@ pub use error::{
 pub use fusen_contract as contract;
 pub use fusen_contract::{Idempotency, WireProtocol};
 pub use fusen_observability::{MetricsRecorder, NoopMetricsRecorder};
-pub use fusen_procedural_macro::{RpcMessage, interface, method};
+pub use fusen_procedural_macro::{interface, method};
 pub use fusen_register::{RegistrationHandle, Registry, SubscriptionHandle};
-pub use interface::{RpcField, RpcFieldSource, RpcMessage};
 pub use middleware::{Middleware, MiddlewareFuture, MiddlewareResult, Next};
 pub use policy::{InstanceRouter, InstanceSnapshot, LoadBalancer, RouteRequest, WeightedRandom};
 pub use resilience::{FailureClass, RetryDecision, RetryDecisionContext, RetryPolicy};
@@ -58,13 +57,13 @@ pub mod __macro {
     /// ABI version used by fusen-rs 0.9 generated code.
     pub mod v1 {
         pub use crate::client::ServiceClient;
-        pub use crate::interface::spring_method;
+        pub use crate::interface::{RpcField, RpcFieldSource, encode_argument, spring_method};
         pub use crate::service::{
             IntoServerService, PreparedService, ServerInvocation, ServerService, method_not_found,
         };
         pub use crate::{
-            ClientBuilder, ClientRuntime, Idempotency, Middleware, MiddlewareFuture, RpcError,
-            RpcField, RpcFieldSource, RpcMessage, RpcRequest, RpcResponse, WireProtocol,
+            ClientBuilder, ClientRuntime, Idempotency, Middleware, MiddlewareFuture, RpcArguments,
+            RpcCall, RpcError, RpcResponse, WireProtocol,
         };
         pub use fusen_contract::{MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector};
         pub use http;

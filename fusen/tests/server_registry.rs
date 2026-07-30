@@ -5,7 +5,7 @@ use fusen_register::{
     error::RegistryError, provider,
 };
 use fusen_rs::{
-    ClientRuntime, RpcError, RpcRequest, RpcResponse, Server, ServerConfig, ServerErrorKind,
+    ClientRuntime, RpcError, RpcResponse, Server, ServerConfig, ServerErrorKind,
     ServerRegistryConfig, ServerState, contract::ProtocolSet, interface,
 };
 use std::{
@@ -18,13 +18,13 @@ use tokio::sync::{Barrier, Semaphore, oneshot};
 #[interface(name = "alpha-registry-e2e")]
 trait AlphaRegistryService {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/registry/alpha"))]
-    async fn call(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
+    async fn call(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 
 #[interface(name = "zeta-registry-e2e")]
 trait ZetaRegistryService {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/registry/zeta"))]
-    async fn call(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
+    async fn call(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct RegistryServiceImpl;
@@ -35,19 +35,19 @@ struct BlockingRegistryServiceImpl {
 }
 
 impl AlphaRegistryService for RegistryServiceImpl {
-    async fn call(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+    async fn call(&self) -> Result<RpcResponse<String>, RpcError> {
         Ok(RpcResponse::new("alpha".into()))
     }
 }
 
 impl ZetaRegistryService for RegistryServiceImpl {
-    async fn call(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+    async fn call(&self) -> Result<RpcResponse<String>, RpcError> {
         Ok(RpcResponse::new("zeta".into()))
     }
 }
 
 impl AlphaRegistryService for BlockingRegistryServiceImpl {
-    async fn call(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+    async fn call(&self) -> Result<RpcResponse<String>, RpcError> {
         self.entered.wait().await;
         let _permit = self
             .release
@@ -255,7 +255,7 @@ async fn shutdown_closes_listener_before_registry_and_connection_drain_in_parall
         .connect()
         .await
         .unwrap();
-    let invocation = tokio::spawn(async move { client.call(RpcRequest::new(())).await });
+    let invocation = tokio::spawn(async move { client.call().await });
     entered.wait().await;
 
     let handle = server.handle();

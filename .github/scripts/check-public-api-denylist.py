@@ -64,6 +64,8 @@ REMOVED_ITEMS = {
     "ResponseCodec",
     "RpcService",
     "RpcServiceInfo",
+    "RpcMessage",
+    "RpcRequest",
     "Router",
     "ServiceSnapshot",
     "ServiceSubscription",
@@ -115,7 +117,6 @@ ALLOWED_PUBLIC_TRAITS = {
         "MetricsRecorder",
         "Middleware",
         "Registry",
-        "RpcMessage",
         "RetryPolicy",
     },
 }

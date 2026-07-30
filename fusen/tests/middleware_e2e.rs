@@ -2,11 +2,10 @@
 
 use fusen_rs::{
     ClientConfig, ClientRuntime, Middleware, MiddlewareFuture, MiddlewareStage, Next, RetryConfig,
-    RpcCategory, RpcContext, RpcError, RpcRequest, RpcResponse, RpcSide, Server, ServerConfig,
+    RpcCall, RpcCategory, RpcContext, RpcError, RpcResponse, RpcSide, Server, ServerConfig,
     WireProtocol, contract::ProtocolSet, interface,
 };
 use http::HeaderValue;
-use serde::{Deserialize, Serialize};
 use std::{
     sync::{
         Arc, Mutex,
@@ -19,12 +18,6 @@ use tokio::{
     net::TcpStream,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct MiddlewareRequest {
-    #[rpc(body)]
-    value: String,
-}
-
 #[interface(name = "middleware-contract")]
 trait MiddlewareContract {
     #[fusen_rs::method(
@@ -33,7 +26,8 @@ trait MiddlewareContract {
     )]
     async fn execute(
         &self,
-        request: RpcRequest<MiddlewareRequest>,
+        #[rpc(call)] call: RpcCall,
+        #[rpc(body)] value: String,
     ) -> Result<RpcResponse<String>, RpcError>;
 }
 
@@ -48,20 +42,16 @@ struct OrderedHandler {
 }
 
 impl MiddlewareContract for OrderedHandler {
-    async fn execute(
-        &self,
-        request: RpcRequest<MiddlewareRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
+    async fn execute(&self, call: RpcCall, value: String) -> Result<RpcResponse<String>, RpcError> {
         assert_eq!(
-            request
-                .extensions()
+            call.extensions()
                 .get::<ServerExtension>()
                 .map(|value| value.0),
             Some(23)
         );
-        assert_eq!(request.headers().get("x-client-chain").unwrap(), "ready");
+        assert_eq!(call.headers().get("x-client-chain").unwrap(), "ready");
         self.events.lock().unwrap().push("handler");
-        Ok(RpcResponse::new(request.into_body().value))
+        Ok(RpcResponse::new(value))
     }
 }
 
@@ -256,9 +246,7 @@ async fn four_stages_run_global_then_local_with_shared_server_extensions() {
         .unwrap();
 
     let response = client
-        .execute(RpcRequest::new(MiddlewareRequest {
-            value: "complete".to_owned(),
-        }))
+        .execute(RpcCall::new(), "complete".to_owned())
         .await
         .unwrap();
     assert_eq!(response.body(), "complete");
@@ -304,14 +292,15 @@ struct RetryHandler(AtomicUsize);
 impl MiddlewareContract for RetryHandler {
     async fn execute(
         &self,
-        request: RpcRequest<MiddlewareRequest>,
+        _call: RpcCall,
+        value: String,
     ) -> Result<RpcResponse<String>, RpcError> {
         if self.0.fetch_add(1, Ordering::AcqRel) == 0 {
             return Err(
                 RpcError::new(RpcCategory::Unavailable, "retry_once", "retry once").unwrap(),
             );
         }
-        Ok(RpcResponse::new(request.into_body().value))
+        Ok(RpcResponse::new(value))
     }
 }
 
@@ -379,9 +368,7 @@ async fn each_attempt_gets_an_isolated_clone_and_success_reports_final_attempts(
         .unwrap();
 
     let response = client
-        .execute(RpcRequest::new(MiddlewareRequest {
-            value: "retried".to_owned(),
-        }))
+        .execute(RpcCall::new(), "retried".to_owned())
         .await
         .unwrap();
     assert_eq!(response.body(), "retried");
@@ -418,7 +405,8 @@ struct UnreachableHandler;
 impl MiddlewareContract for UnreachableHandler {
     async fn execute(
         &self,
-        _request: RpcRequest<MiddlewareRequest>,
+        _call: RpcCall,
+        _value: String,
     ) -> Result<RpcResponse<String>, RpcError> {
         panic!("ServerHead rejection must not invoke the handler")
     }

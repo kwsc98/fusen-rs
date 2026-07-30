@@ -63,7 +63,7 @@ pub enum MiddlewareStage {
     ServerCall,
 }
 
-/// Framework metadata bound to an [`RpcRequest`].
+/// Framework metadata bound to an [`RpcCall`].
 #[derive(Clone, Debug)]
 pub struct CallInfo {
     request_id: String,
@@ -100,48 +100,21 @@ impl CallInfo {
     }
 }
 
-/// A typed RPC request shared by generated clients and interface handlers.
-#[derive(Clone, Debug)]
-pub struct RpcRequest<T> {
-    body: T,
+/// Optional call metadata passed explicitly by generated clients and interface handlers.
+#[derive(Clone, Debug, Default)]
+pub struct RpcCall {
     headers: HeaderMap,
     extensions: Extensions,
     call_info: Option<CallInfo>,
 }
 
-impl<T> RpcRequest<T> {
-    /// Creates a request with empty headers and extensions.
-    pub fn new(body: T) -> Self {
+impl RpcCall {
+    /// Creates call metadata with empty headers and extensions.
+    pub fn new() -> Self {
         Self {
-            body,
             headers: HeaderMap::new(),
             extensions: Extensions::new(),
             call_info: None,
-        }
-    }
-
-    /// Returns the typed request body.
-    pub const fn body(&self) -> &T {
-        &self.body
-    }
-
-    /// Returns the mutable typed request body.
-    pub fn body_mut(&mut self) -> &mut T {
-        &mut self.body
-    }
-
-    /// Consumes the request and returns its body.
-    pub fn into_body(self) -> T {
-        self.body
-    }
-
-    /// Transforms the body while preserving request metadata.
-    pub fn map<U>(self, map: impl FnOnce(T) -> U) -> RpcRequest<U> {
-        RpcRequest {
-            body: map(self.body),
-            headers: self.headers,
-            extensions: self.extensions,
-            call_info: self.call_info,
         }
     }
 
@@ -170,13 +143,12 @@ impl<T> RpcRequest<T> {
         self.call_info.as_ref()
     }
 
-    pub(crate) fn into_parts(self) -> (T, HeaderMap, Extensions) {
-        (self.body, self.headers, self.extensions)
+    pub(crate) fn into_parts(self) -> (HeaderMap, Extensions) {
+        (self.headers, self.extensions)
     }
 
-    pub(crate) fn from_server(body: T, context: &RpcContext) -> Self {
+    pub(crate) fn from_server(context: &RpcContext) -> Self {
         Self {
-            body,
             headers: context.headers.clone(),
             extensions: context.extensions.clone(),
             call_info: Some(context.call_info()),

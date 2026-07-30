@@ -7,10 +7,10 @@ use fusen_register::{
 };
 use fusen_rs::{
     ClientAdmissionConfig, ClientConfig, ClientRuntime, HttpServerConfig, Middleware,
-    MiddlewareFuture, Next, RpcCategory, RpcContext, RpcError, RpcOrigin, RpcRequest, RpcResponse,
-    Server, ServerConfig, ServerRequestConfig, ServerState, contract::ProtocolSet, interface,
+    MiddlewareFuture, Next, RpcCategory, RpcContext, RpcError, RpcOrigin, RpcResponse, Server,
+    ServerConfig, ServerRequestConfig, ServerState, contract::ProtocolSet, interface,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     io,
     net::{IpAddr, SocketAddr},
@@ -28,28 +28,13 @@ use tokio::{
 
 const SERVER_ADMISSION_LIMIT: usize = 1024;
 
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct ResourceBodyRequest {
-    #[rpc(body)]
-    value: String,
-}
-
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
-struct HoldRequest {
-    #[rpc(path)]
-    value: String,
-}
-
 #[interface(name = "server-resource-e2e")]
 trait ResourceService {
     #[fusen_rs::method(
         idempotency = "none",
         spring(method = "POST", path = "/resources/echo")
     )]
-    async fn echo(
-        &self,
-        request: RpcRequest<ResourceBodyRequest>,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    async fn echo(&self, #[rpc(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(
         idempotency = "none",
@@ -57,15 +42,14 @@ trait ResourceService {
     )]
     async fn panic_after_decode(
         &self,
-        request: RpcRequest<ResourceBodyRequest>,
+        #[rpc(body)] value: String,
     ) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(
         idempotency = "safe",
         spring(method = "GET", path = "/resources/hold/{value}")
     )]
-    async fn hold(&self, request: RpcRequest<HoldRequest>)
-    -> Result<RpcResponse<String>, RpcError>;
+    async fn hold(&self, #[rpc(path)] value: String) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct ResourceServiceImpl {
@@ -73,26 +57,15 @@ struct ResourceServiceImpl {
 }
 
 impl ResourceService for ResourceServiceImpl {
-    async fn echo(
-        &self,
-        request: RpcRequest<ResourceBodyRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(request.into_body().value))
+    async fn echo(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(value))
     }
 
-    async fn panic_after_decode(
-        &self,
-        request: RpcRequest<ResourceBodyRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        let value = request.into_body().value;
+    async fn panic_after_decode(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
         panic!("private panic after decoding {value}")
     }
 
-    async fn hold(
-        &self,
-        request: RpcRequest<HoldRequest>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        let value = request.into_body().value;
+    async fn hold(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
         if let Some(saturation) = &self.saturation {
             saturation.entered.fetch_add(1, Ordering::AcqRel);
             saturation.changed.notify_waiters();
@@ -289,26 +262,15 @@ async fn the_1025th_request_is_rejected_while_1024_are_in_flight() {
     let calls = (0..SERVER_ADMISSION_LIMIT)
         .map(|index| {
             let client = client.clone();
-            tokio::spawn(async move {
-                client
-                    .hold(RpcRequest::new(HoldRequest {
-                        value: index.to_string(),
-                    }))
-                    .await
-            })
+            tokio::spawn(async move { client.hold(index.to_string()).await })
         })
         .collect::<Vec<_>>();
     saturation.wait_until_full().await;
 
-    let rejected = tokio::time::timeout(
-        Duration::from_secs(2),
-        client.hold(RpcRequest::new(HoldRequest {
-            value: "overflow".into(),
-        })),
-    )
-    .await
-    .expect("fail-fast admission must not wait for an existing request")
-    .expect_err("the 1025th request must be rejected");
+    let rejected = tokio::time::timeout(Duration::from_secs(2), client.hold("overflow".into()))
+        .await
+        .expect("fail-fast admission must not wait for an existing request")
+        .expect_err("the 1025th request must be rejected");
     assert_eq!(rejected.category(), RpcCategory::ResourceExhausted);
     assert_eq!(rejected.origin(), RpcOrigin::Remote);
     assert_eq!(rejected.code().as_str(), "overloaded");

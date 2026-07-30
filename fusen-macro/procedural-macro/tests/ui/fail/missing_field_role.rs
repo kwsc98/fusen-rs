@@ -1,8 +1,11 @@
-use fusen_procedural_macro::RpcMessage;
+use fusen_procedural_macro::interface;
 
-#[derive(RpcMessage)]
-struct MissingRole {
-    id: String,
+struct RpcError;
+struct RpcResponse<T>(T);
+
+#[interface(name = "missing-role")]
+trait MissingRole {
+    async fn call(&self, id: String) -> Result<RpcResponse<()>, RpcError>;
 }
 
 fn main() {}

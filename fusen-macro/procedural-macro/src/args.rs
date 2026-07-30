@@ -149,7 +149,7 @@ impl SpringArgs {
                     return Err(syn::Error::new_spanned(
                         field,
                         format!(
-                            "unknown spring field `{unknown}`; expected `method` or `path`; field roles belong on RpcMessage fields"
+                            "unknown spring field `{unknown}`; expected `method` or `path`; wire roles belong on interface parameters"
                         ),
                     ));
                 }

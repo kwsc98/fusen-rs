@@ -14,26 +14,17 @@
 
 ## 接口契约
 
-一个 trait 宏定义 Client/Server 共享接口；每个 RPC 方法必须恰好接收一个 `RpcRequest<T>`，并返回 `Result<RpcResponse<T>, RpcError>`。
+一个 trait 宏定义 Client/Server 共享接口；每个 RPC 方法可直接接收零到多个具名的 owned 参数，并返回 `Result<RpcResponse<T>, RpcError>`。
 
 ```rust,no_run
-use fusen_rs::{RpcError, RpcRequest, RpcResponse, interface};
+use fusen_rs::{RpcError, RpcResponse, interface};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct User { pub id: String }
 
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
-pub struct GetUserRequest {
-    #[rpc(path)]
-    pub id: String,
-    #[rpc(query)]
-    pub expand: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+#[derive(Serialize, Deserialize)]
 pub struct CreateUser {
-    #[rpc(body)]
     pub id: String,
 }
 
@@ -45,7 +36,8 @@ pub trait UserApi {
     )]
     async fn get(
         &self,
-        request: RpcRequest<GetUserRequest>,
+        #[rpc(path)] id: String,
+        #[rpc(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
     #[fusen_rs::method(
@@ -54,12 +46,12 @@ pub trait UserApi {
     )]
     async fn create(
         &self,
-        request: RpcRequest<CreateUser>,
+        #[rpc(body)] user: CreateUser,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-宏生成 `UserApiClient` 与 `UserApiServer<T>`。生成 Client 和用户 Handler 都实现 `UserApi`，所有 Client 统一使用 `ClientBuilder<UserApiClient>`。`RpcMessage` 字段通过 `#[rpc(path)]`、`#[rpc(query)]` 或 `#[rpc(body)]` 声明 Spring wire 角色；Fusen V1 始终把 DTO 的所有字段编码到 `arguments` object。DTO 属性错误在 derive 阶段失败，跨类型 path/schema 不一致在 client connect 或 server build 阶段以分类错误返回，且早于网络 I/O。
+宏生成 `UserApiClient` 与 `UserApiServer<T>`。生成 Client 和用户 Handler 都实现 `UserApi`，所有 Client 统一使用 `ClientBuilder<UserApiClient>`。每个业务参数通过 `#[rpc(path)]`、`#[rpc(query)]` 或 `#[rpc(body)]` 声明 Spring wire 角色，并可用 `name = "..."` 覆盖 wire name；每个方法最多一个 body，重复 query 使用 `Vec<T>`。Path/query 必须序列化为 JSON 标量，body 可为任意 JSON 值。需要请求 headers、extensions 或框架调用信息的方法可以额外声明一个 `#[rpc(call)] call: RpcCall` 参数。无业务入参的方法无需占位参数。Fusen V1 始终按名称把全部业务参数编码到 `arguments` object；非法参数映射在宏展开阶段失败，非法序列化值在网络 I/O 前于本地失败。
 
 ## 客户端
 
@@ -163,7 +155,7 @@ Byte budget 覆盖 runtime 持有的 decoded/encoded payload，以及 Hyper 消�
 | `fusen-config` | 静态解析与 last-good 热配置 |
 | `fusen-nacos` | Nacos Registry 和热配置 adapter |
 | `fusen-observability` | Metrics SPI 与可选 telemetry adapter |
-| `fusen-procedural-macro` | 接口声明、消息 derive 与客户端/服务端 wrapper 生成 |
+| `fusen-procedural-macro` | 接口声明、参数校验与客户端/服务端 wrapper 生成 |
 | `fusen-rs` | HTTP/HTTPS Client、明文 HTTP Server、Middleware 与策略 runtime |
 
 详见[架构](docs/architecture.md)、[模块契约](docs/modules/README.md)、[兼容性](docs/compatibility.md)与[示例](examples/README.md)。
