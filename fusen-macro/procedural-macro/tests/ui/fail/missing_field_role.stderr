@@ -1,0 +1,5 @@
+error: each RpcMessage field must declare exactly one of #[rpc(path)], #[rpc(query)], or #[rpc(body)]
+ --> tests/ui/fail/missing_field_role.rs:5:5
+  |
+5 |     id: String,
+  |     ^^^^^^^^^^

@@ -1,0 +1,6 @@
+error: an RpcMessage may declare at most one #[rpc(body)] field
+ --> tests/ui/fail/duplicate_body.rs:7:5
+  |
+7 | /     #[rpc(body)]
+8 | |     second: String,
+  | |__________________^

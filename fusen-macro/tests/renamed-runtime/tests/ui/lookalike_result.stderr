@@ -1,12 +1,5 @@
-error[E0308]: mismatched types
-  --> tests/ui/lookalike_result.rs:14:1
+error: RPC methods must return Result<RpcResponse<T>, RpcError>
+  --> tests/ui/lookalike_result.rs:19:10
    |
-14 | #[service(name = "user")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^
-   | |
-   | expected `Result<(), RpcError>`, found `LookalikeResult<(), RpcError>`
-   | expected `std::result::Result<(), fusen_rs::RpcError>` because of return type
-   |
-   = note: expected enum `std::result::Result<(), fusen_rs::RpcError>`
-              found enum `LookalikeResult<(), lookalike::RpcError>`
-   = note: this error originates in the attribute macro `service` (in Nightly builds, run with -Z macro-backtrace for more info)
+19 |     ) -> lookalike::Result<rpc::RpcResponse<()>, rpc::RpcError>;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

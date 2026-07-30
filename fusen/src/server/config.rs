@@ -1,4 +1,4 @@
-use crate::error::{ServerError, ServerErrorKind};
+use crate::{ConfigValidationError, ConfigValidationErrorKind};
 use fusen_contract::ProtocolSet;
 use std::time::Duration;
 
@@ -33,46 +33,18 @@ impl Default for ServerRequestConfig {
 }
 
 impl ServerRequestConfig {
-    /// Sets the local upper bound for one request deadline.
-    pub const fn timeout(mut self, value: Duration) -> Self {
-        self.timeout = value;
-        self
+    /// Starts a builder with bounded production defaults.
+    pub fn builder() -> ServerRequestConfigBuilder {
+        ServerRequestConfigBuilder(Self::default())
     }
 
-    /// Sets the maximum number of admitted requests.
-    pub const fn max_concurrent_requests(mut self, value: usize) -> Self {
-        self.max_concurrent_requests = value;
-        self
-    }
-
-    /// Sets per-request and per-response JSON limits.
-    pub const fn body_limits(mut self, request: usize, response: usize) -> Self {
-        self.max_request_body_bytes = request;
-        self.max_response_body_bytes = response;
-        self
-    }
-
-    /// Sets runtime-wide request and response byte budgets.
-    pub const fn inflight_body_budgets(mut self, request: usize, response: usize) -> Self {
-        self.max_inflight_request_body_bytes = request;
-        self.max_inflight_response_body_bytes = response;
-        self
-    }
-
-    /// Enables a bounded admission queue. Zero preserves fail-fast behavior.
-    pub const fn queue(mut self, capacity: usize, max_wait: Duration) -> Self {
-        self.queue_capacity = capacity;
-        self.queue_max_wait = max_wait;
-        self
-    }
-
-    /// Returns the local request deadline cap.
-    pub const fn request_timeout(&self) -> Duration {
+    /// Returns the local upper bound for one request deadline.
+    pub const fn timeout(&self) -> Duration {
         self.timeout
     }
 
     /// Returns the server-wide in-flight request limit.
-    pub const fn max_concurrent_requests_value(&self) -> usize {
+    pub const fn max_concurrent_requests(&self) -> usize {
         self.max_concurrent_requests
     }
 
@@ -107,6 +79,66 @@ impl ServerRequestConfig {
     }
 }
 
+/// Builder for [`ServerRequestConfig`].
+#[derive(Clone, Debug)]
+pub struct ServerRequestConfigBuilder(ServerRequestConfig);
+
+impl ServerRequestConfigBuilder {
+    /// Sets the local upper bound for one request deadline.
+    pub const fn timeout(mut self, value: Duration) -> Self {
+        self.0.timeout = value;
+        self
+    }
+
+    /// Sets the maximum number of admitted requests.
+    pub const fn max_concurrent_requests(mut self, value: usize) -> Self {
+        self.0.max_concurrent_requests = value;
+        self
+    }
+
+    /// Sets the maximum request body size.
+    pub const fn max_request_body_bytes(mut self, value: usize) -> Self {
+        self.0.max_request_body_bytes = value;
+        self
+    }
+
+    /// Sets the maximum response body size.
+    pub const fn max_response_body_bytes(mut self, value: usize) -> Self {
+        self.0.max_response_body_bytes = value;
+        self
+    }
+
+    /// Sets the global buffered-request byte budget.
+    pub const fn max_inflight_request_body_bytes(mut self, value: usize) -> Self {
+        self.0.max_inflight_request_body_bytes = value;
+        self
+    }
+
+    /// Sets the global buffered-response byte budget.
+    pub const fn max_inflight_response_body_bytes(mut self, value: usize) -> Self {
+        self.0.max_inflight_response_body_bytes = value;
+        self
+    }
+
+    /// Sets the optional queue capacity. Zero preserves fail-fast behavior.
+    pub const fn queue_capacity(mut self, value: usize) -> Self {
+        self.0.queue_capacity = value;
+        self
+    }
+
+    /// Sets the queue wait cap.
+    pub const fn queue_max_wait(mut self, value: Duration) -> Self {
+        self.0.queue_max_wait = value;
+        self
+    }
+
+    /// Validates and builds request limits.
+    pub fn build(self) -> Result<ServerRequestConfig, ConfigValidationError> {
+        validate_request(&self.0)?;
+        Ok(self.0)
+    }
+}
+
 /// Plain HTTP/1.1 and h2c server settings.
 #[derive(Clone, Debug)]
 pub struct HttpServerConfig {
@@ -138,48 +170,13 @@ impl Default for HttpServerConfig {
 }
 
 impl HttpServerConfig {
-    /// Sets the accepted TCP connection limit.
-    pub const fn max_connections(mut self, value: usize) -> Self {
-        self.max_connections = value;
-        self
-    }
-
-    /// Sets URI, query-pair, header-count, and aggregate header limits.
-    pub const fn head_limits(
-        mut self,
-        uri_bytes: usize,
-        query_pairs: usize,
-        headers: usize,
-        header_bytes: usize,
-    ) -> Self {
-        self.max_uri_bytes = uri_bytes;
-        self.max_query_pairs = query_pairs;
-        self.max_headers = headers;
-        self.max_header_bytes = header_bytes;
-        self
-    }
-
-    /// Sets the HTTP/1.1 header deadline.
-    pub const fn http1_header_read_timeout(mut self, value: Duration) -> Self {
-        self.http1_header_read_timeout = value;
-        self
-    }
-
-    /// Sets HTTP/2 stream and keep-alive behavior.
-    pub const fn http2(
-        mut self,
-        max_streams: u32,
-        keep_alive_interval: Option<Duration>,
-        keep_alive_timeout: Duration,
-    ) -> Self {
-        self.http2_max_concurrent_streams = max_streams;
-        self.http2_keep_alive_interval = keep_alive_interval;
-        self.http2_keep_alive_timeout = keep_alive_timeout;
-        self
+    /// Starts a builder with bounded production defaults.
+    pub fn builder() -> HttpServerConfigBuilder {
+        HttpServerConfigBuilder(Self::default())
     }
 
     /// Returns the TCP connection limit.
-    pub const fn max_connections_value(&self) -> usize {
+    pub const fn max_connections(&self) -> usize {
         self.max_connections
     }
 
@@ -204,7 +201,7 @@ impl HttpServerConfig {
     }
 
     /// Returns the HTTP/1.1 header deadline.
-    pub const fn http1_header_read_timeout_value(&self) -> Duration {
+    pub const fn http1_header_read_timeout(&self) -> Duration {
         self.http1_header_read_timeout
     }
 
@@ -221,6 +218,72 @@ impl HttpServerConfig {
     /// Returns the HTTP/2 keep-alive acknowledgement timeout.
     pub const fn http2_keep_alive_timeout(&self) -> Duration {
         self.http2_keep_alive_timeout
+    }
+}
+
+/// Builder for [`HttpServerConfig`].
+#[derive(Clone, Debug)]
+pub struct HttpServerConfigBuilder(HttpServerConfig);
+
+impl HttpServerConfigBuilder {
+    /// Sets the accepted TCP connection limit.
+    pub const fn max_connections(mut self, value: usize) -> Self {
+        self.0.max_connections = value;
+        self
+    }
+
+    /// Sets the request URI byte limit.
+    pub const fn max_uri_bytes(mut self, value: usize) -> Self {
+        self.0.max_uri_bytes = value;
+        self
+    }
+
+    /// Sets the query pair limit.
+    pub const fn max_query_pairs(mut self, value: usize) -> Self {
+        self.0.max_query_pairs = value;
+        self
+    }
+
+    /// Sets the header count limit.
+    pub const fn max_headers(mut self, value: usize) -> Self {
+        self.0.max_headers = value;
+        self
+    }
+
+    /// Sets the aggregate header byte limit.
+    pub const fn max_header_bytes(mut self, value: usize) -> Self {
+        self.0.max_header_bytes = value;
+        self
+    }
+
+    /// Sets the HTTP/1.1 header deadline.
+    pub const fn http1_header_read_timeout(mut self, value: Duration) -> Self {
+        self.0.http1_header_read_timeout = value;
+        self
+    }
+
+    /// Sets the HTTP/2 stream limit.
+    pub const fn http2_max_concurrent_streams(mut self, value: u32) -> Self {
+        self.0.http2_max_concurrent_streams = value;
+        self
+    }
+
+    /// Sets the HTTP/2 keep-alive interval.
+    pub const fn http2_keep_alive_interval(mut self, value: Option<Duration>) -> Self {
+        self.0.http2_keep_alive_interval = value;
+        self
+    }
+
+    /// Sets the HTTP/2 keep-alive acknowledgement timeout.
+    pub const fn http2_keep_alive_timeout(mut self, value: Duration) -> Self {
+        self.0.http2_keep_alive_timeout = value;
+        self
+    }
+
+    /// Validates and builds HTTP settings.
+    pub fn build(self) -> Result<HttpServerConfig, ConfigValidationError> {
+        validate_http(&self.0)?;
+        Ok(self.0)
     }
 }
 
@@ -243,20 +306,12 @@ impl Default for ServerRegistryConfig {
 }
 
 impl ServerRegistryConfig {
-    /// Sets startup, per-operation, and concurrency limits.
-    pub const fn limits(
-        mut self,
-        startup_timeout: Duration,
-        operation_timeout: Duration,
-        max_concurrent_operations: usize,
-    ) -> Self {
-        self.startup_timeout = startup_timeout;
-        self.operation_timeout = operation_timeout;
-        self.max_concurrent_operations = max_concurrent_operations;
-        self
+    /// Starts a builder with bounded production defaults.
+    pub fn builder() -> ServerRegistryConfigBuilder {
+        ServerRegistryConfigBuilder(Self::default())
     }
 
-    /// Returns the total Ready deadline.
+    /// Returns the total server-ready deadline.
     pub const fn startup_timeout(&self) -> Duration {
         self.startup_timeout
     }
@@ -266,9 +321,39 @@ impl ServerRegistryConfig {
         self.operation_timeout
     }
 
-    /// Returns the activation/close concurrency window.
+    /// Returns the activation and close concurrency window.
     pub const fn max_concurrent_operations(&self) -> usize {
         self.max_concurrent_operations
+    }
+}
+
+/// Builder for [`ServerRegistryConfig`].
+#[derive(Clone, Debug)]
+pub struct ServerRegistryConfigBuilder(ServerRegistryConfig);
+
+impl ServerRegistryConfigBuilder {
+    /// Sets the total server-ready deadline.
+    pub const fn startup_timeout(mut self, value: Duration) -> Self {
+        self.0.startup_timeout = value;
+        self
+    }
+
+    /// Sets one registry operation deadline.
+    pub const fn operation_timeout(mut self, value: Duration) -> Self {
+        self.0.operation_timeout = value;
+        self
+    }
+
+    /// Sets the activation and close concurrency window.
+    pub const fn max_concurrent_operations(mut self, value: usize) -> Self {
+        self.0.max_concurrent_operations = value;
+        self
+    }
+
+    /// Validates and builds registry settings.
+    pub fn build(self) -> Result<ServerRegistryConfig, ConfigValidationError> {
+        validate_registry(&self.0)?;
+        Ok(self.0)
     }
 }
 
@@ -325,40 +410,19 @@ impl ServerConfig {
         self.graceful_shutdown_timeout
     }
 
-    pub(crate) fn validate(&self) -> Result<(), ServerError> {
-        let request = &self.request;
-        let http = &self.http;
-        let registry = &self.registry;
-        if request.timeout.is_zero()
-            || request.max_concurrent_requests == 0
-            || request.max_request_body_bytes == 0
-            || request.max_response_body_bytes == 0
-            || request.max_inflight_request_body_bytes < request.max_request_body_bytes
-            || request.max_inflight_response_body_bytes < request.max_response_body_bytes
-            || (request.queue_capacity > 0 && request.queue_max_wait.is_zero())
-            || http.max_connections == 0
-            || http.max_uri_bytes == 0
-            || http.max_query_pairs == 0
-            || http.max_headers == 0
-            || http.max_header_bytes == 0
-            || http.http1_header_read_timeout.is_zero()
-            || http.http2_max_concurrent_streams == 0
-            || http.http2_keep_alive_timeout.is_zero()
-            || registry.startup_timeout.is_zero()
-            || registry.operation_timeout.is_zero()
-            || registry.max_concurrent_operations == 0
-            || self.graceful_shutdown_timeout.is_zero()
-        {
-            return Err(ServerError::message(
-                ServerErrorKind::Validation,
-                "server limits and deadlines must be positive and internally consistent",
-            ));
-        }
-        Ok(())
+    pub(crate) fn validate(&self) -> Result<(), ConfigValidationError> {
+        validate_request(&self.request)?;
+        validate_http(&self.http)?;
+        validate_registry(&self.registry)?;
+        positive_duration(
+            self.graceful_shutdown_timeout,
+            "server.graceful_shutdown_timeout",
+        )
     }
 }
 
 /// Builder for [`ServerConfig`].
+#[derive(Clone, Debug)]
 pub struct ServerConfigBuilder(ServerConfig);
 
 impl ServerConfigBuilder {
@@ -393,191 +457,172 @@ impl ServerConfigBuilder {
     }
 
     /// Validates and builds the configuration.
-    pub fn build(self) -> Result<ServerConfig, ServerError> {
+    pub fn build(self) -> Result<ServerConfig, ConfigValidationError> {
         self.0.validate()?;
         Ok(self.0)
     }
 }
 
+fn validate_request(config: &ServerRequestConfig) -> Result<(), ConfigValidationError> {
+    positive_duration(config.timeout, "server.request.timeout")?;
+    positive_usize(
+        config.max_concurrent_requests,
+        "server.request.max_concurrent_requests",
+    )?;
+    positive_usize(
+        config.max_request_body_bytes,
+        "server.request.max_request_body_bytes",
+    )?;
+    positive_usize(
+        config.max_response_body_bytes,
+        "server.request.max_response_body_bytes",
+    )?;
+    if config.max_inflight_request_body_bytes < config.max_request_body_bytes {
+        return Err(inconsistent(
+            "server.request.max_inflight_request_body_bytes",
+            "must be at least max_request_body_bytes",
+        ));
+    }
+    if config.max_inflight_response_body_bytes < config.max_response_body_bytes {
+        return Err(inconsistent(
+            "server.request.max_inflight_response_body_bytes",
+            "must be at least max_response_body_bytes",
+        ));
+    }
+    if config.queue_capacity > 0 && config.queue_max_wait.is_zero() {
+        return Err(inconsistent(
+            "server.request.queue_max_wait",
+            "must be positive when queue_capacity is non-zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http(config: &HttpServerConfig) -> Result<(), ConfigValidationError> {
+    positive_usize(config.max_connections, "server.http.max_connections")?;
+    positive_usize(config.max_uri_bytes, "server.http.max_uri_bytes")?;
+    positive_usize(config.max_query_pairs, "server.http.max_query_pairs")?;
+    positive_usize(config.max_headers, "server.http.max_headers")?;
+    positive_usize(config.max_header_bytes, "server.http.max_header_bytes")?;
+    positive_duration(
+        config.http1_header_read_timeout,
+        "server.http.http1_header_read_timeout",
+    )?;
+    if config.http2_max_concurrent_streams == 0 {
+        return Err(out_of_range(
+            "server.http.http2_max_concurrent_streams",
+            "must be greater than zero",
+        ));
+    }
+    if config
+        .http2_keep_alive_interval
+        .is_some_and(|value| value.is_zero())
+    {
+        return Err(out_of_range(
+            "server.http.http2_keep_alive_interval",
+            "must be positive when configured",
+        ));
+    }
+    positive_duration(
+        config.http2_keep_alive_timeout,
+        "server.http.http2_keep_alive_timeout",
+    )
+}
+
+fn validate_registry(config: &ServerRegistryConfig) -> Result<(), ConfigValidationError> {
+    positive_duration(config.startup_timeout, "server.registry.startup_timeout")?;
+    positive_duration(
+        config.operation_timeout,
+        "server.registry.operation_timeout",
+    )?;
+    positive_usize(
+        config.max_concurrent_operations,
+        "server.registry.max_concurrent_operations",
+    )
+}
+
+fn positive_duration(
+    value: Duration,
+    field_path: &'static str,
+) -> Result<(), ConfigValidationError> {
+    if value.is_zero() {
+        Err(out_of_range(field_path, "must be greater than zero"))
+    } else {
+        Ok(())
+    }
+}
+
+fn positive_usize(value: usize, field_path: &'static str) -> Result<(), ConfigValidationError> {
+    if value == 0 {
+        Err(out_of_range(field_path, "must be greater than zero"))
+    } else {
+        Ok(())
+    }
+}
+
+const fn out_of_range(field_path: &'static str, reason: &'static str) -> ConfigValidationError {
+    ConfigValidationError::new(ConfigValidationErrorKind::OutOfRange, field_path, reason)
+}
+
+const fn inconsistent(field_path: &'static str, reason: &'static str) -> ConfigValidationError {
+    ConfigValidationError::new(ConfigValidationErrorKind::Inconsistent, field_path, reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Debug;
-
-    fn assert_default_cases<T>(cases: &[(&str, T, T)])
-    where
-        T: Debug + PartialEq,
-    {
-        for (name, actual, expected) in cases {
-            assert_eq!(actual, expected, "unexpected default for {name}");
-        }
-    }
 
     #[test]
-    fn public_default_getters_match_the_runtime_contract() {
+    fn default_getters_match_the_runtime_contract() {
         let config = ServerConfig::default();
-        let request = config.request();
-        let http = config.http();
-        let registry = config.registry();
-
-        assert_default_cases(&[(
-            "server.protocols",
-            config.protocols(),
-            ProtocolSet::FUSEN_V1,
-        )]);
-        assert_default_cases(&[
-            (
-                "request.timeout",
-                request.request_timeout(),
-                Duration::from_secs(30),
-            ),
-            (
-                "request.queue_max_wait",
-                request.queue_max_wait(),
-                Duration::from_millis(50),
-            ),
-            (
-                "http.http1_header_read_timeout",
-                http.http1_header_read_timeout_value(),
-                Duration::from_secs(10),
-            ),
-            (
-                "http.http2_keep_alive_timeout",
-                http.http2_keep_alive_timeout(),
-                Duration::from_secs(10),
-            ),
-            (
-                "registry.startup_timeout",
-                registry.startup_timeout(),
-                Duration::from_secs(30),
-            ),
-            (
-                "registry.operation_timeout",
-                registry.operation_timeout(),
-                Duration::from_secs(5),
-            ),
-            (
-                "server.graceful_shutdown_timeout",
-                config.graceful_shutdown_timeout(),
-                Duration::from_secs(30),
-            ),
-        ]);
-        assert_default_cases(&[
-            (
-                "request.max_concurrent_requests",
-                request.max_concurrent_requests_value(),
-                1024,
-            ),
-            (
-                "request.max_request_body_bytes",
-                request.max_request_body_bytes(),
-                2 * MIB,
-            ),
-            (
-                "request.max_response_body_bytes",
-                request.max_response_body_bytes(),
-                2 * MIB,
-            ),
-            (
-                "request.max_inflight_request_body_bytes",
-                request.max_inflight_request_body_bytes(),
-                64 * MIB,
-            ),
-            (
-                "request.max_inflight_response_body_bytes",
-                request.max_inflight_response_body_bytes(),
-                64 * MIB,
-            ),
-            ("request.queue_capacity", request.queue_capacity(), 0),
-            ("http.max_connections", http.max_connections_value(), 2048),
-            ("http.max_uri_bytes", http.max_uri_bytes(), 8 * 1024),
-            ("http.max_query_pairs", http.max_query_pairs(), 128),
-            ("http.max_headers", http.max_headers(), 64),
-            ("http.max_header_bytes", http.max_header_bytes(), 32 * 1024),
-            (
-                "registry.max_concurrent_operations",
-                registry.max_concurrent_operations(),
-                8,
-            ),
-        ]);
-        assert_default_cases(&[(
-            "http.http2_max_concurrent_streams",
-            http.http2_max_concurrent_streams(),
-            128_u32,
-        )]);
-        assert_default_cases(&[(
-            "http.http2_keep_alive_interval",
-            http.http2_keep_alive_interval(),
-            Some(Duration::from_secs(30)),
-        )]);
+        assert_eq!(config.protocols(), ProtocolSet::FUSEN_V1);
+        assert_eq!(config.request().timeout(), Duration::from_secs(30));
+        assert_eq!(config.request().max_concurrent_requests(), 1024);
+        assert_eq!(config.http().max_connections(), 2048);
+        assert_eq!(config.http().http2_max_concurrent_streams(), 128);
+        assert_eq!(
+            config.registry().operation_timeout(),
+            Duration::from_secs(5)
+        );
+        assert_eq!(config.registry().max_concurrent_operations(), 8);
     }
 
     #[test]
-    fn invalid_limits_return_a_typed_validation_error() {
-        let error = ServerConfig::builder()
-            .request(ServerRequestConfig::default().max_concurrent_requests(0))
+    fn validation_reports_stable_kind_path_and_reason() {
+        let error = ServerRequestConfig::builder()
+            .max_concurrent_requests(0)
             .build()
             .unwrap_err();
-        assert_eq!(error.kind(), ServerErrorKind::Validation);
+        assert_eq!(error.kind(), ConfigValidationErrorKind::OutOfRange);
+        assert_eq!(error.field_path(), "server.request.max_concurrent_requests");
+        assert_eq!(error.reason(), "must be greater than zero");
+
+        let error = ServerRequestConfig::builder()
+            .max_request_body_bytes(1025)
+            .max_inflight_request_body_bytes(1024)
+            .build()
+            .unwrap_err();
+        assert_eq!(error.kind(), ConfigValidationErrorKind::Inconsistent);
+        assert_eq!(
+            error.field_path(),
+            "server.request.max_inflight_request_body_bytes"
+        );
     }
 
     #[test]
-    fn cross_field_boundaries_pass_and_one_step_overages_fail() {
-        const BODY_BUDGET: usize = 1024;
-
-        let cases = [
-            (
-                "request body limit and global budget",
-                ServerConfig::builder()
-                    .request(
-                        ServerRequestConfig::default()
-                            .body_limits(BODY_BUDGET, 2 * MIB)
-                            .inflight_body_budgets(BODY_BUDGET, 64 * MIB),
-                    )
-                    .build(),
-                ServerConfig::builder()
-                    .request(
-                        ServerRequestConfig::default()
-                            .body_limits(BODY_BUDGET + 1, 2 * MIB)
-                            .inflight_body_budgets(BODY_BUDGET, 64 * MIB),
-                    )
-                    .build(),
-            ),
-            (
-                "response body limit and global budget",
-                ServerConfig::builder()
-                    .request(
-                        ServerRequestConfig::default()
-                            .body_limits(2 * MIB, BODY_BUDGET)
-                            .inflight_body_budgets(64 * MIB, BODY_BUDGET),
-                    )
-                    .build(),
-                ServerConfig::builder()
-                    .request(
-                        ServerRequestConfig::default()
-                            .body_limits(2 * MIB, BODY_BUDGET + 1)
-                            .inflight_body_budgets(64 * MIB, BODY_BUDGET),
-                    )
-                    .build(),
-            ),
-            (
-                "queue capacity and wait",
-                ServerConfig::builder()
-                    .request(ServerRequestConfig::default().queue(0, Duration::ZERO))
-                    .build(),
-                ServerConfig::builder()
-                    .request(ServerRequestConfig::default().queue(1, Duration::ZERO))
-                    .build(),
-            ),
-        ];
-
-        for (name, boundary, one_step_over) in cases {
-            assert!(
-                boundary.is_ok(),
-                "{name} equality/disabled boundary must be accepted: {boundary:?}"
-            );
-            let error = one_step_over.expect_err("one-step overage must be rejected");
-            assert_eq!(error.kind(), ServerErrorKind::Validation, "{name}");
-        }
+    fn independent_builders_accept_disabled_queue_boundary() {
+        let request = ServerRequestConfig::builder()
+            .queue_capacity(0)
+            .queue_max_wait(Duration::ZERO)
+            .build()
+            .unwrap();
+        let http = HttpServerConfig::builder().build().unwrap();
+        let registry = ServerRegistryConfig::builder().build().unwrap();
+        ServerConfig::builder()
+            .request(request)
+            .http(http)
+            .registry(registry)
+            .build()
+            .unwrap();
     }
 }

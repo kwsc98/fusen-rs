@@ -169,11 +169,25 @@ fn validate_key_component(value: &str, field: &'static str) -> Result<(), Config
 /// Owned, sendable future returned by configuration lifecycle APIs.
 pub type ConfigFuture<T> = Pin<Box<dyn Future<Output = Result<T, ConfigError>> + Send + 'static>>;
 
+/// Pluggable source that prepares a cancellation-safe configuration lifecycle.
+pub trait ConfigSource: Send + Sync + 'static {
+    /// Prepares one resource without starting provider side effects.
+    fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError>;
+}
+
+impl<T> ConfigSource for Arc<T>
+where
+    T: ConfigSource + ?Sized,
+{
+    fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError> {
+        (**self).prepare(key)
+    }
+}
+
 /// Provider-owned publication access for a prepared hot configuration.
 ///
 /// This type exposes replacement operations only. Its Tokio channel and lifecycle state remain
 /// private to `fusen-config`.
-#[doc(hidden)]
 #[derive(Clone)]
 pub struct ConfigPublisher {
     inner: Arc<PublisherInner>,
@@ -192,7 +206,6 @@ impl fmt::Debug for ConfigPublisher {
 /// The factory runs synchronously and must only construct owned state. Neither returned future is
 /// polled before [`ConfigHandle::activate`]. The publisher may be cloned into a provider callback;
 /// publications after close are rejected.
-#[doc(hidden)]
 pub fn prepare_config<P, A, C, CF>(prepare: P) -> ConfigHandle
 where
     P: FnOnce(ConfigPublisher) -> (A, C),
@@ -395,12 +408,12 @@ impl<T> ConfigSnapshot<T> {
     }
 
     /// Returns the shared typed value.
-    pub fn value(&self) -> &Arc<T> {
-        &self.value
+    pub fn value(&self) -> &T {
+        self.value.as_ref()
     }
 
     /// Clones the shared typed value without copying `T`.
-    pub fn shared_value(&self) -> Arc<T> {
+    pub fn shared(&self) -> Arc<T> {
         self.value.clone()
     }
 }
@@ -441,7 +454,7 @@ impl<T> HotConfig<T> {
 
     /// Returns the latest successfully parsed value.
     pub fn current(&self) -> Arc<T> {
-        self.snapshot().shared_value()
+        self.snapshot().shared()
     }
 
     /// Returns the most recent rejected provider update, if any.

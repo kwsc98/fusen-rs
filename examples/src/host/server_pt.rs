@@ -18,8 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(std::io::Error::other)?;
     let running = Server::builder(bind_addr.to_string())
         .config(config)
-        .service(DemoServiceServer::new(DemoServiceImpl))
-        .service(DemoServiceV2Server::new(DemoServiceImplV2))
+        .interface(DemoServiceServer::new(DemoServiceImpl))
+        .interface(DemoServiceV2Server::new(DemoServiceImplV2))
         .build()?
         .start()
         .await?;

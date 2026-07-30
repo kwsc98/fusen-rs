@@ -1,6 +1,5 @@
 use crate::{
-    Arguments, RpcCategory, RpcError,
-    middleware::MiddlewareDyn,
+    Middleware, RpcArguments, RpcCategory, RpcError,
     service::ErasedDispatch,
     wire::{SERVICE_GROUP, SERVICE_VERSION},
 };
@@ -21,7 +20,8 @@ pub(crate) struct Route {
     pub service: &'static ServiceDescriptor,
     pub method: &'static MethodDescriptor,
     pub dispatch: Arc<dyn ErasedDispatch>,
-    pub middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
+    pub head_middleware: Arc<[Arc<dyn Middleware>]>,
+    pub middleware: Arc<[Arc<dyn Middleware>]>,
 }
 
 struct SpringRouteLeaf {
@@ -202,7 +202,7 @@ impl MatchedRoute {
         query: Option<&str>,
         body: Option<Value>,
         max_query_pairs: usize,
-    ) -> Result<Arguments, RpcError> {
+    ) -> Result<RpcArguments, RpcError> {
         let mapping = self
             .route
             .method
@@ -224,7 +224,7 @@ impl MatchedRoute {
                 .or_default()
                 .push(value.into_owned());
         }
-        let mut arguments = Arguments::new();
+        let mut arguments = RpcArguments::new();
         for parameter in mapping.parameters() {
             let value = match parameter.source() {
                 SpringCloudParameterSource::Path => self
@@ -376,7 +376,7 @@ fn not_found() -> RpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RpcResult, runtime::BoxFuture, service::ServerInvocation};
+    use crate::{MiddlewareFuture, service::ServerInvocation};
     use fusen_contract::{
         Idempotency, MethodId, ServiceSelector, SpringCloudMethod, SpringCloudParameter,
         SpringCloudParameterCardinality,
@@ -385,7 +385,7 @@ mod tests {
     struct UnusedDispatch;
 
     impl ErasedDispatch for UnusedDispatch {
-        fn call<'a>(&'a self, _invocation: ServerInvocation) -> BoxFuture<'a, RpcResult> {
+        fn call<'a>(&'a self, _invocation: ServerInvocation) -> MiddlewareFuture<'a> {
             Box::pin(async { unreachable!("route matching tests never dispatch") })
         }
     }
@@ -434,7 +434,8 @@ mod tests {
             service: descriptor,
             method: &descriptor.methods()[0],
             dispatch: Arc::new(UnusedDispatch),
-            middleware: Arc::from(Vec::<Arc<dyn MiddlewareDyn>>::new()),
+            head_middleware: Arc::from(Vec::<Arc<dyn Middleware>>::new()),
+            middleware: Arc::from(Vec::<Arc<dyn Middleware>>::new()),
         }
     }
 

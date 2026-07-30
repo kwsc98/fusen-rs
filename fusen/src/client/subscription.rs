@@ -4,9 +4,9 @@ use crate::{
     runtime::metrics::SafeMetrics,
 };
 use fusen_contract::{ServiceSelector, WireProtocol};
-use fusen_observability::{DirectoryMetricState, MetricEvent};
+use fusen_observability::{DirectoryMetricState, DirectoryStateChangedEvent, MetricEvent};
 use fusen_register::{
-    Registry, SubscriptionHandle,
+    Registry, SubscriptionHandle, SubscriptionRequest,
     directory::{Directory, DirectoryPublisher, DirectoryState, directory},
     error::{RegistryError, RegistryErrorKind, RegistryOperation},
 };
@@ -92,7 +92,7 @@ impl SubscriptionManager {
             if let Some(slot) = slots.get(&key) {
                 slot.clone()
             } else {
-                if slots.len() >= self.config.max_subscriptions_value() {
+                if slots.len() >= self.config.max_subscriptions() {
                     return Err(ClientError::message(
                         ClientErrorKind::Discovery,
                         "runtime subscription limit reached",
@@ -126,7 +126,7 @@ impl SubscriptionManager {
                 slot
             }
         };
-        wait_until_ready(slot, self.config.initial_timeout_value()).await
+        wait_until_ready(slot, self.config.initial_timeout()).await
     }
 
     pub(crate) fn begin_shutdown(&self) {
@@ -286,7 +286,8 @@ async fn run_subscription(
             break;
         }
         let prepared = catch_unwind(AssertUnwindSafe(|| {
-            registry.prepare_subscription(key.selector.clone(), key.protocol)
+            registry
+                .prepare_subscription(SubscriptionRequest::new(key.selector.clone(), key.protocol))
         }));
         let handle = match prepared {
             Ok(Ok(handle)) => handle,
@@ -317,7 +318,7 @@ async fn run_subscription(
                     biased;
                     () = shutdown.cancelled() => None,
                     result = tokio::time::timeout(
-                        config.operation_timeout_value(),
+                        config.operation_timeout(),
                         handle.activate(),
                     ) => Some(result),
                 }
@@ -367,7 +368,7 @@ async fn run_subscription(
                 continue;
             }
             Err(_) => {
-                mark_disconnected(forwarder, &mut stale_deadline, config.max_staleness_value());
+                mark_disconnected(forwarder, &mut stale_deadline, config.max_staleness());
                 state.send_replace(SlotState::Quarantined);
                 record_directory_state(&metrics, &key.selector, DirectoryMetricState::Unavailable);
                 if let Err(error) = await_with_stale_deadline(
@@ -399,7 +400,7 @@ async fn run_subscription(
             forwarder,
             raw.snapshot(),
             &mut stale_deadline,
-            config.max_staleness_value(),
+            config.max_staleness(),
         );
         let provider_disconnected = loop {
             if let Some(deadline) = stale_deadline {
@@ -412,7 +413,7 @@ async fn run_subscription(
                                 forwarder,
                                 snapshot,
                                 &mut stale_deadline,
-                                config.max_staleness_value(),
+                                config.max_staleness(),
                             );
                         }
                         Err(_) => break true,
@@ -432,7 +433,7 @@ async fn run_subscription(
                                 forwarder,
                                 snapshot,
                                 &mut stale_deadline,
-                                config.max_staleness_value(),
+                                config.max_staleness(),
                             );
                         }
                         Err(_) => break true,
@@ -441,7 +442,7 @@ async fn run_subscription(
             }
         };
         if provider_disconnected {
-            mark_disconnected(forwarder, &mut stale_deadline, config.max_staleness_value());
+            mark_disconnected(forwarder, &mut stale_deadline, config.max_staleness());
         }
         if let Err(error) = await_with_stale_deadline(
             close_generation(&handle, &state, &config),
@@ -685,10 +686,9 @@ fn record_directory_state(
     selector: &ServiceSelector,
     state: DirectoryMetricState,
 ) {
-    metrics.record(&MetricEvent::DirectoryStateChanged {
-        service: selector.service_id(),
-        state,
-    });
+    metrics.record(&MetricEvent::DirectoryStateChanged(
+        DirectoryStateChangedEvent::new(selector.service_id(), state),
+    ));
 }
 
 async fn close_generation(
@@ -697,7 +697,7 @@ async fn close_generation(
     config: &DiscoveryConfig,
 ) -> Result<(), RegistryError> {
     handle.request_close();
-    match tokio::time::timeout(config.close_timeout_value(), handle.close()).await {
+    match tokio::time::timeout(config.close_timeout(), handle.close()).await {
         Ok(result) => result,
         Err(_) => {
             state.send_replace(SlotState::Quarantined);
@@ -713,8 +713,8 @@ async fn reconnect_delay(
 ) -> bool {
     *attempt = attempt.saturating_add(1);
     let delay = full_jitter_backoff(
-        config.reconnect_base_value(),
-        config.reconnect_cap_value(),
+        config.reconnect_base(),
+        config.reconnect_cap(),
         *attempt,
         &mut rand::rng(),
     );
@@ -736,11 +736,11 @@ fn closed() -> ClientError {
 mod tests {
     use super::*;
     use crate::resilience::breaker::{BreakerConfig, DEFAULT_ENDPOINT_IDLE_EVICTION};
-    use fusen_contract::{InstanceId, ServiceInstance, ServiceRegistration, ServiceWeight};
+    use fusen_contract::{InstanceId, ServiceInstance, ServiceWeight};
     use fusen_register::{
-        RegistrationHandle,
+        RegistrationHandle, RegistrationRequest, SubscriptionRequest,
         error::{RegistryErrorKind, RegistryOperation},
-        prepare_subscription as subscription_handle,
+        provider,
     };
     use std::sync::atomic::AtomicUsize;
     use tokio::sync::{Notify, oneshot};
@@ -797,8 +797,7 @@ mod tests {
     impl Registry for ControlledRegistry {
         fn prepare_registration(
             &self,
-            _registration: Arc<ServiceRegistration>,
-            _protocol: WireProtocol,
+            _request: RegistrationRequest,
         ) -> Result<RegistrationHandle, RegistryError> {
             Err(RegistryError::message(
                 RegistryOperation::PrepareRegistration,
@@ -809,8 +808,7 @@ mod tests {
 
         fn prepare_subscription(
             &self,
-            _selector: ServiceSelector,
-            _protocol: WireProtocol,
+            _request: SubscriptionRequest,
         ) -> Result<SubscriptionHandle, RegistryError> {
             let (publisher, directory) = directory();
             *self
@@ -832,7 +830,7 @@ mod tests {
             let close_count = self.close_count.clone();
             let provider_publisher = self.publisher.clone();
             let close_error = self.close_error;
-            Ok(subscription_handle(
+            Ok(provider::subscription(
                 directory,
                 async move {
                     activation_started.notify_one();
@@ -883,12 +881,15 @@ mod tests {
     }
 
     fn discovery_config() -> DiscoveryConfig {
-        DiscoveryConfig::default()
+        DiscoveryConfig::builder()
             .initial_timeout(Duration::from_secs(30))
             .operation_timeout(Duration::from_secs(5))
             .close_timeout(Duration::from_secs(3))
             .max_staleness(Duration::from_secs(10))
-            .reconnect_backoff(Duration::from_secs(1), Duration::from_secs(1))
+            .reconnect_base(Duration::from_secs(1))
+            .reconnect_cap(Duration::from_secs(1))
+            .build()
+            .unwrap()
     }
 
     fn endpoint_breakers() -> EndpointBreakers {

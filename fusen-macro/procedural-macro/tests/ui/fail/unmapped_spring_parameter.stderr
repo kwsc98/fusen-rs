@@ -1,5 +1,0 @@
-error: Spring source for parameter `expand` is missing; list it in `query = [...]` or `body = "..."`
- --> tests/ui/fail/unmapped_spring_parameter.rs:6:25
-  |
-6 |     async fn get(&self, expand: bool) -> Result<(), RpcError>;
-  |                         ^^^^^^

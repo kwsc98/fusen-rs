@@ -9,40 +9,57 @@
 - Rust 1.97、Edition 2024、Tokio 与 JSON。
 - Client 支持 canonical `http://` 与 `https://` endpoint。Fusen V1 在 HTTP 上使用 h2c、在 HTTPS 上使用 TLS/ALPN `h2`；Spring Cloud V1 在两种 scheme 上都使用 HTTP/1.1。
 - Client HTTPS 使用 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots 和严格的证书/hostname 验证。内置 Server 保持明文；入站 TLS 由 ingress、sidecar、反向代理或 service mesh 终止。
-- 稳定扩展面仅包括 `Middleware`、`Registry`、`Router`、`LoadBalancer`、`RetryPolicy` 和 `MetricsRecorder`。
+- 稳定扩展面仅包括 `Middleware`、`Registry`、`ConfigSource`、`InstanceRouter`、`LoadBalancer`、`RetryPolicy` 和 `MetricsRecorder`。
 - Transport、Codec、Acceptor、连接池与生命周期状态机均为 runtime 私有实现。
 
-## 服务契约
+## 接口契约
 
-一个 trait 宏定义完整服务；每个 RPC 方法显式声明重试语义，并返回 `Result<T, RpcError>`。
+一个 trait 宏定义 Client/Server 共享接口；每个 RPC 方法必须恰好接收一个 `RpcRequest<T>`，并返回 `Result<RpcResponse<T>, RpcError>`。
 
 ```rust,no_run
-use fusen_rs::{RpcError, method, service};
+use fusen_rs::{RpcError, RpcRequest, RpcResponse, interface};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct User { pub id: String }
 
-#[derive(Serialize, Deserialize)]
-pub struct CreateUser { pub id: String }
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+pub struct GetUserRequest {
+    #[rpc(path)]
+    pub id: String,
+    #[rpc(query)]
+    pub expand: Option<bool>,
+}
 
-#[service(name = "user", group = "prod", version = "1")]
-pub trait UserService {
-    #[method(
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+pub struct CreateUser {
+    #[rpc(body)]
+    pub id: String,
+}
+
+#[interface(name = "user", group = "prod", version = "1")]
+pub trait UserApi {
+    #[fusen_rs::method(
         idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}", query = ["expand"])
+        spring(method = "GET", path = "/users/{id}")
     )]
-    async fn get(&self, id: String, expand: Option<bool>) -> Result<User, RpcError>;
+    async fn get(
+        &self,
+        request: RpcRequest<GetUserRequest>,
+    ) -> Result<RpcResponse<User>, RpcError>;
 
-    #[method(
+    #[fusen_rs::method(
         idempotency = "none",
-        spring(method = "POST", path = "/users", body = "request")
+        spring(method = "POST", path = "/users")
     )]
-    async fn create(&self, request: CreateUser) -> Result<User, RpcError>;
+    async fn create(
+        &self,
+        request: RpcRequest<CreateUser>,
+    ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-宏只生成 `UserServiceClient`、`UserServiceClientBuilder` 与 `UserServiceServer`；实现类型直接实现 trait，不再需要实现宏。幂等性默认 `none`，不会根据 HTTP method 推断。Spring path 参数从 `{name}` 推导，query/body 必须显式列出；HEAD 因无响应 body 必须返回 `Result<(), RpcError>`；Fusen V1 始终按参数名编码全部参数。
+宏生成 `UserApiClient` 与 `UserApiServer<T>`。生成 Client 和用户 Handler 都实现 `UserApi`，所有 Client 统一使用 `ClientBuilder<UserApiClient>`。`RpcMessage` 字段通过 `#[rpc(path)]`、`#[rpc(query)]` 或 `#[rpc(body)]` 声明 Spring wire 角色；Fusen V1 始终把 DTO 的所有字段编码到 `arguments` object。DTO 属性错误在 derive 阶段失败，跨类型 path/schema 不一致在 client connect 或 server build 阶段以分类错误返回，且早于网络 I/O。
 
 ## 客户端
 
@@ -50,17 +67,17 @@ pub trait UserService {
 
 ```rust,no_run
 # use fusen_rs::{ClientError, ClientRuntime, WireProtocol};
-# use crate::UserServiceClient;
+# use crate::UserApiClient;
 # async fn run() -> Result<(), ClientError> {
 let runtime = ClientRuntime::builder().build()?;
 
-let client = UserServiceClient::builder(&runtime)
+let client = UserApiClient::builder(&runtime)
     .direct("http://127.0.0.1:8081")
     .protocol(WireProtocol::FusenV1)
     .connect()
     .await?;
 
-// 生成的 RPC 方法返回 Result<T, RpcError>。
+// 生成的 RPC 方法返回 Result<RpcResponse<T>, RpcError>。
 runtime.shutdown().await?;
 # Ok(())
 # }
@@ -82,10 +99,10 @@ TLS。Runtime 不读取系统 trust store，也不提供自定义 CA、mTLS 或�
 
 ```rust,no_run
 # use fusen_rs::{Server, ServerError};
-# use crate::{UserServiceServer, UserServiceImpl};
+# use crate::{UserApiServer, UserApiHandler};
 # async fn run() -> Result<(), ServerError> {
 let server = Server::builder("0.0.0.0:0")
-    .service(UserServiceServer::new(UserServiceImpl))
+    .interface(UserApiServer::new(UserApiHandler))
     .build()?;
 
 let running = server.start().await?;
@@ -133,7 +150,7 @@ Spring Cloud V1 按方法声明的 HTTP method/path/query/body 映射传输 `app
 | TCP 连接 | - | 2048 |
 | 单 H2 连接 stream | - | 128 |
 
-队列默认关闭。`QueueConfig::bounded(capacity)` 可显式启用有界队列，等待时间仍计入逻辑 deadline；其他 admission 与 byte budget 均 fail-fast。
+队列默认关闭。通过 `QueueConfig::builder().capacity(...).max_wait(...).build()?` 构建队列配置，再由 `ClientAdmissionConfigBuilder` 安装即可启用有界队列；等待时间仍计入逻辑 deadline，其他 admission 与 byte budget 均 fail-fast。
 
 Byte budget 覆盖 runtime 持有的 decoded/encoded payload，以及 Hyper 消费或取消前的排队 body chunk。协议 framing、HPACK/H2 codec staging 和 OS socket buffer 是独立有界的 transport overhead，不计入 body budget。
 
@@ -146,7 +163,7 @@ Byte budget 覆盖 runtime 持有的 decoded/encoded payload，以及 Hyper 消�
 | `fusen-config` | 静态解析与 last-good 热配置 |
 | `fusen-nacos` | Nacos Registry 和热配置 adapter |
 | `fusen-observability` | Metrics SPI 与可选 telemetry adapter |
-| `fusen-procedural-macro` | 服务声明及客户端/服务端 wrapper 生成 |
+| `fusen-procedural-macro` | 接口声明、消息 derive 与客户端/服务端 wrapper 生成 |
 | `fusen-rs` | HTTP/HTTPS Client、明文 HTTP Server、Middleware 与策略 runtime |
 
 详见[架构](docs/architecture.md)、[模块契约](docs/modules/README.md)、[兼容性](docs/compatibility.md)与[示例](examples/README.md)。

@@ -3,7 +3,10 @@
 use super::FailureClass;
 use fusen_contract::Idempotency;
 use rand::{Rng, RngExt};
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::time::Instant;
 
 const TOKEN_SCALE: u128 = 1_000_000_000;
@@ -86,6 +89,15 @@ impl RetryDecisionContext {
 pub trait RetryPolicy: Send + Sync + 'static {
     /// Evaluates one failed physical attempt.
     fn decide(&self, context: &RetryDecisionContext) -> RetryDecision;
+}
+
+impl<T> RetryPolicy for Arc<T>
+where
+    T: RetryPolicy + ?Sized,
+{
+    fn decide(&self, context: &RetryDecisionContext) -> RetryDecision {
+        (**self).decide(context)
+    }
 }
 
 /// Built-in conservative retry policy used when no extension is installed.

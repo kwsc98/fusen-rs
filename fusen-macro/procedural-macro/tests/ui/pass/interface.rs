@@ -1,0 +1,287 @@
+extern crate self as fusen_rs;
+
+use fusen_procedural_macro::{RpcMessage, interface};
+
+pub mod __macro {
+    pub mod v1 {
+        use std::{future::Future, marker::PhantomData, pin::Pin};
+
+        #[derive(Clone, Copy)]
+        pub struct MethodId(u16);
+
+        impl MethodId {
+            pub const fn new(value: u16) -> Self {
+                Self(value)
+            }
+
+            pub const fn get(self) -> u16 {
+                self.0
+            }
+        }
+
+        pub enum Idempotency {
+            None,
+            Idempotent,
+            Safe,
+        }
+
+        #[derive(Clone, Copy)]
+        pub enum RpcFieldSource {
+            Path,
+            Query,
+            Body,
+        }
+
+        #[derive(Clone, Copy)]
+        pub struct RpcField;
+
+        impl RpcField {
+            pub const fn new(
+                _rust_name: &'static str,
+                _name: &'static str,
+                _source: RpcFieldSource,
+                _repeated: bool,
+                _parse_spring_json_primitive: bool,
+            ) -> Self {
+                Self
+            }
+        }
+
+        pub trait RpcMessage: Send + 'static {
+            fn fields() -> &'static [RpcField];
+        }
+
+        impl RpcMessage for () {
+            fn fields() -> &'static [RpcField] {
+                &[]
+            }
+        }
+
+        pub mod http {
+            #[derive(Clone, Copy)]
+            pub struct Method;
+
+            impl Method {
+                pub const GET: Self = Self;
+                pub const POST: Self = Self;
+                pub const PUT: Self = Self;
+                pub const PATCH: Self = Self;
+                pub const DELETE: Self = Self;
+                pub const HEAD: Self = Self;
+                pub const OPTIONS: Self = Self;
+            }
+        }
+
+        #[derive(Debug)]
+        pub struct DescriptorError;
+
+        impl std::fmt::Display for DescriptorError {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("invalid descriptor")
+            }
+        }
+
+        pub struct SpringCloudMethod;
+
+        pub fn spring_method<T: RpcMessage>(
+            _method: http::Method,
+            _path: &str,
+        ) -> Result<SpringCloudMethod, String> {
+            Ok(SpringCloudMethod)
+        }
+
+        pub struct MethodDescriptor;
+
+        impl MethodDescriptor {
+            pub fn new(
+                _id: MethodId,
+                _identity: impl Into<String>,
+                _idempotency: Idempotency,
+                _spring: Option<SpringCloudMethod>,
+            ) -> Result<Self, DescriptorError> {
+                Ok(Self)
+            }
+        }
+
+        pub struct ServiceSelector;
+
+        impl ServiceSelector {
+            pub fn new(
+                _name: impl Into<String>,
+                _group: Option<String>,
+                _version: Option<String>,
+            ) -> Result<Self, DescriptorError> {
+                Ok(Self)
+            }
+        }
+
+        pub struct ServiceDescriptor;
+
+        impl ServiceDescriptor {
+            pub fn new(
+                _selector: ServiceSelector,
+                _methods: Vec<MethodDescriptor>,
+            ) -> Result<Self, DescriptorError> {
+                Ok(Self)
+            }
+        }
+
+        pub struct RpcRequest<T>(T);
+
+        impl<T> RpcRequest<T> {
+            pub fn new(body: T) -> Self {
+                Self(body)
+            }
+
+            pub fn into_body(self) -> T {
+                self.0
+            }
+        }
+
+        pub struct RpcResponse<T>(T);
+
+        impl<T> RpcResponse<T> {
+            pub fn new(body: T) -> Self {
+                Self(body)
+            }
+        }
+
+        #[derive(Debug)]
+        pub struct RpcError;
+
+        #[derive(Clone)]
+        pub struct ServiceClient;
+
+        impl ServiceClient {
+            pub async fn invoke<M, T>(
+                &self,
+                _method: MethodId,
+                _request: RpcRequest<M>,
+            ) -> Result<RpcResponse<T>, RpcError>
+            where
+                M: RpcMessage,
+            {
+                unimplemented!()
+            }
+        }
+
+        pub struct ClientRuntime;
+
+        pub struct ClientBuilder<C>(PhantomData<C>);
+
+        impl<C> ClientBuilder<C> {
+            pub fn new(
+                _runtime: &ClientRuntime,
+                _descriptor: fn() -> Result<&'static ServiceDescriptor, String>,
+                _create: fn(ServiceClient) -> C,
+            ) -> Self {
+                Self(PhantomData)
+            }
+        }
+
+        pub trait Middleware: Send + Sync + 'static {}
+
+        pub type MiddlewareResult = Result<RpcResponse<Vec<u8>>, RpcError>;
+        pub type MiddlewareFuture<'a> =
+            Pin<Box<dyn Future<Output = MiddlewareResult> + Send + 'a>>;
+
+        pub struct ServerInvocation;
+
+        impl ServerInvocation {
+            pub fn method_id(&self) -> MethodId {
+                MethodId::new(0)
+            }
+
+            pub fn decode_request<T: RpcMessage>(&mut self) -> Result<RpcRequest<T>, RpcError> {
+                unimplemented!()
+            }
+
+            pub fn encode_response<T>(self, _response: RpcResponse<T>) -> MiddlewareResult {
+                unimplemented!()
+            }
+        }
+
+        pub fn method_not_found(_method: MethodId) -> RpcError {
+            RpcError
+        }
+
+        type Dispatch<T> =
+            for<'a> fn(&'a T, ServerInvocation) -> MiddlewareFuture<'a>;
+
+        pub struct ServerService<T>(T);
+
+        impl<T> ServerService<T> {
+            pub fn new(
+                handler: T,
+                _descriptor: fn() -> Result<&'static ServiceDescriptor, String>,
+                _dispatch: Dispatch<T>,
+            ) -> Self {
+                Self(handler)
+            }
+
+            pub fn head_middleware(self, _middleware: impl Middleware) -> Self {
+                self
+            }
+
+            pub fn middleware(self, _middleware: impl Middleware) -> Self {
+                self
+            }
+
+            pub fn into_prepared(self) -> PreparedService {
+                PreparedService
+            }
+        }
+
+        pub struct PreparedService;
+
+        pub trait IntoServerService {
+            fn into_server_service(self) -> PreparedService;
+        }
+    }
+}
+
+pub use __macro::v1::{RpcError, RpcRequest, RpcResponse};
+
+#[derive(RpcMessage)]
+struct GetUserRequest {
+    #[rpc(path)]
+    id: String,
+    #[rpc(query)]
+    expand: Option<bool>,
+}
+
+struct User(String);
+
+#[interface(name = "user", group = "prod", version = "1")]
+trait UserApi {
+    #[fusen_procedural_macro::method(
+        idempotency = "safe",
+        spring(method = "GET", path = "/users/{id}")
+    )]
+    async fn get(
+        &self,
+        request: RpcRequest<GetUserRequest>,
+    ) -> Result<RpcResponse<User>, RpcError>;
+}
+
+struct Handler;
+
+impl UserApi for Handler {
+    async fn get(
+        &self,
+        request: RpcRequest<GetUserRequest>,
+    ) -> Result<RpcResponse<User>, RpcError> {
+        Ok(RpcResponse::new(User(request.into_body().id)))
+    }
+}
+
+fn assert_interface<T: UserApi>() {}
+
+fn main() {
+    assert_interface::<UserApiClient>();
+    assert_interface::<Handler>();
+    let runtime = __macro::v1::ClientRuntime;
+    let _: __macro::v1::ClientBuilder<UserApiClient> = UserApiClient::builder(&runtime);
+    let _server = UserApiServer::new(Handler);
+    let _ = UserApiClient::descriptor();
+}

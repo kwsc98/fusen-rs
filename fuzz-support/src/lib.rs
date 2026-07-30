@@ -4,9 +4,34 @@
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use serde_json::{Map, Value};
-use std::sync::{Arc, LazyLock};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{Arc, LazyLock},
+};
 
-pub type Arguments = Map<String, Value>;
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct RpcArguments(Map<String, Value>);
+
+impl RpcArguments {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Deref for RpcArguments {
+    type Target = Map<String, Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for RpcArguments {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 mod rpc_error {
     include!(concat!(
@@ -15,9 +40,11 @@ mod rpc_error {
     ));
 }
 
-pub use rpc_error::{
-    ErrorCode, InvalidErrorCode, ProblemDetails, RpcCategory, RpcError, RpcOrigin,
-};
+pub use rpc_error::{ErrorCode, InvalidErrorCode, RetryHint, RpcCategory, RpcError, RpcOrigin};
+
+mod rpc {
+    pub(crate) use crate::rpc_error::ProblemDetails;
+}
 
 mod runtime {
     pub(crate) mod budget {
@@ -35,21 +62,71 @@ mod runtime {
     }
 }
 
-pub struct RpcResponse {
-    status: StatusCode,
-    headers: HeaderMap,
-    result: Bytes,
+pub struct RpcBody {
+    bytes: Bytes,
     permit: Option<Arc<runtime::budget::BytePermit>>,
 }
 
-impl RpcResponse {
-    fn fixture(result: Bytes) -> Self {
+impl RpcBody {
+    fn from_bytes(bytes: Bytes) -> Self {
         Self {
-            status: StatusCode::OK,
-            headers: HeaderMap::new(),
-            result,
+            bytes,
             permit: None,
         }
+    }
+
+    fn into_parts(self) -> (Bytes, Option<Arc<runtime::budget::BytePermit>>) {
+        (self.bytes, self.permit)
+    }
+
+    fn hold_budget(&mut self, permit: runtime::budget::BytePermit) {
+        self.permit = Some(Arc::new(permit));
+    }
+}
+
+pub struct RpcResponse<T> {
+    body: T,
+    status: StatusCode,
+    headers: HeaderMap,
+}
+
+impl<T> RpcResponse<T> {
+    fn new(body: T) -> Self {
+        Self {
+            body,
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+        }
+    }
+
+    pub(crate) const fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    pub(crate) fn set_status(&mut self, status: StatusCode) -> Result<(), RpcError> {
+        if !status.is_success() {
+            return Err(RpcError::framework(
+                RpcCategory::InvalidArgument,
+                "invalid_response_status",
+                "RPC success response status must be 2xx",
+            ));
+        }
+        self.status = status;
+        Ok(())
+    }
+
+    pub(crate) const fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+
+    pub(crate) fn headers_mut(&mut self) -> &mut HeaderMap {
+        &mut self.headers
+    }
+}
+
+impl RpcResponse<RpcBody> {
+    fn fixture(result: Bytes) -> Self {
+        Self::new(RpcBody::from_bytes(result))
     }
 
     pub(crate) fn from_json_bytes(result: Bytes) -> Self {
@@ -65,56 +142,27 @@ impl RpcResponse {
         use runtime::budget::{BudgetedWriteFailure, BudgetedWriter};
 
         let exhausted = || {
-            RpcError::new(
+            RpcError::framework(
                 RpcCategory::ResourceExhausted,
                 "response_byte_budget_exhausted",
                 "server response byte budget is exhausted",
             )
-            .expect("static fuzz support error code is valid")
         };
         let mut writer =
             BudgetedWriter::new(limit, budget, wire_overhead).map_err(|_failure| exhausted())?;
         serde_json::to_writer(&mut writer, &value).map_err(|error| match writer.failure() {
             Some(BudgetedWriteFailure::BudgetExhausted) => exhausted(),
-            Some(BudgetedWriteFailure::LimitExceeded) | None => RpcError::new(
+            Some(BudgetedWriteFailure::LimitExceeded) | None => RpcError::framework(
                 RpcCategory::Internal,
                 "response_too_large",
                 error.to_string(),
-            )
-            .expect("static fuzz support error code is valid"),
+            ),
         })?;
         let (result, permit) = writer.into_parts();
-        Ok(Self {
-            status: StatusCode::OK,
-            headers: HeaderMap::new(),
-            result,
+        Ok(Self::new(RpcBody {
+            bytes: result,
             permit: Some(permit),
-        })
-    }
-
-    pub(crate) const fn status(&self) -> StatusCode {
-        self.status
-    }
-
-    pub(crate) fn set_status(&mut self, status: StatusCode) -> Result<(), RpcError> {
-        if !status.is_success() {
-            return Err(RpcError::new(
-                RpcCategory::InvalidArgument,
-                "invalid_response_status",
-                "RPC success response status must be 2xx",
-            )
-            .expect("static fuzz support error code is valid"));
-        }
-        self.status = status;
-        Ok(())
-    }
-
-    pub(crate) const fn headers(&self) -> &HeaderMap {
-        &self.headers
-    }
-
-    pub(crate) fn headers_mut(&mut self) -> &mut HeaderMap {
-        &mut self.headers
+        }))
     }
 
     pub(crate) fn into_wire_parts(
@@ -125,17 +173,21 @@ impl RpcResponse {
         Bytes,
         Option<Arc<runtime::budget::BytePermit>>,
     ) {
-        (self.status, self.headers, self.result, self.permit)
+        let (bytes, permit) = self.body.into_parts();
+        (self.status, self.headers, bytes, permit)
     }
 
     pub(crate) fn hold_budget(&mut self, permit: runtime::budget::BytePermit) {
-        self.permit = Some(Arc::new(permit));
+        self.body.hold_budget(permit);
     }
 }
 
 mod middleware {
     pub(crate) trait MiddlewareDyn: Send + Sync {}
 }
+
+#[cfg(not(test))]
+pub(crate) use middleware::MiddlewareDyn as Middleware;
 
 mod service {
     pub(crate) trait ErasedDispatch: Send + Sync {}
@@ -172,7 +224,7 @@ mod wire {
     pub(super) fn exercise_spring_path(path: &str, query: &str, body: &[u8]) {
         let (service, method) = crate::descriptor();
         let budget = ByteBudget::new(64 * 1024);
-        let mut arguments = Arguments::new();
+        let mut arguments = RpcArguments::new();
         arguments.insert(
             "path".to_owned(),
             serde_json::Value::String(path.to_owned()),

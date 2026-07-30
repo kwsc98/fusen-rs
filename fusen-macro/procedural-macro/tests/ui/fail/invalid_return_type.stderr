@@ -1,5 +1,0 @@
-error: the RPC error type must be `RpcError`
- --> tests/ui/fail/invalid_return_type.rs:5:39
-  |
-5 |     async fn get(&self) -> Result<(), String>;
-  |                                       ^^^^^^

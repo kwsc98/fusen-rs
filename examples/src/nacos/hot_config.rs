@@ -1,6 +1,6 @@
 //! Nacos last-good hot-configuration example.
 
-use fusen_config::ConfigKey;
+use fusen_config::{ConfigKey, ConfigSource};
 use fusen_nacos::{NacosConfig, NacosConfigSource};
 
 #[derive(serde::Deserialize)]
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = NacosConfig::builder()
         .server_addr(std::env::var("NACOS_ADDR").unwrap_or_else(|_| "127.0.0.1:8848".to_owned()))
-        .build();
+        .build()?;
     let source = NacosConfigSource::connect("fusen-nacos-hot-config", config).await?;
     // This archive can be imported directly into Nacos:
     // examples/resource/nacos_config_export_20250928160704.zip

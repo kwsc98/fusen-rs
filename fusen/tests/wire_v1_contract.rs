@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 use fusen_rs::{
-    ClientRuntime, ProblemDetails, RpcCategory, RpcError, Server, ServerConfig, WireProtocol,
-    contract::ProtocolSet, service,
+    ClientRuntime, RpcCategory, RpcError, RpcErrorDetails, RpcRequest, RpcResponse, Server,
+    ServerConfig, WireProtocol, contract::ProtocolSet, interface,
 };
 use http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version, header::CONTENT_TYPE};
 use http_body_util::{BodyExt, Full};
@@ -18,89 +18,136 @@ const FUSEN_CONTENT_TYPE: &str = "application/fusen+json;version=1";
 const JSON_CONTENT_TYPE: &str = "application/json";
 const PROBLEM_CONTENT_TYPE: &str = "application/problem+json";
 
+#[derive(Deserialize)]
+struct WireProblemDetails {
+    #[serde(rename = "type")]
+    type_uri: String,
+    status: u16,
+    detail: Option<String>,
+    instance: Option<String>,
+    code: String,
+    request_id: String,
+    retryable: bool,
+    details: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct CreateUser {
     name: String,
 }
 
-#[service(name = "wire-contract", group = "prod", version = "1")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
+struct EchoRequest {
+    #[rpc(path)]
+    name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
+struct CreateRequest {
+    #[rpc(path)]
+    id: String,
+    #[rpc(query)]
+    expand: Option<bool>,
+    #[rpc(body)]
+    request: CreateUser,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
+struct FilterRequest {
+    #[rpc(query)]
+    enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, fusen_rs::RpcMessage)]
+struct LabelsRequest {
+    #[rpc(query)]
+    label: Vec<String>,
+}
+
+#[interface(name = "wire-contract", group = "prod", version = "1")]
 trait WireContract {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/echo/{name}"))]
-    async fn echo(&self, name: String) -> Result<String, RpcError>;
+    async fn echo(&self, request: RpcRequest<EchoRequest>)
+    -> Result<RpcResponse<String>, RpcError>;
 
-    #[fusen_rs::method(
-        idempotency = "none",
-        spring(
-            method = "POST",
-            path = "/users/{id}",
-            query = ["expand"],
-            body = "request"
-        )
-    )]
+    #[fusen_rs::method(idempotency = "none", spring(method = "POST", path = "/users/{id}"))]
     async fn create(
         &self,
-        id: String,
-        expand: Option<bool>,
-        request: CreateUser,
-    ) -> Result<String, RpcError>;
+        request: RpcRequest<CreateRequest>,
+    ) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "HEAD", path = "/health"))]
-    async fn health(&self) -> Result<(), RpcError>;
+    async fn health(&self, request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError>;
 
     #[fusen_rs::method(idempotency = "safe", spring(method = "HEAD", path = "/unhealthy"))]
-    async fn unhealthy(&self) -> Result<(), RpcError>;
+    async fn unhealthy(&self, request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError>;
 
-    #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/filters", query = ["enabled"])
-    )]
-    async fn filter(&self, enabled: Option<bool>) -> Result<Option<bool>, RpcError>;
+    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/filters"))]
+    async fn filter(
+        &self,
+        request: RpcRequest<FilterRequest>,
+    ) -> Result<RpcResponse<Option<bool>>, RpcError>;
 
-    #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/labels", query = ["label"])
-    )]
-    async fn labels(&self, label: Vec<String>) -> Result<Vec<String>, RpcError>;
+    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/labels"))]
+    async fn labels(
+        &self,
+        request: RpcRequest<LabelsRequest>,
+    ) -> Result<RpcResponse<Vec<String>>, RpcError>;
 }
 
 struct FailingWireContract;
 
 impl WireContract for FailingWireContract {
-    async fn echo(&self, name: String) -> Result<String, RpcError> {
-        Ok(name)
+    async fn echo(
+        &self,
+        request: RpcRequest<EchoRequest>,
+    ) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(request.into_body().name))
     }
 
     async fn create(
         &self,
-        _id: String,
-        _expand: Option<bool>,
-        _request: CreateUser,
-    ) -> Result<String, RpcError> {
-        Err(RpcError::application(
+        _request: RpcRequest<CreateRequest>,
+    ) -> Result<RpcResponse<String>, RpcError> {
+        let mut details = RpcErrorDetails::new();
+        details.insert("field", json!("id"));
+        details.insert("constraint", json!("unique"));
+        let mut error = RpcError::application(
             StatusCode::CONFLICT,
             "user_conflict",
             "the user already exists",
         )
-        .expect("the fixture error is valid"))
+        .expect("the fixture error is valid")
+        .with_details(details);
+        error
+            .headers_mut()
+            .insert("x-error-scope", "user".parse().unwrap());
+        Err(error)
     }
 
-    async fn health(&self) -> Result<(), RpcError> {
-        Ok(())
+    async fn health(&self, _request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError> {
+        Ok(RpcResponse::new(()))
     }
 
-    async fn unhealthy(&self) -> Result<(), RpcError> {
+    async fn unhealthy(&self, _request: RpcRequest<()>) -> Result<RpcResponse<()>, RpcError> {
         Err(
             RpcError::application(StatusCode::CONFLICT, "unhealthy", "health check failed")
                 .unwrap(),
         )
     }
 
-    async fn filter(&self, enabled: Option<bool>) -> Result<Option<bool>, RpcError> {
-        Ok(enabled)
+    async fn filter(
+        &self,
+        request: RpcRequest<FilterRequest>,
+    ) -> Result<RpcResponse<Option<bool>>, RpcError> {
+        Ok(RpcResponse::new(request.into_body().enabled))
     }
 
-    async fn labels(&self, label: Vec<String>) -> Result<Vec<String>, RpcError> {
-        Ok(label)
+    async fn labels(
+        &self,
+        request: RpcRequest<LabelsRequest>,
+    ) -> Result<RpcResponse<Vec<String>>, RpcError> {
+        Ok(RpcResponse::new(request.into_body().label))
     }
 }
 
@@ -126,7 +173,13 @@ async fn fusen_v1_request_headers_and_envelopes_match_the_contract() {
         .unwrap();
 
     assert_eq!(
-        client.echo("Ada Lovelace".into()).await.unwrap(),
+        client
+            .echo(RpcRequest::new(EchoRequest {
+                name: "Ada Lovelace".into()
+            }))
+            .await
+            .unwrap()
+            .into_body(),
         "fusen-response"
     );
     let request = captured.recv().await.expect("fixture captured one request");
@@ -174,16 +227,16 @@ async fn spring_cloud_v1_path_query_body_and_raw_success_match_the_contract() {
         .unwrap();
 
     let response = client
-        .create(
-            "Ada Lovelace/analytical engine".into(),
-            Some(true),
-            CreateUser {
+        .create(RpcRequest::new(CreateRequest {
+            id: "Ada Lovelace/analytical engine".into(),
+            expand: Some(true),
+            request: CreateUser {
                 name: "Charles Babbage".into(),
             },
-        )
+        }))
         .await
         .unwrap();
-    assert_eq!(response, "spring-response");
+    assert_eq!(response.into_body(), "spring-response");
     let request = captured.recv().await.expect("fixture captured one request");
 
     assert_eq!(request.method, Method::POST);
@@ -225,7 +278,16 @@ async fn spring_cloud_v1_repeated_query_uses_one_key_per_value() {
         .unwrap();
 
     let labels = vec!["one".to_owned(), "two words".to_owned()];
-    assert_eq!(client.labels(labels.clone()).await.unwrap(), labels);
+    assert_eq!(
+        client
+            .labels(RpcRequest::new(LabelsRequest {
+                label: labels.clone()
+            }))
+            .await
+            .unwrap()
+            .into_body(),
+        labels
+    );
     let request = captured.recv().await.expect("fixture captured one request");
 
     assert_eq!(request.method, Method::GET);
@@ -250,7 +312,14 @@ async fn spring_cloud_v1_empty_repeated_query_omits_the_key() {
         .await
         .unwrap();
 
-    assert!(client.labels(Vec::new()).await.unwrap().is_empty());
+    assert!(
+        client
+            .labels(RpcRequest::new(LabelsRequest { label: Vec::new() }))
+            .await
+            .unwrap()
+            .into_body()
+            .is_empty()
+    );
     let request = captured.recv().await.expect("fixture captured one request");
     assert_eq!(request.uri.path(), "/labels");
     assert_eq!(request.uri.query(), None);
@@ -272,7 +341,9 @@ async fn client_rejects_duplicate_response_content_type() {
         .unwrap();
 
     let error = client
-        .echo("duplicate-content-type".into())
+        .echo(RpcRequest::new(EchoRequest {
+            name: "duplicate-content-type".into(),
+        }))
         .await
         .unwrap_err();
     assert_eq!(error.category(), RpcCategory::DataLoss);
@@ -291,7 +362,7 @@ async fn spring_cloud_v1_head_uses_a_unit_success_contract() {
         .unwrap();
     let server = Server::builder("127.0.0.1:0")
         .config(config)
-        .service(WireContractServer::new(FailingWireContract))
+        .interface(WireContractServer::new(FailingWireContract))
         .build()
         .unwrap()
         .start()
@@ -305,8 +376,8 @@ async fn spring_cloud_v1_head_uses_a_unit_success_contract() {
         .await
         .unwrap();
 
-    client.health().await.unwrap();
-    let error = client.unhealthy().await.unwrap_err();
+    client.health(RpcRequest::new(())).await.unwrap();
+    let error = client.unhealthy(RpcRequest::new(())).await.unwrap_err();
     assert_eq!(error.code().as_str(), "remote_head_error");
     assert_eq!(error.status(), StatusCode::CONFLICT);
 
@@ -323,7 +394,7 @@ async fn spring_cloud_v1_rejects_duplicate_scalar_query_parameters() {
         .unwrap();
     let server = Server::builder("127.0.0.1:0")
         .config(config)
-        .service(WireContractServer::new(FailingWireContract))
+        .interface(WireContractServer::new(FailingWireContract))
         .build()
         .unwrap()
         .start()
@@ -342,9 +413,53 @@ async fn spring_cloud_v1_rejects_duplicate_scalar_query_parameters() {
         PROBLEM_CONTENT_TYPE
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let problem: ProblemDetails = serde_json::from_slice(&body).unwrap();
+    let problem: WireProblemDetails = serde_json::from_slice(&body).unwrap();
     assert_eq!(problem.code.as_str(), "duplicate_query_parameter");
     assert_eq!(problem.status, StatusCode::BAD_REQUEST.as_u16());
+
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spring_cloud_v1_decodes_scalars_using_the_declared_dto_type() {
+    let config = ServerConfig::builder()
+        .protocols(ProtocolSet::ALL)
+        .build()
+        .unwrap();
+    let server = Server::builder("127.0.0.1:0")
+        .config(config)
+        .interface(WireContractServer::new(FailingWireContract))
+        .build()
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/echo/0")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = send_h1(server.local_addr(), request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        json!("0")
+    );
+
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/filters?enabled=true")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = send_h1(server.local_addr(), request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        json!(true)
+    );
 
     server.shutdown().await.unwrap();
 }
@@ -357,7 +472,7 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
         .unwrap();
     let server = Server::builder("127.0.0.1:0")
         .config(config)
-        .service(WireContractServer::new(FailingWireContract))
+        .interface(WireContractServer::new(FailingWireContract))
         .build()
         .unwrap()
         .start()
@@ -383,8 +498,9 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
         response.headers().get("x-request-id").unwrap(),
         "problem-request-42"
     );
+    assert_eq!(response.headers().get("x-error-scope").unwrap(), "user");
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let problem: ProblemDetails = serde_json::from_slice(&body).unwrap();
+    let problem: WireProblemDetails = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(
         problem.type_uri,
@@ -396,7 +512,11 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
     assert!(!problem.retryable);
     assert_eq!(problem.detail.as_deref(), Some("the user already exists"));
     assert_eq!(problem.instance.as_deref(), Some("/users/conflict"));
-
+    assert_eq!(problem.details.as_ref().unwrap()["field"], json!("id"));
+    assert_eq!(
+        problem.details.as_ref().unwrap()["constraint"],
+        json!("unique")
+    );
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
@@ -405,16 +525,18 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
         .await
         .unwrap();
     let error = client
-        .create(
-            "conflict".into(),
-            Some(false),
-            CreateUser { name: "Ada".into() },
-        )
+        .create(RpcRequest::new(CreateRequest {
+            id: "conflict".into(),
+            expand: Some(false),
+            request: CreateUser { name: "Ada".into() },
+        }))
         .await
         .expect_err("the application fixture always rejects create");
     assert_eq!(error.category(), RpcCategory::Application);
     assert_eq!(error.code().as_str(), "user_conflict");
-    assert!(!error.retryable());
+    assert!(!error.retry_hint().is_retryable());
+    assert_eq!(error.headers().get("x-error-scope").unwrap(), "user");
+    assert_eq!(error.details().unwrap().get("field"), Some(&json!("id")));
 
     drop(client);
     runtime.shutdown().await.unwrap();

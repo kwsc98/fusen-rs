@@ -3,11 +3,14 @@ use super::{
     runtime::{CLIENT_RUNNING, ClientRuntimeInner},
     transport::{HttpTransport, TransportFailureKind, circuit_open},
 };
+#[cfg(test)]
+use crate::RetryHint;
 use crate::{
-    Arguments, InstanceSnapshot, LoadBalancer, Router, RpcCategory, RpcContext, RpcError,
-    RpcOrigin, RpcResponse,
+    InstanceRouter, InstanceSnapshot, LoadBalancer, Middleware, MiddlewareStage, RouteRequest,
+    RpcBody, RpcCategory, RpcContext, RpcError, RpcMessage, RpcOrigin, RpcRequest, RpcResponse,
+    RpcSide,
     context::RpcContextParts,
-    middleware::{MiddlewareDyn, Next, RpcResult, Terminal},
+    middleware::{MiddlewareResult, Next, Terminal},
     resilience::{
         FailureClass,
         breaker::{BreakerPermit, BreakerRejection},
@@ -24,7 +27,10 @@ use fusen_contract::{
     InstanceId, MethodId, ServiceDescriptor, ServiceEndpoint, ServiceInstance, ServiceWeight,
     WireProtocol,
 };
-use fusen_observability::{MetricEvent, MetricOutcome, MetricSide};
+use fusen_observability::{
+    AdmissionRejectedEvent, AttemptFinishedEvent, InvocationFinishedEvent, InvocationStartedEvent,
+    MetricEvent, MetricOutcome, MetricSide,
+};
 use fusen_register::directory::{Directory, DirectoryState};
 use http::header::RETRY_AFTER;
 use serde::de::DeserializeOwned;
@@ -33,7 +39,10 @@ use serde_json::Value;
 use std::{
     collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant as StdInstant, SystemTime},
 };
 use tracing::Instrument;
@@ -54,17 +63,22 @@ pub(crate) struct ServiceClientInner {
     pub service: &'static ServiceDescriptor,
     pub protocol: WireProtocol,
     pub source: EndpointSource,
-    pub middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
-    pub routers: Arc<[Arc<dyn Router>]>,
+    pub middleware: Arc<[Arc<dyn Middleware>]>,
+    pub attempt_middleware: Arc<[Arc<dyn Middleware>]>,
+    pub routers: Arc<[Arc<dyn InstanceRouter>]>,
     pub load_balancer: Arc<dyn LoadBalancer>,
 }
 
 impl ServiceClient {
-    /// Executes one logical invocation and decodes its result within the logical deadline.
-    pub async fn invoke<T, F>(&self, method_id: MethodId, build_arguments: F) -> Result<T, RpcError>
+    /// Executes one typed logical invocation within the logical deadline.
+    pub async fn invoke<M, T>(
+        &self,
+        method_id: MethodId,
+        request: RpcRequest<M>,
+    ) -> Result<RpcResponse<T>, RpcError>
     where
+        M: RpcMessage,
         T: DeserializeOwned,
-        F: FnOnce() -> Result<Arguments, RpcError> + Send,
     {
         let method = self
             .inner
@@ -81,12 +95,14 @@ impl ServiceClient {
         self.inner
             .runtime
             .metrics
-            .record(&MetricEvent::InvocationStarted {
-                side: MetricSide::Client,
-                protocol: self.inner.protocol.as_str(),
-                service: self.inner.service.selector().service_id(),
-                method: method.fusen_identity(),
-            });
+            .record(&MetricEvent::InvocationStarted(
+                InvocationStartedEvent::new(
+                    MetricSide::Client,
+                    self.inner.protocol.as_str(),
+                    self.inner.service.selector().service_id(),
+                    method.fusen_identity(),
+                ),
+            ));
         let span = tracing::info_span!(
             "fusen.client.invocation",
             request_id = %request_id,
@@ -95,7 +111,10 @@ impl ServiceClient {
             method = method.fusen_identity(),
         );
         let invocation = async move {
-            let arguments = match catch_unwind(AssertUnwindSafe(build_arguments)) {
+            let (message, headers, extensions) = request.into_parts();
+            let arguments = match catch_unwind(AssertUnwindSafe(|| {
+                crate::interface::encode_message(&message)
+            })) {
                 Ok(result) => result?,
                 Err(_) => {
                     tracing::error!("RPC argument serialization panicked");
@@ -108,15 +127,24 @@ impl ServiceClient {
             };
             let transport = self.inner.runtime.transport().map_err(|_| closed_rpc())?;
             let context = RpcContext::new(RpcContextParts {
+                side: RpcSide::Client,
+                stage: MiddlewareStage::ClientCall,
                 request_id: request_id.clone(),
                 protocol: self.inner.protocol,
-                service: self.inner.service,
+                interface: self.inner.service,
                 method,
                 deadline,
-                attempt: 1,
-                headers: http::HeaderMap::new(),
-                arguments,
-                response_limit: self.inner.runtime.config.admission().response_body_limit(),
+                attempt: None,
+                endpoint: None,
+                headers,
+                extensions,
+                arguments: Some(arguments),
+                response_limit: self
+                    .inner
+                    .runtime
+                    .config
+                    .admission()
+                    .max_response_body_bytes(),
                 response_wire_overhead: 0,
                 response_budget: self.inner.runtime.response_budget.clone(),
             });
@@ -135,7 +163,6 @@ impl ServiceClient {
                     return Err(error);
                 }
             };
-            let status = response.status();
             let attempts = response.attempts();
             let service_permit = response.take_service_breaker();
             let endpoint_permit = if response.tracks_endpoint_breaker() {
@@ -186,7 +213,8 @@ impl ServiceClient {
                     .with_attempts(attempts));
                 }
             };
-            Ok((value, status, attempts))
+            let response = response.map(|_| value);
+            Ok(response)
         }
         .instrument(span);
         let result = tokio::select! {
@@ -198,10 +226,10 @@ impl ServiceClient {
             }
         };
         let (outcome, attempts, status_class, error_code) = match &result {
-            Ok((_, status, attempts)) => (
+            Ok(response) => (
                 MetricOutcome::Success,
-                *attempts,
-                Some(status_class(*status)),
+                response.attempts(),
+                Some(status_class(response.status())),
                 None,
             ),
             Err(error) => (
@@ -219,18 +247,20 @@ impl ServiceClient {
         self.inner
             .runtime
             .metrics
-            .record(&MetricEvent::InvocationFinished {
-                side: MetricSide::Client,
-                protocol: self.inner.protocol.as_str(),
-                service: self.inner.service.selector().service_id(),
-                method: method.fusen_identity(),
-                outcome,
-                status_class,
-                error_code,
-                duration: started.elapsed(),
-                attempts,
-            });
-        result.map(|(value, _, _)| value)
+            .record(&MetricEvent::InvocationFinished(
+                InvocationFinishedEvent::new(
+                    MetricSide::Client,
+                    self.inner.protocol.as_str(),
+                    self.inner.service.selector().service_id(),
+                    method.fusen_identity(),
+                    outcome,
+                    status_class,
+                    error_code,
+                    started.elapsed(),
+                    attempts,
+                ),
+            ));
+        result
     }
 }
 
@@ -241,7 +271,7 @@ struct InvocationTerminal<'a> {
 }
 
 impl Terminal for InvocationTerminal<'_> {
-    fn call<'a>(&'a self, context: RpcContext) -> BoxFuture<'a, RpcResult> {
+    fn call<'a>(&'a self, context: RpcContext) -> BoxFuture<'a, MiddlewareResult> {
         Box::pin(async move { self.execute(context).await })
     }
 }
@@ -269,25 +299,18 @@ impl InvocationTerminal<'_> {
         }
     }
 
-    async fn execute(&self, context: RpcContext) -> RpcResult {
-        let template = encode_request_template(
-            self.client.service,
-            context.method(),
-            self.client.protocol,
-            context.arguments(),
-            context.headers(),
-            self.client.runtime.config.admission().request_body_limit(),
-            &self.client.runtime.request_budget,
-        )?;
+    async fn execute(&self, context: RpcContext) -> MiddlewareResult {
         let service_breaker = self.client.runtime.service_breaker(self.client.service);
         let service_permit = service_breaker.try_acquire().map_err(|_| circuit_open())?;
-        match self.execute_attempts(context, template).await {
+        match self.execute_attempts(context).await {
             Ok(AttemptSuccess {
                 mut response,
                 endpoint_breaker_permit,
             }) => {
-                self.hold_endpoint_breaker(endpoint_breaker_permit);
-                response.track_endpoint_breaker();
+                if let Some(endpoint_breaker_permit) = endpoint_breaker_permit {
+                    self.hold_endpoint_breaker(endpoint_breaker_permit);
+                    response.track_endpoint_breaker();
+                }
                 response.hold_service_breaker(service_permit);
                 Ok(response)
             }
@@ -298,158 +321,97 @@ impl InvocationTerminal<'_> {
         }
     }
 
-    async fn execute_attempts(
-        &self,
-        context: RpcContext,
-        template: crate::wire::RequestTemplate,
-    ) -> Result<AttemptSuccess, RpcError> {
+    async fn execute_attempts(&self, context: RpcContext) -> Result<AttemptSuccess, RpcError> {
         let mut attempted_endpoints = HashSet::new();
         let mut attempt = 1u8;
-        let spring_head = template.method == http::Method::HEAD;
+        let spring_head = context
+            .method()
+            .spring_cloud()
+            .is_some_and(|mapping| *mapping.method() == http::Method::HEAD);
         loop {
             let started = StdInstant::now();
             let mut attempt_context = context.clone();
             attempt_context.set_attempt(attempt);
             let selected = self.select_endpoint(&attempt_context, &attempted_endpoints)?;
             let endpoint_key = selected.instance.endpoint().as_str().to_owned();
-            let bulkhead = self.client.runtime.endpoint_bulkhead(&endpoint_key);
-            let bulkhead_permit = match bulkhead.try_acquire_owned() {
-                Ok(permit) => permit,
-                Err(_) => {
-                    drop(selected.breaker_permit);
-                    return Err(RpcError::framework(
-                        RpcCategory::ResourceExhausted,
-                        "endpoint_overloaded",
-                        "selected endpoint concurrency is exhausted",
-                    )
-                    .with_attempts(attempt));
-                }
-            };
-            let request = match template.to_request(
-                selected.instance.endpoint(),
-                context.request_id(),
-                context.deadline().remaining(),
+            attempt_context.set_stage(MiddlewareStage::ClientAttempt);
+            attempt_context.set_endpoint(selected.instance.clone());
+            attempted_endpoints.insert(endpoint_key.clone());
+            let terminal = AttemptTerminal {
+                client: self.client,
+                transport: &self.transport,
+                endpoint: &selected.instance,
+                endpoint_key: &endpoint_key,
                 attempt,
-            ) {
-                Ok(request) => request,
+                spring_head,
+                called: AtomicBool::new(false),
+                observation: Mutex::new(AttemptObservation::default()),
+            };
+            let result = Next::new(&self.client.attempt_middleware, &terminal)
+                .run(attempt_context)
+                .await;
+            let observation = terminal.observation();
+            let retry_after = observation.retry_after;
+            let failure = match &result {
+                Ok(_) => {
+                    self.client
+                        .runtime
+                        .metrics
+                        .record(&MetricEvent::AttemptFinished(AttemptFinishedEvent::new(
+                            self.client.protocol.as_str(),
+                            self.client.service.selector().service_id(),
+                            context.method().fusen_identity(),
+                            attempt,
+                            MetricOutcome::Success,
+                            None,
+                            started.elapsed(),
+                        )));
+                    let mut response = result.expect("successful attempt contains a response");
+                    response.set_attempts(attempt);
+                    return Ok(AttemptSuccess {
+                        response,
+                        endpoint_breaker_permit: terminal
+                            .called
+                            .load(Ordering::Acquire)
+                            .then_some(selected.breaker_permit),
+                    });
+                }
                 Err(error) => {
-                    drop(selected.breaker_permit);
-                    drop(bulkhead_permit);
-                    return Err(error.with_attempts(attempt));
-                }
-            };
-            let attempt_span = tracing::info_span!(
-                "fusen.client.attempt",
-                request_id = %context.request_id(),
-                protocol = self.client.protocol.as_str(),
-                service = self.client.service.selector().service_id(),
-                method = context.method().fusen_identity(),
-                attempt,
-                endpoint = %endpoint_key,
-            );
-            attempted_endpoints.insert(endpoint_key);
-            let sent = tokio::select! {
-                biased;
-                () = self.client.runtime.force_cancel.cancelled() => {
-                    drop(selected.breaker_permit);
-                    drop(bulkhead_permit);
-                    return Err(cancelled().with_attempts(attempt));
-                },
-                result = context
-                    .deadline()
-                    .run(self.transport.send(request).instrument(attempt_span.clone())) => result,
-            };
-            let (result, failure, retry_after): (
-                Result<RpcResponse, RpcError>,
-                FailureClass,
-                Option<Duration>,
-            ) = match sent {
-                Err(_) => {
-                    let failure = FailureClass::Timeout;
-                    selected.breaker_permit.fail(failure);
-                    (Err(deadline_exceeded()), failure, None)
-                }
-                Ok(Err(error)) => {
-                    let failure = match error.kind {
-                        TransportFailureKind::Connect => FailureClass::Connect,
-                        TransportFailureKind::Io => FailureClass::Transport,
-                    };
-                    selected.breaker_permit.fail(failure);
-                    (Err(error.into_rpc()), failure, None)
-                }
-                Ok(Ok(response)) => {
-                    let retry_after = parse_retry_after(response.headers());
-                    match context
-                        .deadline()
-                        .run(
-                            decode_http_response(
-                                self.client.protocol,
-                                spring_head,
-                                response,
-                                self.client.runtime.config.admission().response_body_limit(),
-                                &self.client.runtime.response_budget,
-                            )
-                            .instrument(attempt_span),
-                        )
-                        .await
-                    {
-                        Err(_) => {
-                            let failure = FailureClass::Timeout;
-                            selected.breaker_permit.fail(failure);
-                            (Err(deadline_exceeded()), failure, retry_after)
-                        }
-                        Ok(Ok(response)) => {
-                            drop(bulkhead_permit);
-                            self.client
-                                .runtime
-                                .metrics
-                                .record(&MetricEvent::AttemptFinished {
-                                    protocol: self.client.protocol.as_str(),
-                                    service: self.client.service.selector().service_id(),
-                                    method: context.method().fusen_identity(),
-                                    attempt,
-                                    outcome: MetricOutcome::Success,
-                                    failure_class: None,
-                                    duration: started.elapsed(),
-                                });
-                            let mut response = response;
-                            response.set_attempts(attempt);
-                            return Ok(AttemptSuccess {
-                                response,
-                                endpoint_breaker_permit: selected.breaker_permit,
-                            });
-                        }
-                        Ok(Err(error)) => {
-                            let failure = classify_rpc(&error, self.client.protocol);
-                            selected.breaker_permit.fail(failure);
-                            (Err(error), failure, retry_after)
-                        }
+                    let failure = observation
+                        .failure
+                        .unwrap_or_else(|| classify_rpc(error, self.client.protocol));
+                    if let Some(breaker_failure) = observation.breaker_failure {
+                        selected.breaker_permit.fail(breaker_failure);
+                    } else if observation.transport_succeeded {
+                        selected.breaker_permit.succeed();
+                    } else {
+                        drop(selected.breaker_permit);
                     }
+                    failure
                 }
             };
-            drop(bulkhead_permit);
             self.client
                 .runtime
                 .metrics
-                .record(&MetricEvent::AttemptFinished {
-                    protocol: self.client.protocol.as_str(),
-                    service: self.client.service.selector().service_id(),
-                    method: context.method().fusen_identity(),
+                .record(&MetricEvent::AttemptFinished(AttemptFinishedEvent::new(
+                    self.client.protocol.as_str(),
+                    self.client.service.selector().service_id(),
+                    context.method().fusen_identity(),
                     attempt,
-                    outcome: if failure == FailureClass::Timeout {
+                    if failure == FailureClass::Timeout {
                         MetricOutcome::Timeout
                     } else {
                         MetricOutcome::Error
                     },
-                    failure_class: Some(failure_name(failure)),
-                    duration: started.elapsed(),
-                });
+                    Some(failure_name(failure)),
+                    started.elapsed(),
+                )));
             let error = result
                 .expect_err("failed attempt contains an RPC error")
                 .with_attempts(attempt);
             let (base, cap) = (
-                self.client.runtime.config.retry().backoff_base_value(),
-                self.client.runtime.config.retry().backoff_cap_value(),
+                self.client.runtime.config.retry().backoff_base(),
+                self.client.runtime.config.retry().backoff_cap(),
             );
             let mut delay = {
                 let mut rng = rand::rng();
@@ -464,7 +426,7 @@ impl InvocationTerminal<'_> {
             }
             let decision = RetryDecisionContext::new(
                 attempt,
-                self.client.runtime.config.retry().max_attempts_value(),
+                self.client.runtime.config.retry().max_attempts(),
                 context.method().idempotency(),
                 failure,
                 remaining,
@@ -536,8 +498,9 @@ impl InvocationTerminal<'_> {
         }
         let mut routed = InstanceSnapshot::new(instances);
         for router in self.client.routers.iter() {
-            routed = match catch_unwind(AssertUnwindSafe(|| router.route(context, routed.clone())))
-            {
+            routed = match catch_unwind(AssertUnwindSafe(|| {
+                router.route(RouteRequest::new(context, routed.clone()))
+            })) {
                 Ok(Ok(instances)) => instances,
                 Ok(Err(error)) => return Err(error),
                 Err(_) => {
@@ -603,8 +566,161 @@ impl InvocationTerminal<'_> {
 }
 
 struct AttemptSuccess {
-    response: RpcResponse,
-    endpoint_breaker_permit: BreakerPermit,
+    response: RpcResponse<RpcBody>,
+    endpoint_breaker_permit: Option<BreakerPermit>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct AttemptObservation {
+    retry_after: Option<Duration>,
+    failure: Option<FailureClass>,
+    breaker_failure: Option<FailureClass>,
+    transport_succeeded: bool,
+}
+
+struct AttemptTerminal<'a> {
+    client: &'a ServiceClientInner,
+    transport: &'a HttpTransport,
+    endpoint: &'a ServiceInstance,
+    endpoint_key: &'a str,
+    attempt: u8,
+    spring_head: bool,
+    called: AtomicBool,
+    observation: Mutex<AttemptObservation>,
+}
+
+impl AttemptTerminal<'_> {
+    fn observe(&self, update: impl FnOnce(&mut AttemptObservation)) {
+        update(
+            &mut self
+                .observation
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+    }
+
+    fn observation(&self) -> AttemptObservation {
+        *self
+            .observation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+impl Terminal for AttemptTerminal<'_> {
+    fn call<'a>(&'a self, context: RpcContext) -> BoxFuture<'a, MiddlewareResult> {
+        self.called.store(true, Ordering::Release);
+        Box::pin(async move {
+            let bulkhead = self.client.runtime.endpoint_bulkhead(self.endpoint_key);
+            let _bulkhead_permit = bulkhead.try_acquire_owned().map_err(|_| {
+                RpcError::framework(
+                    RpcCategory::ResourceExhausted,
+                    "endpoint_overloaded",
+                    "selected endpoint concurrency is exhausted",
+                )
+            })?;
+            let template = encode_request_template(
+                self.client.service,
+                context.method(),
+                self.client.protocol,
+                context
+                    .arguments()
+                    .expect("client attempt context contains encoded arguments"),
+                context.headers(),
+                self.client
+                    .runtime
+                    .config
+                    .admission()
+                    .max_request_body_bytes(),
+                &self.client.runtime.request_budget,
+            )?;
+            let request = template.to_request(
+                self.endpoint.endpoint(),
+                context.request_id(),
+                context.deadline().remaining(),
+                self.attempt,
+            )?;
+            let attempt_span = tracing::info_span!(
+                "fusen.client.attempt",
+                request_id = %context.request_id(),
+                protocol = self.client.protocol.as_str(),
+                service = self.client.service.selector().service_id(),
+                method = context.method().fusen_identity(),
+                attempt = self.attempt,
+                endpoint = %self.endpoint_key,
+            );
+            let sent = tokio::select! {
+                biased;
+                () = self.client.runtime.force_cancel.cancelled() => {
+                    return Err(cancelled());
+                }
+                result = context.deadline().run(
+                    self.transport.send(request).instrument(attempt_span.clone())
+                ) => result,
+            };
+            let response = match sent {
+                Err(_) => {
+                    self.observe(|value| {
+                        value.failure = Some(FailureClass::Timeout);
+                        value.breaker_failure = Some(FailureClass::Timeout);
+                    });
+                    return Err(deadline_exceeded());
+                }
+                Ok(Err(error)) => {
+                    let failure = match error.kind {
+                        TransportFailureKind::Connect => FailureClass::Connect,
+                        TransportFailureKind::Io => FailureClass::Transport,
+                    };
+                    self.observe(|value| {
+                        value.failure = Some(failure);
+                        value.breaker_failure = Some(failure);
+                    });
+                    return Err(error.into_rpc());
+                }
+                Ok(Ok(response)) => response,
+            };
+            let retry_after = parse_retry_after(response.headers());
+            self.observe(|value| value.retry_after = retry_after);
+            match context
+                .deadline()
+                .run(
+                    decode_http_response(
+                        self.client.protocol,
+                        self.spring_head,
+                        response,
+                        self.client
+                            .runtime
+                            .config
+                            .admission()
+                            .max_response_body_bytes(),
+                        &self.client.runtime.response_budget,
+                    )
+                    .instrument(attempt_span),
+                )
+                .await
+            {
+                Err(_) => {
+                    self.observe(|value| {
+                        value.failure = Some(FailureClass::Timeout);
+                        value.breaker_failure = Some(FailureClass::Timeout);
+                    });
+                    Err(deadline_exceeded())
+                }
+                Ok(Err(error)) => {
+                    let failure = classify_rpc(&error, self.client.protocol);
+                    self.observe(|value| {
+                        value.failure = Some(failure);
+                        value.breaker_failure = Some(failure);
+                    });
+                    Err(error)
+                }
+                Ok(Ok(response)) => {
+                    self.observe(|value| value.transport_succeeded = true);
+                    Ok(response)
+                }
+            }
+        })
+    }
 }
 
 struct UnattemptedBreakerPermit(Option<BreakerPermit>);
@@ -642,10 +758,9 @@ async fn acquire_admission(
         Err(AdmissionError::Overloaded) => {}
     }
     let Some(queue) = &runtime.queue_slots else {
-        runtime.metrics.record(&MetricEvent::AdmissionRejected {
-            side: MetricSide::Client,
-            reason: "concurrency",
-        });
+        runtime.metrics.record(&MetricEvent::AdmissionRejected(
+            AdmissionRejectedEvent::new(MetricSide::Client, "concurrency"),
+        ));
         return Err(RpcError::framework(
             RpcCategory::ResourceExhausted,
             "overloaded",
@@ -660,7 +775,7 @@ async fn acquire_admission(
         )
     })?;
     let queue_deadline = deadline.min(Deadline::after(
-        runtime.config.admission().queue_value().max_wait(),
+        runtime.config.admission().queue().max_wait(),
     ));
     let result = queue_deadline.run(runtime.admission.enter()).await;
     drop(queue_permit);
@@ -681,7 +796,7 @@ fn classify_rpc(error: &RpcError, protocol: WireProtocol) -> FailureClass {
         return FailureClass::Application;
     }
     if error.origin() == RpcOrigin::Local {
-        if error.retryable() {
+        if error.retry_hint().is_retryable() {
             return FailureClass::Transport;
         }
         return match error.category() {
@@ -706,7 +821,9 @@ fn classify_rpc(error: &RpcError, protocol: WireProtocol) -> FailureClass {
             _ => FailureClass::RemoteServer,
         };
         return match protocol {
-            WireProtocol::FusenV1 if !error.retryable() => FailureClass::RemoteFailure,
+            WireProtocol::FusenV1 if !error.retry_hint().is_retryable() => {
+                FailureClass::RemoteFailure
+            }
             WireProtocol::FusenV1 | WireProtocol::SpringCloudV1 => failure,
             _ => FailureClass::RemoteFailure,
         };
@@ -801,9 +918,11 @@ mod tests {
     use super::*;
     use crate::{
         BreakerThreshold, CircuitBreakerConfig, ClientConfig, ClientRuntime, ErrorCode,
-        InstanceSnapshot, LoadBalancer, ProblemDetails, RetryConfig, Router,
-        middleware::{MiddlewareDyn, erase_middleware},
+        InstanceRouter, InstanceSnapshot, LoadBalancer, MiddlewareFuture, RetryConfig,
+        RouteRequest, RpcArguments, RpcRequest,
+        middleware::erase_middleware,
         resilience::breaker::BreakerState,
+        rpc::ProblemDetails,
         runtime::budget::ByteBudget,
         wire::{
             ATTEMPT, JSON_CONTENT_TYPE, PROBLEM_CONTENT_TYPE, REQUEST_ID, SERVICE_GROUP, TIMEOUT_MS,
@@ -860,23 +979,16 @@ mod tests {
     impl MetricsRecorder for InvocationMetrics {
         fn record(&self, event: &MetricEvent<'_>) {
             match event {
-                MetricEvent::InvocationStarted {
-                    side: MetricSide::Client,
-                    ..
-                } => {
+                MetricEvent::InvocationStarted(event) if event.side() == MetricSide::Client => {
                     self.started.fetch_add(1, Ordering::SeqCst);
                 }
-                MetricEvent::InvocationFinished {
-                    side: MetricSide::Client,
-                    outcome: MetricOutcome::Success,
-                    ..
-                } => {
+                MetricEvent::InvocationFinished(event)
+                    if event.side() == MetricSide::Client
+                        && event.outcome() == MetricOutcome::Success =>
+                {
                     self.succeeded.fetch_add(1, Ordering::SeqCst);
                 }
-                MetricEvent::InvocationFinished {
-                    side: MetricSide::Client,
-                    ..
-                } => {
+                MetricEvent::InvocationFinished(event) if event.side() == MetricSide::Client => {
                     self.failed.fetch_add(1, Ordering::SeqCst);
                 }
                 _ => {}
@@ -908,12 +1020,8 @@ mod tests {
 
     struct PanickingRouter;
 
-    impl Router for PanickingRouter {
-        fn route(
-            &self,
-            _context: &RpcContext,
-            _instances: InstanceSnapshot,
-        ) -> Result<InstanceSnapshot, RpcError> {
+    impl InstanceRouter for PanickingRouter {
+        fn route(&self, _request: RouteRequest<'_>) -> Result<InstanceSnapshot, RpcError> {
             panic!("private router panic")
         }
     }
@@ -941,24 +1049,27 @@ mod tests {
     struct ReplaceRemoteResult;
 
     impl crate::Middleware for ReplaceRemoteResult {
-        async fn handle<'a>(&'a self, context: RpcContext, next: Next<'a>) -> RpcResult {
-            let local_response = context.clone();
-            drop(next.run(context).await?);
-            local_response.respond("middleware-result")
+        fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+            Box::pin(async move {
+                let local_response = context.clone();
+                drop(next.run(context).await?);
+                local_response.respond("middleware-result")
+            })
         }
     }
 
     fn remote_error(status: StatusCode, retryable: bool) -> RpcError {
-        RpcError::from_remote(ProblemDetails {
-            type_uri: "urn:fusen:error:remote_test".to_owned(),
-            title: "remote test".to_owned(),
-            status: status.as_u16(),
-            detail: None,
-            instance: None,
-            code: ErrorCode::new("remote_test").unwrap(),
-            request_id: "request-1".to_owned(),
+        RpcError::from_remote(ProblemDetails::new(
+            "urn:fusen:error:remote_test",
+            "remote test",
+            status.as_u16(),
+            None,
+            None,
+            ErrorCode::new("remote_test").unwrap(),
+            "request-1",
             retryable,
-        })
+            None,
+        ))
     }
 
     fn replay_service() -> &'static ServiceDescriptor {
@@ -1002,32 +1113,28 @@ mod tests {
         retry: RetryConfig,
         endpoint_close_successes: u32,
     ) -> ClientConfig {
-        let endpoint = BreakerThreshold::endpoint_defaults().thresholds(
-            Duration::from_secs(10),
-            10,
-            1,
-            1.0,
-            Duration::from_secs(10),
-            1,
-            endpoint_close_successes,
-        );
-        let service = BreakerThreshold::service_defaults().thresholds(
-            Duration::from_secs(30),
-            10,
-            1,
-            1.0,
-            Duration::from_secs(15),
-            1,
-            1,
-        );
+        let endpoint = BreakerThreshold::endpoint_builder()
+            .minimum_samples(1)
+            .failure_ratio(1.0)
+            .close_successes(endpoint_close_successes)
+            .build()
+            .unwrap();
+        let service = BreakerThreshold::service_builder()
+            .minimum_samples(1)
+            .failure_ratio(1.0)
+            .half_open_probes(1)
+            .close_successes(1)
+            .build()
+            .unwrap();
+        let circuit_breaker = CircuitBreakerConfig::builder()
+            .endpoint(endpoint)
+            .service(service)
+            .build()
+            .unwrap();
         ClientConfig::builder()
             .request_timeout(request_timeout)
             .retry(retry)
-            .circuit_breaker(
-                CircuitBreakerConfig::default()
-                    .endpoint(endpoint)
-                    .service(service),
-            )
+            .circuit_breaker(circuit_breaker)
             .build()
             .unwrap()
     }
@@ -1049,8 +1156,9 @@ mod tests {
                 service: resilience_service(),
                 protocol: WireProtocol::SpringCloudV1,
                 source: EndpointSource::Discovery(directory),
-                middleware: Arc::from(Vec::<Arc<dyn MiddlewareDyn>>::new()),
-                routers: Arc::from(Vec::<Arc<dyn Router>>::new()),
+                middleware: Arc::from(Vec::<Arc<dyn crate::Middleware>>::new()),
+                attempt_middleware: Arc::from(Vec::<Arc<dyn crate::Middleware>>::new()),
+                routers: Arc::from(Vec::<Arc<dyn InstanceRouter>>::new()),
                 load_balancer: Arc::new(FirstEndpoint),
             }),
         };
@@ -1064,8 +1172,9 @@ mod tests {
                 service: resilience_service(),
                 protocol: WireProtocol::SpringCloudV1,
                 source: EndpointSource::Direct(endpoint),
-                middleware: Arc::from(Vec::<Arc<dyn MiddlewareDyn>>::new()),
-                routers: Arc::from(Vec::<Arc<dyn Router>>::new()),
+                middleware: Arc::from(Vec::<Arc<dyn crate::Middleware>>::new()),
+                attempt_middleware: Arc::from(Vec::<Arc<dyn crate::Middleware>>::new()),
+                routers: Arc::from(Vec::<Arc<dyn InstanceRouter>>::new()),
                 load_balancer: Arc::new(FirstEndpoint),
             }),
         }
@@ -1242,7 +1351,7 @@ mod tests {
         let service = replay_service();
         let method = service.method(MethodId::new(0)).unwrap();
         let endpoint: ServiceEndpoint = "http://127.0.0.1:8080".parse().unwrap();
-        let mut arguments = Arguments::new();
+        let mut arguments = RpcArguments::new();
         arguments.insert("value".to_owned(), json!({"nested": [1, 2, 3]}));
         let mut application_headers = HeaderMap::new();
         application_headers.insert("authorization", HeaderValue::from_static("Bearer test"));
@@ -1338,15 +1447,19 @@ mod tests {
             };
             let service = resilience_service();
             let context = RpcContext::new(RpcContextParts {
+                side: RpcSide::Client,
+                stage: MiddlewareStage::ClientAttempt,
                 request_id: "selection-test".to_owned(),
                 protocol: WireProtocol::SpringCloudV1,
-                service,
+                interface: service,
                 method: service.method(MethodId::new(0)).unwrap(),
                 deadline: Deadline::after(Duration::from_secs(1)),
-                attempt: 1,
+                attempt: std::num::NonZeroU8::new(1),
+                endpoint: None,
                 headers: HeaderMap::new(),
-                arguments: Arguments::new(),
-                response_limit: runtime.inner.config.admission().response_body_limit(),
+                extensions: http::Extensions::new(),
+                arguments: Some(RpcArguments::new()),
+                response_limit: runtime.inner.config.admission().max_response_body_bytes(),
                 response_wire_overhead: 0,
                 response_budget: runtime.inner.response_budget.clone(),
             });
@@ -1369,9 +1482,9 @@ mod tests {
 
         let mut router_client = direct_client(&runtime, endpoint.clone());
         Arc::get_mut(&mut router_client.inner).unwrap().routers =
-            Arc::from([Arc::new(PanickingRouter) as Arc<dyn Router>]);
+            Arc::from([Arc::new(PanickingRouter) as Arc<dyn InstanceRouter>]);
         let error = router_client
-            .invoke::<Value, _>(MethodId::new(0), || Ok(Arguments::new()))
+            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
             .await
             .unwrap_err();
         assert_eq!(error.code().as_str(), "router_panic");
@@ -1381,7 +1494,7 @@ mod tests {
             .unwrap()
             .load_balancer = Arc::new(PanickingLoadBalancer);
         let error = load_balancer_client
-            .invoke::<Value, _>(MethodId::new(0), || Ok(Arguments::new()))
+            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
             .await
             .unwrap_err();
         assert_eq!(error.code().as_str(), "load_balancer_panic");
@@ -1393,16 +1506,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn retry_policy_panic_stops_after_the_first_attempt() {
-        let problem = ProblemDetails {
-            type_uri: "urn:fusen:error:unavailable:fixture_unavailable".to_owned(),
-            title: "Service Unavailable".to_owned(),
-            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-            detail: Some("retry later".to_owned()),
-            instance: None,
-            code: ErrorCode::new("fixture_unavailable").unwrap(),
-            request_id: "fixture-request".to_owned(),
-            retryable: true,
-        };
+        let problem = ProblemDetails::new(
+            "urn:fusen:error:unavailable:fixture_unavailable",
+            "Service Unavailable",
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            Some("retry later".to_owned()),
+            None,
+            ErrorCode::new("fixture_unavailable").unwrap(),
+            "fixture-request",
+            true,
+            None,
+        );
         let (captured_tx, mut captured_rx) = mpsc::unbounded_channel();
         let (endpoint, fixture) = spawn_full_endpoint(
             "retry-policy-panic",
@@ -1415,7 +1529,11 @@ mod tests {
         let runtime = ClientRuntime::builder()
             .config(resilience_config(
                 Duration::from_secs(1),
-                RetryConfig::default().backoff(Duration::from_nanos(1), Duration::from_nanos(1)),
+                RetryConfig::builder()
+                    .backoff_base(Duration::from_nanos(1))
+                    .backoff_cap(Duration::from_nanos(1))
+                    .build()
+                    .unwrap(),
             ))
             .retry_policy(PanickingRetryPolicy)
             .build()
@@ -1423,7 +1541,7 @@ mod tests {
         let client = direct_client(&runtime, endpoint);
 
         let error = client
-            .invoke::<Value, _>(MethodId::new(0), || Ok(Arguments::new()))
+            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
             .await
             .unwrap_err();
         assert_eq!(error.code().as_str(), "retry_policy_panic");
@@ -1450,7 +1568,11 @@ mod tests {
         .await;
         let config = resilience_config(
             Duration::from_secs(2),
-            RetryConfig::default().backoff(Duration::from_nanos(1), Duration::from_nanos(1)),
+            RetryConfig::builder()
+                .backoff_base(Duration::from_nanos(1))
+                .backoff_cap(Duration::from_nanos(1))
+                .build()
+                .unwrap(),
         );
         let runtime = ClientRuntime::builder().config(config).build().unwrap();
         let (_publisher, client) = discovered_client(
@@ -1461,10 +1583,11 @@ mod tests {
             ],
         );
 
-        let value: Value = client
-            .invoke(MethodId::new(0), || Ok(Arguments::new()))
+        let value = client
+            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_body();
         assert_eq!(value, json!("healthy"));
         let first = captured_rx.recv().await.unwrap();
         let second = captured_rx.recv().await.unwrap();
@@ -1521,7 +1644,11 @@ mod tests {
         .await;
         let config = resilience_config(
             Duration::from_secs(2),
-            RetryConfig::default().backoff(Duration::from_nanos(1), Duration::from_nanos(1)),
+            RetryConfig::builder()
+                .backoff_base(Duration::from_nanos(1))
+                .backoff_cap(Duration::from_nanos(1))
+                .build()
+                .unwrap(),
         );
         let runtime = ClientRuntime::builder().config(config).build().unwrap();
         let (publisher, client) =
@@ -1535,7 +1662,7 @@ mod tests {
             let client = client.clone();
             async move {
                 client
-                    .invoke::<Value, _>(MethodId::new(0), || Ok(Arguments::new()))
+                    .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
                     .await
             }
         });
@@ -1553,7 +1680,7 @@ mod tests {
         assert_eq!(latest.instances()[0].endpoint(), &new_endpoint);
         release_failure.send(()).unwrap();
 
-        let value = invocation.await.unwrap().unwrap();
+        let value = invocation.await.unwrap().unwrap().into_body();
         assert_eq!(value, json!("new-snapshot"));
         let second = captured_rx.recv().await.unwrap();
         assert_eq!((second.endpoint, second.attempt), ("new", 2));
@@ -1567,16 +1694,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn infeasible_retry_after_stops_without_spending_a_retry_token() {
-        let problem = ProblemDetails {
-            type_uri: "urn:fusen:error:unavailable:fixture_unavailable".to_owned(),
-            title: "Service Unavailable".to_owned(),
-            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-            detail: Some("retry later".to_owned()),
-            instance: None,
-            code: ErrorCode::new("fixture_unavailable").unwrap(),
-            request_id: "fixture-request".to_owned(),
-            retryable: true,
-        };
+        let problem = ProblemDetails::new(
+            "urn:fusen:error:unavailable:fixture_unavailable",
+            "Service Unavailable",
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            Some("retry later".to_owned()),
+            None,
+            ErrorCode::new("fixture_unavailable").unwrap(),
+            "fixture-request",
+            true,
+            None,
+        );
         let (captured_tx, mut captured_rx) = mpsc::unbounded_channel();
         let (endpoint, fixture) = spawn_full_endpoint(
             "retry-after",
@@ -1588,15 +1716,19 @@ mod tests {
         .await;
         let config = resilience_config(
             Duration::from_millis(100),
-            RetryConfig::default()
-                .backoff(Duration::from_nanos(1), Duration::from_nanos(1))
-                .budget(1, 1),
+            RetryConfig::builder()
+                .backoff_base(Duration::from_nanos(1))
+                .backoff_cap(Duration::from_nanos(1))
+                .budget_capacity(1)
+                .budget_refill_per_second(1)
+                .build()
+                .unwrap(),
         );
         let runtime = ClientRuntime::builder().config(config).build().unwrap();
         let client = direct_client(&runtime, endpoint);
 
         let error = client
-            .invoke::<Value, _>(MethodId::new(0), || Ok(Arguments::new()))
+            .invoke::<(), Value>(MethodId::new(0), RpcRequest::new(()))
             .await
             .expect_err("Retry-After does not fit in the logical deadline");
         assert_eq!(error.attempts(), 1);
@@ -1632,7 +1764,7 @@ mod tests {
         let client = direct_client(&runtime, endpoint);
 
         let error = client
-            .invoke::<StructuredResult, _>(MethodId::new(0), || Ok(Arguments::new()))
+            .invoke::<(), StructuredResult>(MethodId::new(0), RpcRequest::new(()))
             .await
             .expect_err("a scalar result cannot decode into the generated object type");
         assert_eq!(error.category(), RpcCategory::DataLoss);
@@ -1687,7 +1819,7 @@ mod tests {
             Arc::from([erase_middleware(ReplaceRemoteResult)]);
 
         let error = client
-            .invoke::<StructuredResult, _>(MethodId::new(0), || Ok(Arguments::new()))
+            .invoke::<(), StructuredResult>(MethodId::new(0), RpcRequest::new(()))
             .await
             .expect_err("middleware replacement does not match the generated return type");
         assert_eq!(error.category(), RpcCategory::DataLoss);
@@ -1766,7 +1898,7 @@ mod tests {
             "transport failed",
             io::Error::new(io::ErrorKind::ConnectionReset, "controlled reset"),
         )
-        .mark_retryable();
+        .with_retry_hint(RetryHint::Retryable);
         assert_eq!(
             classify_rpc(&error, WireProtocol::SpringCloudV1),
             FailureClass::Transport

@@ -2,4 +2,7 @@
 
 mod error;
 
-pub use error::{ErrorCode, InvalidErrorCode, ProblemDetails, RpcCategory, RpcError, RpcOrigin};
+pub(crate) use error::ProblemDetails;
+pub use error::{
+    ErrorCode, InvalidErrorCode, RetryHint, RpcCategory, RpcError, RpcErrorDetails, RpcOrigin,
+};

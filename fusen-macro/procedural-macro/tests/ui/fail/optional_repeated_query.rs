@@ -1,13 +1,9 @@
-use fusen_procedural_macro::service;
+use fusen_procedural_macro::RpcMessage;
 
-#[service(name = "search")]
-trait SearchService {
-    #[fusen_procedural_macro::method(
-        spring(method = "GET", path = "/search", query = ["tags"])
-    )]
-    async fn search(&self, tags: Option<Vec<String>>) -> Result<(), RpcError>;
+#[derive(RpcMessage)]
+struct OptionalRepeatedQuery {
+    #[rpc(query)]
+    tags: Option<Vec<String>>,
 }
-
-struct RpcError;
 
 fn main() {}

@@ -38,6 +38,63 @@ fn validate_application_name(value: &str) -> Result<(), &'static str> {
     }
 }
 
+/// Stable classification for invalid Nacos configuration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NacosConfigValidationErrorKind {
+    /// One setting is malformed or empty.
+    InvalidValue,
+    /// Two related settings were not configured consistently.
+    Inconsistent,
+}
+
+impl std::fmt::Display for NacosConfigValidationErrorKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidValue => "invalid value",
+            Self::Inconsistent => "inconsistent",
+        })
+    }
+}
+
+/// A safe, field-addressable Nacos configuration validation failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NacosConfigValidationError {
+    kind: NacosConfigValidationErrorKind,
+    field_path: &'static str,
+    reason: &'static str,
+}
+
+impl NacosConfigValidationError {
+    /// Returns the stable validation classification.
+    pub const fn kind(&self) -> NacosConfigValidationErrorKind {
+        self.kind
+    }
+
+    /// Returns the exact public configuration field path.
+    pub const fn field_path(&self) -> &'static str {
+        self.field_path
+    }
+
+    /// Returns a public, credential-free explanation.
+    pub const fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+impl std::fmt::Display for NacosConfigValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "invalid Nacos configuration at {} ({}): {}",
+            self.field_path, self.kind, self.reason
+        )
+    }
+}
+
+impl std::error::Error for NacosConfigValidationError {}
+
 /// Nacos client connection and authentication settings.
 #[derive(Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -76,15 +133,27 @@ impl NacosConfig {
         self.password.as_deref()
     }
 
-    fn validate(&self) -> Result<(), &'static str> {
+    fn validate(&self) -> Result<(), NacosConfigValidationError> {
         if self.server_addr.trim().is_empty() {
-            return Err("Nacos server address must not be empty");
+            return Err(NacosConfigValidationError {
+                kind: NacosConfigValidationErrorKind::InvalidValue,
+                field_path: "nacos.server_addr",
+                reason: "must not be empty",
+            });
         }
         if self.server_addr.trim() != self.server_addr {
-            return Err("Nacos server address must not contain surrounding whitespace");
+            return Err(NacosConfigValidationError {
+                kind: NacosConfigValidationErrorKind::InvalidValue,
+                field_path: "nacos.server_addr",
+                reason: "must not contain surrounding whitespace",
+            });
         }
         if self.username.is_some() != self.password.is_some() {
-            return Err("Nacos username and password must be configured together");
+            return Err(NacosConfigValidationError {
+                kind: NacosConfigValidationErrorKind::Inconsistent,
+                field_path: "nacos.credentials",
+                reason: "username and password must be configured together",
+            });
         }
         Ok(())
     }
@@ -132,9 +201,16 @@ impl NacosConfigBuilder {
         self
     }
 
-    /// Sets HTTP authentication credentials.
-    pub fn credentials(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
+    /// Sets the optional HTTP authentication username.
+    pub fn username(mut self, username: impl Into<String>) -> Self {
         self.config.username = Some(username.into());
+        self
+    }
+
+    /// Sets the optional HTTP authentication password.
+    ///
+    /// The value is never included in debug output or validation reasons.
+    pub fn password(mut self, password: impl Into<String>) -> Self {
         self.config.password = Some(password.into());
         self
     }
@@ -142,8 +218,9 @@ impl NacosConfigBuilder {
     /// Builds the immutable configuration.
     ///
     /// Provider-specific validation occurs before either adapter performs network I/O.
-    pub fn build(self) -> NacosConfig {
-        self.config
+    pub fn build(self) -> Result<NacosConfig, NacosConfigValidationError> {
+        self.config.validate()?;
+        Ok(self.config)
     }
 }
 
@@ -156,8 +233,10 @@ mod tests {
         let config = NacosConfig::builder()
             .server_addr("nacos.internal:8848")
             .namespace("prod")
-            .credentials("service", "secret")
-            .build();
+            .username("service")
+            .password("secret")
+            .build()
+            .unwrap();
         assert_eq!(config.server_addr(), "nacos.internal:8848");
         assert_eq!(config.namespace(), Some("prod"));
         assert_eq!(config.username(), Some("service"));
@@ -167,8 +246,10 @@ mod tests {
     #[test]
     fn debug_output_redacts_passwords() {
         let config = NacosConfig::builder()
-            .credentials("service", "do-not-log")
-            .build();
+            .username("service")
+            .password("do-not-log")
+            .build()
+            .unwrap();
         let debug = format!("{config:?}");
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("do-not-log"));
@@ -180,6 +261,9 @@ mod tests {
             username: Some("service".into()),
             ..NacosConfig::default()
         };
-        assert!(config.validate().is_err());
+        let error = config.validate().unwrap_err();
+        assert_eq!(error.kind(), NacosConfigValidationErrorKind::Inconsistent);
+        assert_eq!(error.field_path(), "nacos.credentials");
+        assert!(!error.to_string().contains("service"));
     }
 }

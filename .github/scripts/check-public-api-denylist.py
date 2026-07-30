@@ -31,11 +31,11 @@ SOURCE_DIRECTORIES = (
 # constrained: changing an old enum into a struct must not bypass the gate.
 REMOVED_ITEMS = {
     "ApplicationError",
+    "Arguments",
     "ConfigCloseFuture",
     "ConfigLifecycle",
     "ConfigManager",
     "ConfigResponse",
-    "ConfigSource",
     "DirectoryWriter",
     "FusenError",
     "FusenHttpCodec",
@@ -64,6 +64,7 @@ REMOVED_ITEMS = {
     "ResponseCodec",
     "RpcService",
     "RpcServiceInfo",
+    "Router",
     "ServiceSnapshot",
     "ServiceSubscription",
     "StaticBoxFuture",
@@ -105,15 +106,17 @@ REMOVED_CRATE_ITEMS = {
     "fusen_rs": {"Path"},
 }
 ALLOWED_PUBLIC_TRAITS = {
+    "fusen_config": {"ConfigSource"},
     "fusen_observability": {"MetricsRecorder"},
     "fusen_register": {"Registry"},
     "fusen_rs": {
+        "InstanceRouter",
         "LoadBalancer",
         "MetricsRecorder",
         "Middleware",
         "Registry",
+        "RpcMessage",
         "RetryPolicy",
-        "Router",
     },
 }
 
@@ -145,6 +148,7 @@ OLD_WIRE_VARIANTS = (
     'id="variant.Fusen"',
     'id="variant.SpringCloud"',
 )
+REMOVED_MACROS = {"service"}
 PUBLIC_DEFINITION = re.compile(
     r"\bpub\s+(?:(?:async|const|unsafe)\s+)*"
     r"(?P<kind>enum|fn|mod|static|struct|trait|type|union)\s+"
@@ -191,6 +195,8 @@ def main() -> int:
             match = ITEM_FILE.match(html.name)
             if match:
                 name = match.group("name")
+                if html.name.startswith("macro.") and name in REMOVED_MACROS:
+                    failures.append(f"{relative}: removed public macro {name}")
                 if name in REMOVED_ITEMS:
                     failures.append(f"{relative}: removed public item {name}")
                 if html.name.startswith("trait.") and name not in ALLOWED_PUBLIC_TRAITS.get(

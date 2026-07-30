@@ -1,9 +1,13 @@
-use crate::{RpcCategory, RpcContext, RpcError};
-use fusen_contract::ServiceInstance;
+pub use crate::{
+    context::RpcContext,
+    resilience::{FailureClass, RetryDecision, RetryDecisionContext, RetryPolicy},
+    rpc::{RpcCategory, RpcError},
+};
+pub use fusen_contract::{Idempotency, ServiceInstance};
 use rand::RngExt;
 use std::{ops::Deref, sync::Arc};
 
-/// Immutable provider set passed through routers and load balancers.
+/// Immutable provider set passed through instance routers and load balancers.
 #[derive(Clone, Debug)]
 pub struct InstanceSnapshot(Arc<[ServiceInstance]>);
 
@@ -27,14 +31,46 @@ impl Deref for InstanceSnapshot {
     }
 }
 
-/// Filters or reorders the latest discovery snapshot before endpoint selection.
-pub trait Router: Send + Sync + 'static {
+/// Input to one instance-routing decision.
+pub struct RouteRequest<'a> {
+    context: &'a RpcContext,
+    instances: InstanceSnapshot,
+}
+
+impl<'a> RouteRequest<'a> {
+    pub(crate) fn new(context: &'a RpcContext, instances: InstanceSnapshot) -> Self {
+        Self { context, instances }
+    }
+
+    /// Returns attempt-scoped RPC metadata.
+    pub const fn context(&self) -> &RpcContext {
+        self.context
+    }
+
+    /// Returns the current immutable provider snapshot.
+    pub const fn instances(&self) -> &InstanceSnapshot {
+        &self.instances
+    }
+
+    /// Consumes this request and returns the provider snapshot.
+    pub fn into_instances(self) -> InstanceSnapshot {
+        self.instances
+    }
+}
+
+/// Filters or reorders a discovery snapshot before endpoint selection.
+pub trait InstanceRouter: Send + Sync + 'static {
     /// Returns the eligible snapshot for this attempt.
-    fn route(
-        &self,
-        context: &RpcContext,
-        instances: InstanceSnapshot,
-    ) -> Result<InstanceSnapshot, RpcError>;
+    fn route(&self, request: RouteRequest<'_>) -> Result<InstanceSnapshot, RpcError>;
+}
+
+impl<T> InstanceRouter for Arc<T>
+where
+    T: InstanceRouter + ?Sized,
+{
+    fn route(&self, request: RouteRequest<'_>) -> Result<InstanceSnapshot, RpcError> {
+        (**self).route(request)
+    }
 }
 
 /// Selects one endpoint index from a routed snapshot.
@@ -42,6 +78,19 @@ pub trait LoadBalancer: Send + Sync + 'static {
     /// Returns a valid index into `instances`.
     fn select(&self, context: &RpcContext, instances: &InstanceSnapshot)
     -> Result<usize, RpcError>;
+}
+
+impl<T> LoadBalancer for Arc<T>
+where
+    T: LoadBalancer + ?Sized,
+{
+    fn select(
+        &self,
+        context: &RpcContext,
+        instances: &InstanceSnapshot,
+    ) -> Result<usize, RpcError> {
+        (**self).select(context, instances)
+    }
 }
 
 /// Built-in weighted-random load balancer.

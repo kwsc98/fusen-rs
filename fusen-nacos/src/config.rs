@@ -1,8 +1,8 @@
 use crate::{NacosConfig, client_props, validate_application_name};
 use fusen_config::{
-    __adapter::{ConfigPublisher, prepare_config},
     ConfigDocument, ConfigError, ConfigErrorKind, ConfigFormat, ConfigFuture, ConfigHandle,
-    ConfigKey, ConfigOperation,
+    ConfigKey, ConfigOperation, ConfigSource,
+    provider::{self, ConfigPublisher},
 };
 use nacos_sdk::api::config::{
     ConfigChangeListener, ConfigResponse, ConfigService, ConfigServiceBuilder,
@@ -27,11 +27,11 @@ impl NacosConfigSource {
         config: NacosConfig,
     ) -> Result<Self, ConfigError> {
         let application_name = application_name.into();
-        config.validate().map_err(|message| {
-            ConfigError::message(
+        config.validate().map_err(|error| {
+            ConfigError::new(
                 ConfigOperation::Prepare,
                 ConfigErrorKind::InvalidInput,
-                message,
+                error,
             )
         })?;
         validate_application_name(&application_name).map_err(|message| {
@@ -67,15 +67,14 @@ impl std::fmt::Debug for NacosConfigSource {
     }
 }
 
-impl NacosConfigSource {
-    /// Prepares one Nacos resource without fetching it or installing a listener yet.
-    pub fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError> {
+impl ConfigSource for NacosConfigSource {
+    fn prepare(&self, key: ConfigKey) -> Result<ConfigHandle, ConfigError> {
         let data_id = key.name().to_owned();
         let group = key.group().unwrap_or(DEFAULT_GROUP).to_owned();
         let activate_client = self.client.clone();
         let close_client = self.client.clone();
 
-        Ok(prepare_config(move |publisher| {
+        Ok(provider::lifecycle(move |publisher| {
             let listener: Arc<dyn ConfigChangeListener> = Arc::new(NacosConfigChangeListener {
                 data_id: data_id.clone(),
                 publisher,

@@ -1,5 +1,5 @@
 use super::config::ClientHttpConfig;
-use crate::{ClientError, ClientErrorKind, RpcCategory, RpcError, wire::GuardedBody};
+use crate::{ClientError, ClientErrorKind, RetryHint, RpcCategory, RpcError, wire::GuardedBody};
 use http::{Request, Response, Uri, Version, uri::Scheme};
 use hyper::body::Incoming;
 use hyper_rustls::{ConfigBuilderExt, HttpsConnector, HttpsConnectorBuilder, MaybeHttpsStream};
@@ -181,7 +181,8 @@ pub(crate) struct TransportFailure {
 
 impl TransportFailure {
     pub(crate) fn into_rpc(self) -> RpcError {
-        RpcError::internal("HTTP transport failed", self.error).mark_retryable()
+        RpcError::internal("HTTP transport failed", self.error)
+            .with_retry_hint(RetryHint::Retryable)
     }
 }
 

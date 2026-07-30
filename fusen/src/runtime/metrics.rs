@@ -49,7 +49,7 @@ impl SafeMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusen_observability::{MetricSide, MetricsRecorder};
+    use fusen_observability::{AdmissionRejectedEvent, MetricSide, MetricsRecorder};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Panics(AtomicUsize);
@@ -65,10 +65,10 @@ mod tests {
     fn first_panic_disables_the_recorder() {
         let recorder = Arc::new(Panics(AtomicUsize::new(0)));
         let metrics = SafeMetrics::new(Some(recorder.clone()));
-        let event = MetricEvent::AdmissionRejected {
-            side: MetricSide::Client,
-            reason: "concurrency",
-        };
+        let event = MetricEvent::AdmissionRejected(AdmissionRejectedEvent::new(
+            MetricSide::Client,
+            "concurrency",
+        ));
         metrics.record(&event);
         metrics.record(&event);
         assert!(metrics.disabled());

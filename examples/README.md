@@ -1,6 +1,6 @@
 # fusen-rs examples
 
-示例按寻址方式分为 Host 直连和 Nacos 注册发现，两组示例使用相同的 `#[service]` 契约与服务实现，便于比较生成式 Client Builder、`ClientRuntime` 和 `Server` 的配置差异。服务端通过 `start()` 完成一次绑定和注册后进入 Ready，收到 Ctrl-C 后再显式执行有界优雅停机。
+示例按寻址方式分为 Host 直连和 Nacos 注册发现，两组示例使用相同的 `#[interface]` 契约与 Handler 实现，便于比较通用 `ClientBuilder<T>`、`ClientRuntime` 和 `Server` 的配置差异。服务端通过 `start()` 完成一次绑定和注册后进入 Ready，收到 Ctrl-C 后再显式执行有界优雅停机。
 
 ## Host 直连
 

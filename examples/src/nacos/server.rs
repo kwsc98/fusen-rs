@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(std::io::Error::other)?;
     let nacos_config = NacosConfig::builder()
         .server_addr(std::env::var("NACOS_ADDR").unwrap_or_else(|_| "127.0.0.1:8848".to_owned()))
-        .build();
+        .build()?;
     let registry = NacosRegistry::connect("fusen-nacos-server", nacos_config).await?;
     let advertised_endpoint = std::env::var("FUSEN_ADVERTISED_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8081".to_owned());
@@ -29,8 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .advertised_endpoint(advertised_endpoint)
         .registry("nacos", registry)
         .metrics(LogMetricsRecorder)
-        .service(DemoServiceServer::new(DemoServiceImpl).middleware(TracingMiddleware))
-        .service(DemoServiceV2Server::new(DemoServiceImplV2).middleware(TracingMiddleware))
+        .interface(DemoServiceServer::new(DemoServiceImpl).middleware(TracingMiddleware))
+        .interface(DemoServiceV2Server::new(DemoServiceImplV2).middleware(TracingMiddleware))
         .build()?
         .start()
         .await?;

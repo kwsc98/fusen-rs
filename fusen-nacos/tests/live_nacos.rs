@@ -1,12 +1,12 @@
 //! Live Nacos release-gate coverage for registration, discovery, config, and cleanup.
 
-use fusen_config::{ConfigHandle, ConfigKey};
+use fusen_config::{ConfigHandle, ConfigKey, ConfigSource};
 use fusen_contract::{
     Idempotency, InstanceId, MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor,
     ServiceRegistration, ServiceSelector, ServiceWeight, WireProtocol,
 };
 use fusen_nacos::{NacosConfig, NacosConfigSource, NacosRegistry};
-use fusen_register::{Registry, directory::Directory};
+use fusen_register::{RegistrationRequest, Registry, SubscriptionRequest, directory::Directory};
 use nacos_sdk::api::{
     config::{ConfigService, ConfigServiceBuilder},
     error::Error as NacosError,
@@ -44,7 +44,7 @@ async fn live_nacos_registration_discovery_config_and_cleanup() -> TestResult {
     let resource = unique_resource()?;
     let adapter_config = NacosConfig::builder()
         .server_addr(server_addr.clone())
-        .build();
+        .build()?;
     let admin_props = ClientProps::new()
         .env_first(false)
         .server_addr(server_addr)
@@ -88,8 +88,12 @@ async fn live_registry_case(
         NamingServiceBuilder::new(admin_props).build(),
     )
     .await?;
-    let subscription = registry.prepare_subscription(selector, WireProtocol::FusenV1)?;
-    let registration_handle = registry.prepare_registration(registration, WireProtocol::FusenV1)?;
+    let subscription =
+        registry.prepare_subscription(SubscriptionRequest::new(selector, WireProtocol::FusenV1))?;
+    let registration_handle = registry.prepare_registration(RegistrationRequest::new(
+        registration,
+        WireProtocol::FusenV1,
+    ))?;
 
     let exercise = async {
         let directory = timed("activate Nacos subscription", subscription.activate()).await?;

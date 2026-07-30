@@ -1,8 +1,8 @@
-//! Structured parsers for the service and method attributes.
+//! Structured parsers for the interface and method attributes.
 
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
-use syn::{Expr, ExprArray, ExprLit, Lit, LitStr, Meta, Token};
+use syn::{Expr, ExprLit, Lit, LitStr, Meta, Token};
 
 #[derive(Default)]
 pub(crate) struct ServiceArgs {
@@ -19,13 +19,13 @@ impl Parse for ServiceArgs {
             let Meta::NameValue(field) = field else {
                 return Err(syn::Error::new_spanned(
                     field,
-                    "service fields must use `name = \"value\"` syntax",
+                    "interface fields must use `name = \"value\"` syntax",
                 ));
             };
             let Some(name) = field.path.get_ident() else {
                 return Err(syn::Error::new_spanned(
                     field.path,
-                    "service field names must be unqualified identifiers",
+                    "interface field names must be unqualified identifiers",
                 ));
             };
             match name.to_string().as_str() {
@@ -48,7 +48,7 @@ impl Parse for ServiceArgs {
                     return Err(syn::Error::new_spanned(
                         field,
                         format!(
-                            "unknown service field `{unknown}`; expected `name`, `group`, or `version`"
+                            "unknown interface field `{unknown}`; expected `name`, `group`, or `version`"
                         ),
                     ));
                 }
@@ -115,15 +115,12 @@ impl MethodArgs {
 pub(crate) struct SpringArgs {
     pub(crate) method: Option<LitStr>,
     pub(crate) path: Option<LitStr>,
-    pub(crate) query: Vec<LitStr>,
-    pub(crate) body: Option<LitStr>,
 }
 
 impl SpringArgs {
     fn parse_tokens(tokens: proc_macro2::TokenStream) -> syn::Result<Self> {
         let fields = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(tokens)?;
         let mut args = Self::default();
-        let mut query_seen = false;
         for field in fields {
             let Meta::NameValue(field) = field else {
                 return Err(syn::Error::new_spanned(
@@ -148,26 +145,11 @@ impl SpringArgs {
                     parse_string(field.value.clone(), "spring.path")?,
                     &field,
                 )?,
-                "query" => {
-                    if query_seen {
-                        return Err(syn::Error::new_spanned(
-                            field,
-                            "duplicate spring field `query`",
-                        ));
-                    }
-                    query_seen = true;
-                    args.query = parse_string_array(field.value.clone(), "spring.query")?;
-                }
-                "body" => set_once(
-                    &mut args.body,
-                    parse_string(field.value.clone(), "spring.body")?,
-                    &field,
-                )?,
                 unknown => {
                     return Err(syn::Error::new_spanned(
                         field,
                         format!(
-                            "unknown spring field `{unknown}`; expected `method`, `path`, `query`, or `body`"
+                            "unknown spring field `{unknown}`; expected `method` or `path`; field roles belong on RpcMessage fields"
                         ),
                     ));
                 }
@@ -197,19 +179,6 @@ fn parse_string(value: Expr, field: &str) -> syn::Result<LitStr> {
     Ok(value)
 }
 
-fn parse_string_array(value: Expr, field: &str) -> syn::Result<Vec<LitStr>> {
-    let Expr::Array(ExprArray { elems, .. }) = value else {
-        return Err(syn::Error::new_spanned(
-            value,
-            format!("`{field}` must be an array of string literals"),
-        ));
-    };
-    elems
-        .into_iter()
-        .map(|value| parse_string(value, field))
-        .collect()
-}
-
 fn set_once<T>(slot: &mut Option<T>, value: T, field: &impl quote::ToTokens) -> syn::Result<()> {
     if slot.is_some() {
         return Err(syn::Error::new_spanned(field, "duplicate attribute field"));
@@ -236,20 +205,19 @@ mod tests {
     fn parses_nested_spring_contract() {
         let args = MethodArgs::parse_tokens(quote!(
             idempotency = "safe",
-            spring(method = "GET", path = "/users/{id}", query = ["expand"])
+            spring(method = "GET", path = "/users/{id}")
         ))
         .unwrap();
         assert_eq!(args.idempotency.unwrap().value(), "safe");
         let spring = args.spring.unwrap();
         assert_eq!(spring.method.unwrap().value(), "GET");
         assert_eq!(spring.path.unwrap().value(), "/users/{id}");
-        assert_eq!(spring.query[0].value(), "expand");
     }
 
     #[test]
     fn rejects_unstructured_values_and_duplicates() {
         assert!(syn::parse2::<ServiceArgs>(quote!(name = concat!("u", "ser"))).is_err());
         assert!(MethodArgs::parse_tokens(quote!(spring(method = "GET", method = "POST"))).is_err());
-        assert!(MethodArgs::parse_tokens(quote!(spring(query = "id"))).is_err());
+        assert!(MethodArgs::parse_tokens(quote!(spring(query = ["id"]))).is_err());
     }
 }

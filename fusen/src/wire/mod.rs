@@ -1,5 +1,6 @@
 use crate::{
-    Arguments, ProblemDetails, RpcCategory, RpcError, RpcResponse,
+    RetryHint, RpcArguments, RpcBody, RpcCategory, RpcError, RpcOrigin, RpcResponse,
+    rpc::ProblemDetails,
     runtime::{
         budget::{BudgetedWriteFailure, BudgetedWriter, ByteBudget, BytePermit},
         deadline::Deadline,
@@ -12,7 +13,10 @@ use fusen_contract::{
 };
 use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, Uri, Version,
-    header::{CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, TE, TRAILER, TRANSFER_ENCODING, UPGRADE},
+    header::{
+        CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, TE, TRAILER, TRANSFER_ENCODING,
+        UPGRADE,
+    },
 };
 use hyper::body::{Body, Frame, Incoming};
 use serde::{Deserialize, Serialize};
@@ -22,7 +26,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 use uuid::Uuid;
 
@@ -169,12 +173,12 @@ fn invalid_attempt() -> RpcError {
 
 #[derive(Serialize)]
 struct FusenRequest<'a> {
-    arguments: &'a Arguments,
+    arguments: &'a RpcArguments,
 }
 
 #[derive(Deserialize)]
 struct FusenRequestOwned {
-    arguments: Arguments,
+    arguments: RpcArguments,
 }
 
 #[derive(Deserialize)]
@@ -236,7 +240,7 @@ pub(crate) fn encode_request_template(
     service: &'static ServiceDescriptor,
     method: &'static MethodDescriptor,
     protocol: WireProtocol,
-    arguments: &Arguments,
+    arguments: &RpcArguments,
     application_headers: &HeaderMap,
     max_body: usize,
     budget: &Arc<ByteBudget>,
@@ -435,7 +439,7 @@ fn endpoint_uri(
         .map_err(|error| RpcError::internal("failed to construct canonical HTTP URI", error))
 }
 
-pub(crate) fn decode_fusen_request(bytes: &[u8]) -> Result<Arguments, RpcError> {
+pub(crate) fn decode_fusen_request(bytes: &[u8]) -> Result<RpcArguments, RpcError> {
     serde_json::from_slice::<FusenRequestOwned>(bytes)
         .map(|request| request.arguments)
         .map_err(|_| {
@@ -449,7 +453,7 @@ pub(crate) fn decode_fusen_request(bytes: &[u8]) -> Result<Arguments, RpcError> 
 
 pub(crate) fn encode_success(
     protocol: WireProtocol,
-    response: RpcResponse,
+    response: RpcResponse<RpcBody>,
     max_body: usize,
     budget: &Arc<ByteBudget>,
 ) -> Result<Response<GuardedBody>, RpcError> {
@@ -536,12 +540,27 @@ pub(crate) fn encode_problem(
 ) -> Response<GuardedBody> {
     let problem = error.problem_details(request_id, instance);
     let body = bounded_problem(&problem);
-    Response::builder()
-        .status(error.status())
-        .header(CONTENT_TYPE, PROBLEM_CONTENT_TYPE)
-        .header(REQUEST_ID, request_id)
-        .body(GuardedBody::new(body, None))
-        .expect("static problem response is valid")
+    let mut response = Response::new(GuardedBody::new(body, None));
+    *response.status_mut() = error.status();
+    *response.headers_mut() = response_headers_without_control(error.headers().clone());
+    if let Some(delay) = error.retry_hint().retry_after() {
+        let seconds = delay
+            .as_secs()
+            .saturating_add(u64::from(delay.subsec_nanos() != 0));
+        response.headers_mut().insert(
+            RETRY_AFTER,
+            HeaderValue::from_str(&seconds.to_string())
+                .expect("retry delay seconds are valid header text"),
+        );
+    }
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static(PROBLEM_CONTENT_TYPE));
+    response.headers_mut().insert(
+        REQUEST_ID,
+        HeaderValue::from_str(request_id).expect("validated request ID is valid header text"),
+    );
+    response
 }
 
 fn bounded_problem(problem: &ProblemDetails) -> Bytes {
@@ -549,16 +568,7 @@ fn bounded_problem(problem: &ProblemDetails) -> Bytes {
     match serde_json::to_writer(&mut writer, problem) {
         Ok(()) => Bytes::from(writer.into_inner()),
         _ => {
-            let minimal = ProblemDetails {
-                type_uri: problem.type_uri.clone(),
-                title: problem.title.clone(),
-                status: problem.status,
-                detail: None,
-                instance: None,
-                code: problem.code.clone(),
-                request_id: problem.request_id.clone(),
-                retryable: problem.retryable,
-            };
+            let minimal = problem.without_optional_fields();
             let mut writer = LimitedWriter::new(EMERGENCY_PROBLEM_LIMIT);
             serde_json::to_writer(&mut writer, &minimal)
                 .expect("validated problem metadata fits the emergency response budget");
@@ -573,7 +583,7 @@ pub(crate) async fn decode_http_response(
     response: Response<Incoming>,
     max_body: usize,
     budget: &std::sync::Arc<ByteBudget>,
-) -> Result<RpcResponse, RpcError> {
+) -> Result<RpcResponse<RpcBody>, RpcError> {
     let status = response.status();
     let expected_content_type = if status.is_success() {
         match protocol {
@@ -589,7 +599,12 @@ pub(crate) async fn decode_http_response(
         let (parts, body) = response.into_parts();
         drop(body);
         if !status.is_success() {
-            return Err(RpcError::from_remote_head(status));
+            let headers = response_headers_without_control(parts.headers);
+            return Err(attach_remote_headers(
+                RpcError::from_remote_head(status),
+                headers,
+                protocol,
+            ));
         }
         let permit = budget
             .try_reserve(0)
@@ -601,7 +616,8 @@ pub(crate) async fn decode_http_response(
         return Ok(rpc);
     }
     let content_length = parse_content_length(response.headers())?;
-    let (_parts, body) = response.into_parts();
+    let (parts, body) = response.into_parts();
+    let response_headers = response_headers_without_control(parts.headers);
     let (body, permit) = read_body(body, content_length, max_body, budget).await?;
     if !status.is_success() {
         let problem = serde_json::from_slice::<ProblemDetails>(&body).map_err(|_| {
@@ -612,7 +628,11 @@ pub(crate) async fn decode_http_response(
             )
         })?;
         validate_problem_status(status, &problem)?;
-        return Err(RpcError::from_remote(problem));
+        return Err(attach_remote_headers(
+            RpcError::from_remote(problem),
+            response_headers,
+            protocol,
+        ));
     }
     let result = match protocol {
         WireProtocol::FusenV1 => {
@@ -636,7 +656,7 @@ pub(crate) async fn decode_http_response(
     };
     let mut rpc = RpcResponse::from_json_bytes(result);
     rpc.hold_budget(permit);
-    *rpc.headers_mut() = response_headers_without_control(_parts.headers);
+    *rpc.headers_mut() = response_headers;
     rpc.set_status(status)?;
     Ok(rpc)
 }
@@ -645,7 +665,7 @@ fn validate_problem_status(
     status: http::StatusCode,
     problem: &ProblemDetails,
 ) -> Result<(), RpcError> {
-    if problem.status == status.as_u16() {
+    if problem.status() == status.as_u16() {
         Ok(())
     } else {
         Err(RpcError::framework(
@@ -654,6 +674,35 @@ fn validate_problem_status(
             "Problem Details status does not match the HTTP status",
         ))
     }
+}
+
+fn attach_remote_headers(
+    mut error: RpcError,
+    headers: HeaderMap,
+    protocol: WireProtocol,
+) -> RpcError {
+    if error.origin() != RpcOrigin::Application
+        && (protocol == WireProtocol::SpringCloudV1 || error.retry_hint().is_retryable())
+        && let Some(delay) = parse_retry_after(&headers, SystemTime::now())
+    {
+        error = error.with_retry_hint(RetryHint::After(delay));
+    }
+    error.with_headers(headers)
+}
+
+fn parse_retry_after(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
+    let mut values = headers.get_all(RETRY_AFTER).iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    let value = value.to_str().ok()?;
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    httpdate::parse_http_date(value)
+        .ok()
+        .map(|deadline| deadline.duration_since(now).unwrap_or(Duration::ZERO))
 }
 
 fn bytes_subslice(parent: &Bytes, child: &[u8]) -> Option<Bytes> {
@@ -782,7 +831,8 @@ pub(crate) async fn read_body(
         std::future::poll_fn(|context| Pin::new(&mut body).poll_frame(context)).await
     {
         let frame = frame.map_err(|error| {
-            RpcError::internal("HTTP body stream failed", error).mark_retryable()
+            RpcError::internal("HTTP body stream failed", error)
+                .with_retry_hint(RetryHint::Retryable)
         })?;
         let Ok(chunk) = frame.into_data() else {
             continue;
@@ -1205,6 +1255,35 @@ mod tests {
     }
 
     #[test]
+    fn problem_response_preserves_safe_headers_and_typed_retry_delay() {
+        let mut error = RpcError::framework(
+            RpcCategory::Unavailable,
+            "temporarily_unavailable",
+            "retry later",
+        )
+        .with_retry_hint(RetryHint::After(Duration::from_millis(1_001)));
+        error
+            .headers_mut()
+            .insert("x-error-scope", HeaderValue::from_static("tenant"));
+        error
+            .headers_mut()
+            .insert(CONNECTION, HeaderValue::from_static("close"));
+        error
+            .headers_mut()
+            .insert(REQUEST_ID, HeaderValue::from_static("forged"));
+
+        let response = encode_problem(&error, "trusted-request", Some("/rpc".to_owned()));
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get("x-error-scope").unwrap(), "tenant");
+        assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "2");
+        assert_eq!(
+            response.headers().get(REQUEST_ID).unwrap(),
+            "trusted-request"
+        );
+        assert!(response.headers().get(CONNECTION).is_none());
+    }
+
+    #[test]
     fn oversized_problem_details_use_the_bounded_emergency_document() {
         let error = RpcError::application(
             http::StatusCode::BAD_REQUEST,
@@ -1215,9 +1294,9 @@ mod tests {
         let body = bounded_problem(&error.problem_details("request", None));
         assert!(body.len() <= EMERGENCY_PROBLEM_LIMIT);
         let problem: ProblemDetails = serde_json::from_slice(&body).unwrap();
-        assert_eq!(problem.status, StatusCode::BAD_REQUEST.as_u16());
-        assert_eq!(problem.code.as_str(), "application_error");
-        assert_eq!(problem.request_id, "request");
-        assert!(!problem.retryable);
+        assert_eq!(problem.status(), StatusCode::BAD_REQUEST.as_u16());
+        assert_eq!(problem.code().as_str(), "application_error");
+        assert_eq!(problem.request_id(), "request");
+        assert!(!problem.retryable());
     }
 }

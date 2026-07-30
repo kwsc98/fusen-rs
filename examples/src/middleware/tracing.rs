@@ -1,6 +1,6 @@
 //! Logical RPC span middleware example.
 
-use fusen_rs::{Middleware, Next, RpcContext, RpcResult};
+use fusen_rs::{Middleware, MiddlewareFuture, Next, RpcContext};
 use tracing::{Instrument, info_span};
 
 /// Instruments each logical invocation with bounded service metadata.
@@ -8,14 +8,14 @@ use tracing::{Instrument, info_span};
 pub struct TracingMiddleware;
 
 impl Middleware for TracingMiddleware {
-    async fn handle<'a>(&'a self, context: RpcContext, next: Next<'a>) -> RpcResult {
+    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
         let span = info_span!(
             "rpc",
             request_id = %context.request_id(),
-            service = context.service().identity(),
+            service = context.interface().identity(),
             method = context.method().fusen_identity(),
             protocol = context.protocol().as_str(),
         );
-        next.run(context).instrument(span).await
+        Box::pin(next.run(context).instrument(span))
     }
 }

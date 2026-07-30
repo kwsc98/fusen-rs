@@ -1,39 +1,47 @@
 # fusen-procedural-macro
 
-`fusen-procedural-macro` implements the clean-slate Fusen 0.9 service
-declaration. Applications normally use the `service` and `method` attributes
-re-exported by `fusen-rs`.
+`fusen-procedural-macro` implements the clean-slate Fusen 0.9 interface and
+message declarations. Applications normally use the `interface`, `method`, and
+`RpcMessage` macros re-exported by `fusen-rs`.
 
 ```rust
-use fusen_rs::RpcError;
+use fusen_rs::{RpcError, RpcRequest, RpcResponse};
+use serde::{Deserialize, Serialize};
 
-#[fusen_rs::service(name = "user", group = "prod", version = "1")]
-pub trait UserService {
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+pub struct GetUserRequest {
+    #[rpc(path)]
+    pub id: String,
+    #[rpc(query)]
+    pub expand: Option<bool>,
+}
+
+#[fusen_rs::interface(name = "user", group = "prod", version = "1")]
+pub trait UserApi {
     #[fusen_rs::method(
         idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}", query = ["expand"])
+        spring(method = "GET", path = "/users/{id}")
     )]
     async fn get(
         &self,
-        id: String,
-        expand: Option<bool>,
-    ) -> Result<User, RpcError>;
+        request: RpcRequest<GetUserRequest>,
+    ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-The service attribute generates `UserServiceClient`,
-`UserServiceClientBuilder`, and `UserServiceServer`. Implementations directly
-implement `UserService`; no second implementation attribute is required.
+The interface attribute generates `UserApiClient` and `UserApiServer<T>`.
+The generated client and user handlers both implement `UserApi`; generated
+clients use the runtime's generic `ClientBuilder<UserApiClient>`.
 
-RPC methods must be `async`, take an immutable `&self`, use owned parameter and
-success types, and explicitly return `Result<T, RpcError>`. Idempotency is one
-of `none`, `idempotent`, or `safe` and defaults to `none`.
+RPC methods must be `async`, take immutable `&self`, accept exactly one
+`RpcRequest<T>`, and return `Result<RpcResponse<T>, RpcError>`. Idempotency is
+one of `none`, `idempotent`, or `safe` and defaults to `none`.
 
-Spring Cloud mappings are optional. Path sources are inferred from complete
-`{name}` segments, while every query or body source is explicit and at most one
-body parameter is accepted. Safe mappings permit only GET/HEAD. Fusen V1 always
-encodes every argument by its Rust parameter name, independently of Spring
-mapping sources.
+`RpcMessage` accepts named-field structs only. Every field declares exactly one
+Spring role with `#[rpc(path)]`, `#[rpc(query)]`, or `#[rpc(body)]`, plus an
+optional `#[rpc(name = "...")]`; at most one body field is accepted. The built-in
+`()` message represents an empty request. Safe mappings permit only GET/HEAD.
+Fusen V1 always encodes every DTO field by name, independently of its Spring role.
 
 Generated code resolves a renamed `fusen-rs` dependency and targets only its
 hidden macro ABI. This package is not a runtime extension surface.

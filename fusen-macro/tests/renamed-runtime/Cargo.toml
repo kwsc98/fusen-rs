@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 rpc = { package = "fusen-rs", path = "../../../fusen", version = "0.9.0" }
+serde.workspace = true
 
 [dev-dependencies]
 trybuild.workspace = true

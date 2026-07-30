@@ -1,6 +1,7 @@
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Deserializer, Serialize, de};
-use std::{error::Error, fmt, sync::Arc};
+use serde_json::{Map, Value};
+use std::{error::Error, fmt, sync::Arc, time::Duration};
 
 /// A validated, stable machine-readable error code.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -124,41 +125,181 @@ pub enum RpcOrigin {
     Application,
 }
 
-/// RFC 9457 problem details used by both supported JSON protocols.
+/// A framework retry recommendation attached to an RPC error.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RetryHint {
+    /// The runtime must not retry based on this error.
+    #[default]
+    Never,
+    /// An idempotent invocation may be retried according to its retry policy.
+    Retryable,
+    /// An idempotent invocation may be retried after at least this duration.
+    After(Duration),
+}
+
+impl RetryHint {
+    /// Returns whether this hint permits retrying an idempotent invocation.
+    pub const fn is_retryable(self) -> bool {
+        !matches!(self, Self::Never)
+    }
+
+    /// Returns the minimum retry delay when one was supplied.
+    pub const fn retry_after(self) -> Option<Duration> {
+        match self {
+            Self::After(duration) => Some(duration),
+            Self::Never | Self::Retryable => None,
+        }
+    }
+}
+
+/// Structured, public application-error metadata.
+///
+/// Details are represented as a JSON object so callers can inspect stable fields without parsing
+/// the human-readable error message. Local framework details are never written to the wire.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RpcErrorDetails(Map<String, Value>);
+
+impl RpcErrorDetails {
+    /// Creates an empty details object.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates details from an existing JSON object.
+    pub fn from_map(fields: Map<String, Value>) -> Self {
+        Self(fields)
+    }
+
+    /// Returns one structured field.
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.0.get(name)
+    }
+
+    /// Inserts or replaces one structured field.
+    pub fn insert(&mut self, name: impl Into<String>, value: Value) -> Option<Value> {
+        self.0.insert(name.into(), value)
+    }
+
+    /// Iterates over the structured fields.
+    pub fn iter(&self) -> serde_json::map::Iter<'_> {
+        self.0.iter()
+    }
+
+    /// Returns whether the details object contains no fields.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns the number of structured fields.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Consumes the wrapper and returns the JSON object.
+    pub fn into_map(self) -> Map<String, Value> {
+        self.0
+    }
+}
+
+/// Private RFC 9457 wire document used by both supported JSON protocols.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProblemDetails {
-    /// Stable problem type URI.
+pub(crate) struct ProblemDetails {
     #[serde(rename = "type")]
-    pub type_uri: String,
-    /// Human-readable status title.
-    pub title: String,
-    /// HTTP status code.
-    pub status: u16,
-    /// Public detail safe to return to callers.
+    type_uri: String,
+    title: String,
+    status: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    /// Request path or other failing resource.
+    detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub instance: Option<String>,
-    /// Stable machine-readable code.
-    pub code: ErrorCode,
-    /// Correlation identifier assigned by the server.
-    pub request_id: String,
-    /// Whether a framework client may consider retrying an explicitly idempotent method.
-    pub retryable: bool,
+    instance: Option<String>,
+    code: ErrorCode,
+    request_id: String,
+    retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<RpcErrorDetails>,
+}
+
+impl ProblemDetails {
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        type_uri: impl Into<String>,
+        title: impl Into<String>,
+        status: u16,
+        detail: Option<String>,
+        instance: Option<String>,
+        code: ErrorCode,
+        request_id: impl Into<String>,
+        retryable: bool,
+        details: Option<RpcErrorDetails>,
+    ) -> Self {
+        Self {
+            type_uri: type_uri.into(),
+            title: title.into(),
+            status,
+            detail,
+            instance,
+            code,
+            request_id: request_id.into(),
+            retryable,
+            details,
+        }
+    }
+
+    pub(crate) fn status(&self) -> u16 {
+        self.status
+    }
+
+    #[cfg(test)]
+    pub(crate) fn code(&self) -> &ErrorCode {
+        &self.code
+    }
+
+    #[cfg(test)]
+    pub(crate) fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retryable(&self) -> bool {
+        self.retryable
+    }
+
+    pub(crate) fn without_optional_fields(&self) -> Self {
+        Self {
+            type_uri: self.type_uri.clone(),
+            title: self.title.clone(),
+            status: self.status,
+            detail: None,
+            instance: None,
+            code: self.code.clone(),
+            request_id: self.request_id.clone(),
+            retryable: self.retryable,
+            details: None,
+        }
+    }
 }
 
 /// A stable RPC failure returned by generated clients and service implementations.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RpcError {
+    inner: Box<RpcErrorInner>,
+}
+
+#[derive(Clone, Debug)]
+struct RpcErrorInner {
     category: RpcCategory,
     code: ErrorCode,
     message: String,
     status: StatusCode,
     origin: RpcOrigin,
     attempts: u8,
-    retryable: bool,
+    headers: HeaderMap,
+    details: Option<RpcErrorDetails>,
+    retry_hint: RetryHint,
     source: Option<Arc<dyn Error + Send + Sync + 'static>>,
 }
 
@@ -172,16 +313,18 @@ impl RpcError {
         if !status.is_client_error() && !status.is_server_error() {
             return Err(InvalidErrorCode(format!("HTTP status {status}")));
         }
-        Ok(Self {
+        Ok(Self::from_inner(RpcErrorInner {
             category: RpcCategory::Application,
             code: ErrorCode::new(code)?,
             message: message.into(),
             status,
             origin: RpcOrigin::Application,
             attempts: 1,
-            retryable: false,
+            headers: HeaderMap::new(),
+            details: None,
+            retry_hint: RetryHint::Never,
             source: None,
-        })
+        }))
     }
 
     /// Creates a typed, non-retryable local error.
@@ -195,16 +338,18 @@ impl RpcError {
         } else {
             RpcOrigin::Local
         };
-        Ok(Self {
+        Ok(Self::from_inner(RpcErrorInner {
             category,
             code: ErrorCode::new(code)?,
             message: message.into(),
             status: category.status(),
             origin,
             attempts: 1,
-            retryable: false,
+            headers: HeaderMap::new(),
+            details: None,
+            retry_hint: RetryHint::Never,
             source: None,
-        })
+        }))
     }
 
     pub(crate) fn framework(
@@ -212,36 +357,32 @@ impl RpcError {
         code: &'static str,
         message: impl Into<String>,
     ) -> Self {
-        Self {
+        Self::from_inner(RpcErrorInner {
             category,
             code: ErrorCode::framework(code),
             message: message.into(),
             status: category.status(),
             origin: RpcOrigin::Local,
             attempts: 1,
-            retryable: false,
+            headers: HeaderMap::new(),
+            details: None,
+            retry_hint: RetryHint::Never,
             source: None,
-        }
+        })
     }
 
     pub(crate) fn internal<E>(message: impl Into<String>, source: E) -> Self
     where
         E: Error + Send + Sync + 'static,
     {
-        Self {
-            source: Some(Arc::new(source)),
-            ..Self::framework(RpcCategory::Internal, "internal_error", message)
-        }
+        Self::framework(RpcCategory::Internal, "internal_error", message).with_source(source)
     }
 
     pub(crate) fn invalid_result<E>(message: impl Into<String>, source: E) -> Self
     where
         E: Error + Send + Sync + 'static,
     {
-        Self {
-            source: Some(Arc::new(source)),
-            ..Self::framework(RpcCategory::DataLoss, "invalid_result", message)
-        }
+        Self::framework(RpcCategory::DataLoss, "invalid_result", message).with_source(source)
     }
 
     pub(crate) fn from_remote(problem: ProblemDetails) -> Self {
@@ -253,7 +394,7 @@ impl RpcError {
         } else {
             RpcOrigin::Remote
         };
-        Self {
+        Self::from_inner(RpcErrorInner {
             category,
             code: problem.code,
             message: problem
@@ -262,14 +403,20 @@ impl RpcError {
             status,
             origin,
             attempts: 1,
-            retryable: problem.retryable && origin != RpcOrigin::Application,
+            headers: HeaderMap::new(),
+            details: problem.details,
+            retry_hint: if problem.retryable && origin != RpcOrigin::Application {
+                RetryHint::Retryable
+            } else {
+                RetryHint::Never
+            },
             source: None,
-        }
+        })
     }
 
     pub(crate) fn from_remote_head(status: StatusCode) -> Self {
         let category = category_from_status(status);
-        Self {
+        Self::from_inner(RpcErrorInner {
             category,
             code: ErrorCode::framework("remote_head_error"),
             message: status
@@ -279,56 +426,112 @@ impl RpcError {
             status,
             origin: RpcOrigin::Remote,
             attempts: 1,
-            retryable: false,
+            headers: HeaderMap::new(),
+            details: None,
+            retry_hint: RetryHint::Never,
             source: None,
+        })
+    }
+
+    fn from_inner(inner: RpcErrorInner) -> Self {
+        Self {
+            inner: Box::new(inner),
         }
     }
 
     pub(crate) fn with_attempts(mut self, attempts: u8) -> Self {
-        self.attempts = attempts.max(1);
-        self
-    }
-
-    pub(crate) fn mark_retryable(mut self) -> Self {
-        if self.origin != RpcOrigin::Application {
-            self.retryable = true;
-        }
+        self.inner.attempts = attempts.max(1);
         self
     }
 
     /// Returns the semantic category.
     pub const fn category(&self) -> RpcCategory {
-        self.category
+        self.inner.category
     }
 
     /// Returns the stable machine-readable code.
     pub fn code(&self) -> &ErrorCode {
-        &self.code
+        &self.inner.code
     }
 
     /// Returns the safe human-readable message.
     pub fn message(&self) -> &str {
-        &self.message
+        &self.inner.message
     }
 
     /// Returns the mapped HTTP status.
     pub const fn status(&self) -> StatusCode {
-        self.status
+        self.inner.status
     }
 
     /// Returns where the error originated.
     pub const fn origin(&self) -> RpcOrigin {
-        self.origin
+        self.inner.origin
     }
 
     /// Returns the number of physical attempts made by the logical invocation.
     pub const fn attempts(&self) -> u8 {
-        self.attempts
+        self.inner.attempts
     }
 
-    /// Returns the remote or framework retry hint.
-    pub const fn retryable(&self) -> bool {
-        self.retryable
+    /// Returns application response headers associated with the error.
+    pub const fn headers(&self) -> &HeaderMap {
+        &self.inner.headers
+    }
+
+    /// Returns mutable application response headers associated with the error.
+    pub fn headers_mut(&mut self) -> &mut HeaderMap {
+        &mut self.inner.headers
+    }
+
+    /// Replaces the response headers associated with the error.
+    pub fn with_headers(mut self, headers: HeaderMap) -> Self {
+        self.inner.headers = headers;
+        self
+    }
+
+    /// Returns structured public error details, when present.
+    pub const fn details(&self) -> Option<&RpcErrorDetails> {
+        self.inner.details.as_ref()
+    }
+
+    /// Attaches structured public details to this error.
+    ///
+    /// Only application-origin details are serialized to a remote caller. Framework and local
+    /// diagnostic details remain local even when attached for in-process inspection.
+    pub fn with_details(mut self, details: RpcErrorDetails) -> Self {
+        self.inner.details = Some(details);
+        self
+    }
+
+    /// Returns the remote or framework retry recommendation.
+    pub const fn retry_hint(&self) -> RetryHint {
+        self.inner.retry_hint
+    }
+
+    /// Sets the retry recommendation.
+    ///
+    /// Application errors remain non-retryable; retry safety is owned by the runtime and the
+    /// method's idempotency declaration.
+    pub fn with_retry_hint(mut self, retry_hint: RetryHint) -> Self {
+        if self.inner.origin != RpcOrigin::Application {
+            self.inner.retry_hint = retry_hint;
+        }
+        self
+    }
+
+    /// Attaches an owned diagnostic source without exposing it on the wire.
+    pub fn with_source<E>(mut self, source: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        self.inner.source = Some(Arc::new(source));
+        self
+    }
+
+    /// Returns the retained diagnostic source.
+    pub fn source_ref(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
+        self.inner.source.as_deref()
     }
 
     pub(crate) fn problem_details(
@@ -336,28 +539,33 @@ impl RpcError {
         request_id: impl Into<String>,
         instance: Option<String>,
     ) -> ProblemDetails {
-        let detail = if self.category == RpcCategory::Internal {
+        let detail = if self.inner.category == RpcCategory::Internal {
             Some("Internal server error".to_owned())
         } else {
-            Some(self.message.clone())
+            Some(self.inner.message.clone())
         };
         ProblemDetails {
             type_uri: format!(
                 "urn:fusen:error:{}:{}",
-                category_name(self.category),
-                self.code
+                category_name(self.inner.category),
+                self.inner.code
             ),
             title: self
+                .inner
                 .status
                 .canonical_reason()
                 .unwrap_or("RPC Error")
                 .to_owned(),
-            status: self.status.as_u16(),
+            status: self.inner.status.as_u16(),
             detail,
             instance,
-            code: self.code.clone(),
+            code: self.inner.code.clone(),
             request_id: request_id.into(),
-            retryable: self.retryable && self.origin != RpcOrigin::Application,
+            retryable: self.inner.retry_hint.is_retryable()
+                && self.inner.origin != RpcOrigin::Application,
+            details: (self.inner.origin == RpcOrigin::Application)
+                .then(|| self.inner.details.clone())
+                .flatten(),
         }
     }
 }
@@ -407,13 +615,14 @@ fn category_from_type_uri(type_uri: &str) -> Option<RpcCategory> {
 
 impl fmt::Display for RpcError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.message)
+        write!(formatter, "{}: {}", self.inner.code, self.inner.message)
     }
 }
 
 impl Error for RpcError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source
+        self.inner
+            .source
             .as_deref()
             .map(|source| source as &(dyn Error + 'static))
     }
@@ -441,6 +650,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rpc_error_keeps_a_pointer_sized_public_result_representation() {
+        assert_eq!(
+            std::mem::size_of::<RpcError>(),
+            std::mem::size_of::<Box<()>>()
+        );
+    }
+
+    #[test]
     fn error_codes_are_strict_snake_case() {
         for value in ["", "Bad", "bad-code", "_bad", "bad code"] {
             assert!(ErrorCode::new(value).is_err(), "{value:?}");
@@ -454,30 +671,52 @@ mod tests {
 
     #[test]
     fn internal_sources_never_enter_problem_details() {
-        let error =
-            RpcError::internal("database operation failed", std::io::Error::other("secret"));
+        let mut details = RpcErrorDetails::new();
+        details.insert("query", Value::String("secret query".to_owned()));
+        let error = RpcError::internal(
+            "database operation failed",
+            std::io::Error::other("secret source"),
+        )
+        .with_details(details);
         let problem = error.problem_details("request-1", Some("/rpc".into()));
         assert_eq!(problem.code.as_str(), "internal_error");
         assert_eq!(problem.detail.as_deref(), Some("Internal server error"));
-        assert!(!serde_json::to_string(&problem).unwrap().contains("secret"));
+        let encoded = serde_json::to_string(&problem).unwrap();
+        assert!(!encoded.contains("secret source"));
+        assert!(!encoded.contains("secret query"));
+        assert!(error.source_ref().is_some());
+    }
+
+    #[test]
+    fn application_details_round_trip_as_structured_data() {
+        let mut details = RpcErrorDetails::new();
+        details.insert("field", Value::String("email".to_owned()));
+        details.insert("constraint", Value::String("unique".to_owned()));
+        let error = RpcError::application(StatusCode::CONFLICT, "duplicate", "already exists")
+            .unwrap()
+            .with_details(details.clone());
+
+        assert_eq!(error.details(), Some(&details));
+        let remote = RpcError::from_remote(error.problem_details("request-2", None));
+        assert_eq!(remote.details(), Some(&details));
     }
 
     #[test]
     fn application_errors_cannot_be_retryable() {
         let error = RpcError::application(StatusCode::CONFLICT, "duplicate", "already exists")
             .unwrap()
-            .mark_retryable();
-        assert!(!error.retryable());
+            .with_retry_hint(RetryHint::Retryable);
+        assert!(!error.retry_hint().is_retryable());
 
         let typed = RpcError::new(RpcCategory::Application, "domain_error", "failed").unwrap();
         assert_eq!(typed.origin(), RpcOrigin::Application);
-        assert!(!typed.retryable());
+        assert!(!typed.retry_hint().is_retryable());
 
         let mut malicious = typed.problem_details("request-1", None);
         malicious.retryable = true;
         let remote = RpcError::from_remote(malicious);
         assert_eq!(remote.origin(), RpcOrigin::Application);
-        assert!(!remote.retryable());
+        assert!(!remote.retry_hint().is_retryable());
     }
 
     #[test]
@@ -496,6 +735,6 @@ mod tests {
         let application = RpcError::from_remote(application.problem_details("request-2", None));
         assert_eq!(application.category(), RpcCategory::Application);
         assert_eq!(application.origin(), RpcOrigin::Application);
-        assert!(!application.retryable());
+        assert!(!application.retry_hint().is_retryable());
     }
 }

@@ -1,47 +1,52 @@
-use crate::{RpcContext, RpcError, RpcResponse, runtime::BoxFuture};
+use crate::RpcResponse;
+pub use crate::{
+    context::{MiddlewareStage, RpcBody, RpcContext, RpcSide},
+    rpc::{RetryHint, RpcCategory, RpcError, RpcErrorDetails, RpcOrigin},
+};
 use futures_util::FutureExt;
 use std::{
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
+    pin::Pin,
     sync::Arc,
 };
 
-/// Result returned by middleware and generated service dispatch.
-pub type RpcResult = Result<RpcResponse, RpcError>;
+/// Result returned by middleware and generated interface dispatch.
+pub type MiddlewareResult = Result<RpcResponse<RpcBody>, RpcError>;
 
-/// A logical-invocation middleware shared by client and server runtimes.
-///
-/// Client middleware runs exactly once around all physical attempts. Server middleware runs once
-/// around body decoding and service dispatch. Panics are isolated to the current invocation.
+/// Sendable future returned by [`Middleware`].
+pub type MiddlewareFuture<'a> = Pin<Box<dyn Future<Output = MiddlewareResult> + Send + 'a>>;
+
+/// Object-safe middleware shared by all client and server stages.
 pub trait Middleware: Send + Sync + 'static {
-    /// Processes an invocation and optionally delegates to the rest of the chain.
-    fn handle<'a>(
-        &'a self,
-        context: RpcContext,
-        next: Next<'a>,
-    ) -> impl Future<Output = RpcResult> + Send + 'a;
+    /// Processes one stage and optionally delegates to the remaining chain.
+    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a>;
 }
 
-pub(crate) trait MiddlewareDyn: Send + Sync {
-    fn handle_dyn<'a>(&'a self, context: RpcContext, next: Next<'a>) -> BoxFuture<'a, RpcResult>;
-}
-
-impl<T> MiddlewareDyn for T
+impl<T> Middleware for Arc<T>
 where
-    T: Middleware,
+    T: Middleware + ?Sized,
 {
-    fn handle_dyn<'a>(&'a self, context: RpcContext, next: Next<'a>) -> BoxFuture<'a, RpcResult> {
-        Box::pin(async move {
-            let future = match catch_unwind(AssertUnwindSafe(|| self.handle(context, next))) {
-                Ok(future) => future,
-                Err(_) => return Err(middleware_panicked()),
-            };
-            match AssertUnwindSafe(future).catch_unwind().await {
-                Ok(result) => result,
-                Err(_) => Err(middleware_panicked()),
-            }
-        })
+    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+        (**self).call(context, next)
     }
+}
+
+pub(crate) fn call_middleware<'a>(
+    middleware: &'a dyn Middleware,
+    context: RpcContext,
+    next: Next<'a>,
+) -> MiddlewareFuture<'a> {
+    Box::pin(async move {
+        let future = match catch_unwind(AssertUnwindSafe(|| middleware.call(context, next))) {
+            Ok(future) => future,
+            Err(_) => return Err(middleware_panicked()),
+        };
+        match AssertUnwindSafe(future).catch_unwind().await {
+            Ok(result) => result,
+            Err(_) => Err(middleware_panicked()),
+        }
+    })
 }
 
 fn middleware_panicked() -> RpcError {
@@ -54,20 +59,20 @@ fn middleware_panicked() -> RpcError {
 }
 
 pub(crate) trait Terminal: Send + Sync {
-    fn call<'a>(&'a self, context: RpcContext) -> BoxFuture<'a, RpcResult>;
+    fn call<'a>(&'a self, context: RpcContext) -> MiddlewareFuture<'a>;
 }
 
-/// Consuming access to the remaining logical-invocation pipeline.
+/// Consuming access to the remainder of a middleware chain.
 ///
-/// `Next` is intentionally not cloneable, preventing one middleware position from entering its
-/// downstream chain more than once.
+/// `Next` is intentionally not cloneable, so one middleware position can enter downstream at
+/// most once.
 pub struct Next<'a> {
-    remaining: &'a [Arc<dyn MiddlewareDyn>],
+    remaining: &'a [Arc<dyn Middleware>],
     terminal: &'a dyn Terminal,
 }
 
 impl<'a> Next<'a> {
-    pub(crate) fn new(remaining: &'a [Arc<dyn MiddlewareDyn>], terminal: &'a dyn Terminal) -> Self {
+    pub(crate) fn new(remaining: &'a [Arc<dyn Middleware>], terminal: &'a dyn Terminal) -> Self {
         Self {
             remaining,
             terminal,
@@ -75,9 +80,10 @@ impl<'a> Next<'a> {
     }
 
     /// Runs the next middleware or the framework terminal.
-    pub fn run(self, context: RpcContext) -> BoxFuture<'a, RpcResult> {
+    pub fn run(self, context: RpcContext) -> MiddlewareFuture<'a> {
         match self.remaining.split_first() {
-            Some((middleware, remaining)) => middleware.handle_dyn(
+            Some((middleware, remaining)) => call_middleware(
+                middleware.as_ref(),
                 context,
                 Self {
                     remaining,
@@ -89,39 +95,38 @@ impl<'a> Next<'a> {
     }
 }
 
-pub(crate) fn erase_middleware(value: impl Middleware) -> Arc<dyn MiddlewareDyn> {
+pub(crate) fn erase_middleware(value: impl Middleware) -> Arc<dyn Middleware> {
     Arc::new(value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Arguments, context::RpcContextParts, runtime::deadline::Deadline};
+    use crate::{
+        MiddlewareStage, RpcArguments, RpcSide,
+        context::RpcContextParts,
+        runtime::{budget::ByteBudget, deadline::Deadline},
+    };
     use fusen_contract::{
         Idempotency, MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector, WireProtocol,
     };
-    use std::{future::ready, sync::OnceLock, time::Duration};
+    use std::{num::NonZeroU8, sync::OnceLock, time::Duration};
 
     struct SynchronousPanic;
 
     impl Middleware for SynchronousPanic {
-        fn handle<'a>(
-            &'a self,
-            context: RpcContext,
-            _next: Next<'a>,
-        ) -> impl Future<Output = RpcResult> + Send + 'a {
+        fn call<'a>(&'a self, context: RpcContext, _next: Next<'a>) -> MiddlewareFuture<'a> {
             if context.request_id() == "panic" {
                 panic!("private synchronous middleware panic");
             }
-            let response = context.respond("unused");
-            ready(response)
+            Box::pin(async move { context.respond("unused") })
         }
     }
 
     struct UnreachableTerminal;
 
     impl Terminal for UnreachableTerminal {
-        fn call<'a>(&'a self, _context: RpcContext) -> BoxFuture<'a, RpcResult> {
+        fn call<'a>(&'a self, _context: RpcContext) -> MiddlewareFuture<'a> {
             Box::pin(async { unreachable!("panicking middleware must not call its terminal") })
         }
     }
@@ -142,21 +147,25 @@ mod tests {
 
     #[tokio::test]
     async fn synchronous_future_construction_panic_is_isolated() {
-        let service = descriptor();
+        let interface = descriptor();
         let context = RpcContext::new(RpcContextParts {
+            side: RpcSide::Client,
+            stage: MiddlewareStage::ClientCall,
             request_id: "panic".to_owned(),
             protocol: WireProtocol::FusenV1,
-            service,
-            method: service.method(MethodId::new(0)).unwrap(),
+            interface,
+            method: interface.method(MethodId::new(0)).unwrap(),
             deadline: Deadline::after(Duration::from_secs(1)),
-            attempt: 1,
+            attempt: NonZeroU8::new(1),
+            endpoint: None,
             headers: http::HeaderMap::new(),
-            arguments: Arguments::new(),
+            extensions: http::Extensions::new(),
+            arguments: Some(RpcArguments::new()),
             response_limit: 1024,
             response_wire_overhead: 0,
-            response_budget: crate::runtime::budget::ByteBudget::new(1024),
+            response_budget: ByteBudget::new(1024),
         });
-        let middleware: Arc<[Arc<dyn MiddlewareDyn>]> =
+        let middleware: Arc<[Arc<dyn Middleware>]> =
             Arc::from([erase_middleware(SynchronousPanic)]);
         let error = Next::new(&middleware, &UnreachableTerminal)
             .run(context)

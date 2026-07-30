@@ -8,12 +8,12 @@ mod static_config;
 pub use error::{ConfigError, ConfigErrorKind, ConfigOperation};
 pub use hot::{
     ConfigDocument, ConfigFormat, ConfigFuture, ConfigHandle, ConfigKey, ConfigKeyBuilder,
-    ConfigSnapshot, HotConfig,
+    ConfigSnapshot, ConfigSource, HotConfig,
 };
 pub use static_config::{load, parse, parse_toml, parse_yaml};
 
-/// Private ABI for provider adapters maintained in this workspace.
-#[doc(hidden)]
-pub mod __adapter {
-    pub use crate::hot::{ConfigPublisher, prepare_config};
+/// Provider lifecycle API for implementing [`ConfigSource`].
+pub mod provider {
+    pub use crate::hot::ConfigPublisher;
+    pub use crate::hot::prepare_config as lifecycle;
 }

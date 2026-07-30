@@ -13,11 +13,11 @@ ClientRuntime / Server runtime
 │   └── Readiness / stale state
 ├── Data plane
 │   ├── Admission / byte budgets
-│   ├── Middleware / service
+│   ├── Middleware / interface Handler
 │   └── HTTP transport (client HTTP/HTTPS, server plaintext)
 └── LogicalInvocation
     └── AttemptExecutor
-        ├── Router / LoadBalancer
+        ├── InstanceRouter / LoadBalancer
         ├── Retry budget
         └── Endpoint + service circuit breaker
 ```
@@ -35,10 +35,10 @@ ClientRuntime / Server runtime
 | `fusen-config` | 静态解析、last-good 热配置及显式关闭 |
 | `fusen-nacos` | Nacos naming/config provider adapter |
 | `fusen-observability` | 同步非阻塞 `MetricsRecorder` 及可选 backend adapter |
-| `fusen-procedural-macro` | `service`/`method` 解析和 wrapper 生成 |
+| `fusen-procedural-macro` | `interface`/`method`/`RpcMessage` 解析和 wrapper 生成 |
 | `fusen-rs` | HTTP/HTTPS Client、明文 HTTP Server、策略与 Middleware runtime |
 
-Core 不依赖 Nacos、OpenSSL/native-tls、系统证书加载器、进程级 tracing subscriber 或 OTel backend。Client 内部使用 Rustls Ring 和 bundled Mozilla WebPKI roots 实现 TLS 1.2/1.3；Server acceptor 仍为明文 HTTP/1.1 与 h2c。宏生成代码只通过隐藏的 `fusen_rs::__macro` ABI 使用 runtime internals。
+Core 不依赖 Nacos、OpenSSL/native-tls、系统证书加载器、进程级 tracing subscriber 或 OTel backend。Client 内部使用 Rustls Ring 和 bundled Mozilla WebPKI roots 实现 TLS 1.2/1.3；Server acceptor 仍为明文 HTTP/1.1 与 h2c。宏生成代码只通过版本化的 `fusen_rs::__macro::v1` ABI 使用 runtime internals。
 
 ## 逻辑调用与 Attempt
 
@@ -46,19 +46,20 @@ Core 不依赖 Nacos、OpenSSL/native-tls、系统证书加载器、进程级 tr
 
 ```text
 logical admission + tracing
--> Middleware exactly once
+-> ClientCall Middleware exactly once
 -> freeze replayable RequestTemplate
 -> service circuit breaker
 -> AttemptExecutor
    -> latest DirectorySnapshot
-   -> Router -> breaker filter -> LoadBalancer
+   -> InstanceRouter -> breaker filter -> LoadBalancer
    -> endpoint bulkhead
+   -> ClientAttempt Middleware
    -> send / decode
    -> AttemptOutcome -> retry decision / backoff
 -> one logical terminal outcome
 ```
 
-Middleware 包围整个逻辑调用，而不是每次 attempt。一个 absolute deadline 覆盖排队、Middleware、全部 attempts、退避与 decode。每次 attempt 重新读取发现快照；只要仍有未尝试 endpoint，就不能重复选择本次调用中已失败的 endpoint。调用方取消会直接取消当前 attempt，不产生 detached retry。
+ClientCall Middleware 包围整个逻辑调用，ClientAttempt Middleware 包围每个物理 attempt。一个 absolute deadline 覆盖排队、Middleware、全部 attempts、退避与 decode。每次 attempt 重新读取发现快照；只要仍有未尝试 endpoint，就不能重复选择本次调用中已失败的 endpoint。调用方取消会直接取消当前 attempt，不产生 detached retry。
 
 Endpoint breaker 记录真实 attempt；service breaker 只记录逻辑调用的最终结果。序列化、无实例、本地 admission、普通 4xx、Application error 和调用方取消不污染 breaker。自定义 `RetryPolicy` 仍受幂等性、三次 attempt、deadline 和 token budget 的硬上限约束。
 
@@ -73,8 +74,9 @@ protocol / request-id / deadline / readiness
 -> route head
 -> fail-fast admission
 -> content-type / content-length
+-> ServerHead Middleware
 -> byte budget + body read / decode
--> Middleware / service
+-> ServerCall Middleware / interface Handler
 -> bounded response encode
 ```
 
@@ -82,7 +84,7 @@ protocol / request-id / deadline / readiness
 
 ## Control Plane
 
-`Registry::prepare_registration` 和 `prepare_subscription` 同步返回已拥有 worker 与补偿状态的 handle。Runtime 先追踪 handle，再等待 `activate()`。Late success 若已经没有 waiter，会自动执行一次补偿关闭；`close()` 幂等且并发调用共享同一终态。
+`Registry::prepare_registration(RegistrationRequest)` 和 `prepare_subscription(SubscriptionRequest)` 同步返回已拥有 worker 与补偿状态的 handle。Runtime 先追踪 handle，再等待 `activate()`。Late success 若已经没有 waiter，会自动执行一次补偿关闭；`close()` 幂等且并发调用共享同一终态。
 
 发现按 `(ServiceSelector, WireProtocol)` 共享唯一 supervisor。状态流为：
 
@@ -112,6 +114,6 @@ Client shutdown 先线性化关闭 admission，再并行排空逻辑调用、关
 
 ## Panic 与可观测性
 
-发布 profile 使用 `panic=unwind`。Middleware、service、Router、LoadBalancer、RetryPolicy 和 `MetricsRecorder` 分别隔离：请求扩展 panic 只终止当前请求；单个 H2 stream panic 不关闭同连接其他 stream；registry activation/close panic 转成生命周期错误并继续补偿；metrics recorder 首次 panic 后被原子禁用。
+发布 profile 使用 `panic=unwind`。Middleware、interface Handler、InstanceRouter、LoadBalancer、RetryPolicy 和 `MetricsRecorder` 分别隔离：请求扩展 panic 只终止当前请求；单个 H2 stream panic 不关闭同连接其他 stream；registry activation/close panic 转成生命周期错误并继续补偿；metrics recorder 首次 panic 后被原子禁用。
 
 Core 直接产生结构化 tracing span/event，应用负责安装 subscriber。Metrics callback 必须同步且非阻塞，label 禁止包含 request ID、endpoint、错误文本、body、完整 headers 或凭据。同步死循环和阻塞无法被 async timeout 抢占，扩展实现应将阻塞工作移到 `spawn_blocking`。

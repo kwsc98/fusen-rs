@@ -1,9 +1,10 @@
 //! Direct single-attempt socket matrix used by the 0.9 release gate.
 
 use fusen_rs::{
-    ClientConfig, ClientRuntime, RetryConfig, RpcError, Server, ServerConfig, WireProtocol,
-    contract::ProtocolSet, service,
+    ClientConfig, ClientRuntime, RetryConfig, RpcError, RpcRequest, RpcResponse, Server,
+    ServerConfig, WireProtocol, contract::ProtocolSet, interface,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     error::Error,
@@ -20,20 +21,30 @@ const DEFAULT_LARGE_ITERATIONS: usize = 1_000;
 const LARGE_PAYLOAD_BYTES: usize = 64 * 1024;
 const CONCURRENCIES: [usize; 2] = [1, 100];
 
-#[service(name = "benchmark")]
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+struct EchoRequest {
+    #[rpc(body)]
+    value: String,
+}
+
+#[interface(name = "benchmark")]
 trait BenchmarkService {
     #[method(
         idempotency = "none",
-        spring(method = "POST", path = "/benchmark/echo", body = "value")
+        spring(method = "POST", path = "/benchmark/echo")
     )]
-    async fn echo(&self, value: String) -> Result<String, RpcError>;
+    async fn echo(&self, request: RpcRequest<EchoRequest>)
+    -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct BenchmarkServiceImpl;
 
 impl BenchmarkService for BenchmarkServiceImpl {
-    async fn echo(&self, value: String) -> Result<String, RpcError> {
-        Ok(value)
+    async fn echo(
+        &self,
+        request: RpcRequest<EchoRequest>,
+    ) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(request.into_body().value))
     }
 }
 
@@ -153,7 +164,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .build()?;
     let server = Server::builder("127.0.0.1:0")
         .config(server_config)
-        .service(BenchmarkServiceServer::new(BenchmarkServiceImpl))
+        .interface(BenchmarkServiceServer::new(BenchmarkServiceImpl))
         .build()?
         .start()
         .await?;
@@ -175,7 +186,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     for protocol in BenchmarkProtocol::ALL {
         let client_config = ClientConfig::builder()
-            .retry(RetryConfig::default().max_attempts(1))
+            .retry(RetryConfig::builder().max_attempts(1).build()?)
             .build()?;
         let client_runtime = ClientRuntime::builder().config(client_config).build()?;
         let client = BenchmarkServiceClient::builder(&client_runtime)
@@ -283,9 +294,12 @@ async fn execute_requests(
             for _ in 0..worker_iterations {
                 let request = payload.as_ref().clone();
                 let started = Instant::now();
-                match client.echo(request).await {
-                    Ok(response) if response == *payload => {
-                        black_box(&response);
+                match client
+                    .echo(RpcRequest::new(EchoRequest { value: request }))
+                    .await
+                {
+                    Ok(response) if response.body() == payload.as_ref() => {
+                        black_box(response.body());
                         result
                             .latency_ns
                             .push(u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX));

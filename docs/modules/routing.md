@@ -13,6 +13,6 @@ Route head 在 admission 和 body 读取前解析。未知 route 不 poll body�
 
 ## Client Route And Selection
 
-每个 physical attempt 都读取最新 `DirectorySnapshot`。多个 `Router` 按注册顺序执行，随后过滤 open endpoint breaker，再由 `LoadBalancer` 返回一个合法 index。默认 `WeightedRandom` 使用经过校验的正权重。
+每个 physical attempt 都读取最新 `DirectorySnapshot`。多个 `InstanceRouter` 按注册顺序执行，随后过滤 open endpoint breaker，再由 `LoadBalancer` 返回一个合法 index。默认 `WeightedRandom` 使用经过校验的正权重。
 
-Router/LB panic 被隔离为当前逻辑调用的内部错误。空快照、Router 清空结果或非法 index fail fast，且不进入 breaker 失败统计。一次调用只要存在未尝试 endpoint，就不会再次选择先前失败的 endpoint。
+InstanceRouter/LoadBalancer panic 被隔离为当前逻辑调用的内部错误。空快照、InstanceRouter 清空结果或非法 index fail fast，且不进入 breaker 失败统计。一次调用只要存在未尝试 endpoint，就不会再次选择先前失败的 endpoint。

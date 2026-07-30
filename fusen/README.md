@@ -8,31 +8,39 @@ circuit breakers, middleware, metrics, and explicit runtime lifecycles.
 Version 0.9 is a clean-slate API and wire reset. It is the first compatibility
 baseline and is intentionally incompatible with releases before 0.9.
 
-## Service declarations
+## Interface declarations
 
 One trait declares the shared client and server contract:
 
 ```rust
-use fusen_rs::RpcError;
+use fusen_rs::{RpcError, RpcRequest, RpcResponse};
+use serde::{Deserialize, Serialize};
 
-#[fusen_rs::service(name = "user", group = "prod", version = "1")]
-pub trait UserService {
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+pub struct GetUserRequest {
+    #[rpc(path)]
+    pub id: String,
+    #[rpc(query)]
+    pub expand: Option<bool>,
+}
+
+#[fusen_rs::interface(name = "user", group = "prod", version = "1")]
+pub trait UserApi {
     #[fusen_rs::method(
         idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}", query = ["expand"])
+        spring(method = "GET", path = "/users/{id}")
     )]
     async fn get(
         &self,
-        id: String,
-        expand: Option<bool>,
-    ) -> Result<User, RpcError>;
+        request: RpcRequest<GetUserRequest>,
+    ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-Every RPC must explicitly return `Result<T, RpcError>`. The macro generates
-`UserServiceClient`, `UserServiceClientBuilder`, and `UserServiceServer`.
-Server implementations implement `UserService` directly. Spring HEAD mappings
-must return `Result<(), RpcError>` because HEAD responses have no body.
+Every RPC accepts exactly one `RpcRequest<T>` and returns
+`Result<RpcResponse<T>, RpcError>`. The macro generates `UserApiClient` and
+`UserApiServer<T>`; both the generated client and a user handler implement
+`UserApi`. Clients use the generic `ClientBuilder<UserApiClient>`.
 
 ## Runtime lifecycle
 
@@ -43,7 +51,7 @@ one direct endpoint or through the configured registry:
 use fusen_rs::{ClientRuntime, WireProtocol};
 
 let runtime = ClientRuntime::builder().build()?;
-let client = UserServiceClient::builder(&runtime)
+let client = UserApiClient::builder(&runtime)
     .direct("http://127.0.0.1:8080")
     .protocol(WireProtocol::FusenV1)
     .connect()
@@ -69,7 +77,7 @@ all configured registrations:
 use fusen_rs::Server;
 
 let server = Server::builder("0.0.0.0:0")
-    .service(UserServiceServer::new(service))
+    .interface(UserApiServer::new(handler))
     .build()?;
 let running = server.start().await?;
 let address = running.local_addr();
@@ -94,8 +102,8 @@ The client accepts canonical `http://` and `https://` endpoints. The server does
 not terminate TLS; use a sidecar, service mesh, ingress, or reverse proxy for
 inbound HTTPS.
 
-The supported extension surface is `Middleware`, `Registry`, `Router`,
-`LoadBalancer`, `RetryPolicy`, and `MetricsRecorder`. Transports, codecs,
+The supported extension surface is `Middleware`, `Registry`, `ConfigSource`,
+`InstanceRouter`, `LoadBalancer`, `RetryPolicy`, and `MetricsRecorder`. Transports, codecs,
 acceptors, connection pools, and lifecycle state machines are private runtime
 implementation details.
 

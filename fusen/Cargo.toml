@@ -50,6 +50,7 @@ url.workspace = true
 mime.workspace = true
 
 [dev-dependencies]
+fusen-config.workspace = true
 rcgen.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 tokio-rustls.workspace = true

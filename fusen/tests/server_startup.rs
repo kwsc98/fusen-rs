@@ -1,12 +1,12 @@
 //! Deterministic coverage for the server's pre-Ready and cancelled-startup states.
 
 use fusen_register::{
-    RegistrationHandle, Registry, SubscriptionHandle, error::RegistryError, prepare_registration,
+    RegistrationHandle, RegistrationRequest, Registry, SubscriptionHandle, SubscriptionRequest,
+    error::RegistryError, provider,
 };
 use fusen_rs::{
-    RpcError, Server, ServerConfig, ServerRegistryConfig, WireProtocol,
-    contract::{ProtocolSet, ServiceRegistration, ServiceSelector},
-    service,
+    RpcError, RpcRequest, RpcResponse, Server, ServerConfig, ServerRegistryConfig,
+    contract::ProtocolSet, interface,
 };
 use serde_json::Value;
 use std::{
@@ -23,17 +23,17 @@ use tokio::{
     sync::oneshot,
 };
 
-#[service(name = "startup-lifecycle-e2e")]
+#[interface(name = "startup-lifecycle-e2e")]
 trait StartupLifecycleService {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/startup"))]
-    async fn check(&self) -> Result<String, RpcError>;
+    async fn check(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct StartupLifecycleServiceImpl;
 
 impl StartupLifecycleService for StartupLifecycleServiceImpl {
-    async fn check(&self) -> Result<String, RpcError> {
-        Ok("ready".to_owned())
+    async fn check(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new("ready".to_owned()))
     }
 }
 
@@ -87,9 +87,9 @@ impl GatedRegistry {
 impl Registry for GatedRegistry {
     fn prepare_registration(
         &self,
-        registration: Arc<ServiceRegistration>,
-        _protocol: WireProtocol,
+        request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError> {
+        let registration = request.registration();
         let address = registration
             .endpoint()
             .as_url()
@@ -125,7 +125,7 @@ impl Registry for GatedRegistry {
             .expect("test cleanup is prepared once");
         let cleanup_count = self.cleanup_count.clone();
 
-        Ok(prepare_registration(
+        Ok(provider::registration(
             async move {
                 let _ = activation_started.send(());
                 let _ = activation_release.await;
@@ -141,8 +141,7 @@ impl Registry for GatedRegistry {
 
     fn prepare_subscription(
         &self,
-        _selector: ServiceSelector,
-        _protocol: WireProtocol,
+        _request: SubscriptionRequest,
     ) -> Result<SubscriptionHandle, RegistryError> {
         Err(RegistryError::message(
             fusen_register::error::RegistryOperation::PrepareSubscription,
@@ -254,18 +253,21 @@ async fn aborting_start_compensates_a_late_registration_success_exactly_once() {
 fn build_server(registry: GatedRegistry) -> Server {
     let config = ServerConfig::builder()
         .protocols(ProtocolSet::SPRING_CLOUD_V1)
-        .registry(ServerRegistryConfig::default().limits(
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-            1,
-        ))
+        .registry(
+            ServerRegistryConfig::builder()
+                .startup_timeout(Duration::from_secs(5))
+                .operation_timeout(Duration::from_secs(5))
+                .max_concurrent_operations(1)
+                .build()
+                .unwrap(),
+        )
         .graceful_shutdown_timeout(Duration::from_secs(5))
         .build()
         .unwrap();
     Server::builder("127.0.0.1:0")
         .config(config)
         .registry("gated", registry)
-        .service(StartupLifecycleServiceServer::new(
+        .interface(StartupLifecycleServiceServer::new(
             StartupLifecycleServiceImpl,
         ))
         .build()

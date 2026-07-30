@@ -4,10 +4,11 @@ use fusen_contract::{
     ServiceWeight, WireProtocol,
 };
 use fusen_register::{
-    RegistrationHandle, Registry, RegistryFuture, SubscriptionHandle,
+    RegistrationHandle, RegistrationRequest, Registry, RegistryFuture, SubscriptionHandle,
+    SubscriptionRequest,
     directory::{DirectoryPublisher, directory},
     error::{RegistryError, RegistryErrorKind, RegistryOperation},
-    prepare_registration, prepare_subscription,
+    provider,
 };
 use nacos_sdk::api::error::Error as NacosError;
 use nacos_sdk::api::naming::{
@@ -39,11 +40,11 @@ impl NacosRegistry {
         config: NacosConfig,
     ) -> Result<Self, RegistryError> {
         let application_name = application_name.into();
-        config.validate().map_err(|message| {
-            RegistryError::message(
+        config.validate().map_err(|error| {
+            RegistryError::new(
                 RegistryOperation::PrepareRegistration,
                 RegistryErrorKind::InvalidResource,
-                message,
+                error,
             )
         })?;
         validate_application_name(&application_name).map_err(|message| {
@@ -82,9 +83,9 @@ impl std::fmt::Debug for NacosRegistry {
 impl Registry for NacosRegistry {
     fn prepare_registration(
         &self,
-        registration: Arc<ServiceRegistration>,
-        protocol: WireProtocol,
+        request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError> {
+        let (registration, protocol) = request.into_parts();
         if !registration.protocols().contains(protocol) {
             return Err(RegistryError::message(
                 RegistryOperation::PrepareRegistration,
@@ -108,7 +109,7 @@ impl Registry for NacosRegistry {
         let activate_instance = instance.clone();
         let close_naming = self.naming.clone();
 
-        Ok(prepare_registration(
+        Ok(provider::registration(
             async move {
                 activate_naming
                     .register(activate_service_name, activate_group, activate_instance)
@@ -120,9 +121,9 @@ impl Registry for NacosRegistry {
 
     fn prepare_subscription(
         &self,
-        selector: ServiceSelector,
-        protocol: WireProtocol,
+        request: SubscriptionRequest,
     ) -> Result<SubscriptionHandle, RegistryError> {
+        let (selector, protocol) = request.into_parts();
         let service_name =
             service_name(&selector, protocol, RegistryOperation::PrepareSubscription)?;
         let group = selector.group().map(str::to_owned);
@@ -140,7 +141,7 @@ impl Registry for NacosRegistry {
         let activate_listener = listener.clone();
         let close_naming = self.naming.clone();
 
-        Ok(prepare_subscription(
+        Ok(provider::subscription(
             directory,
             async move {
                 activate_naming
@@ -734,7 +735,10 @@ mod tests {
             naming: Arc::new(provider.clone()),
         };
         let handle = registry
-            .prepare_registration(registration(), WireProtocol::FusenV1)
+            .prepare_registration(RegistrationRequest::new(
+                registration(),
+                WireProtocol::FusenV1,
+            ))
             .unwrap();
         let waiter = tokio::spawn({
             let handle = handle.clone();

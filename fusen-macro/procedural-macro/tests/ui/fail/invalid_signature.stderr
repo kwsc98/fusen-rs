@@ -1,0 +1,5 @@
+error: RPC request parameter must be RpcRequest<T>
+  --> tests/ui/fail/invalid_signature.rs:10:35
+   |
+10 |     async fn call(&self, request: Input) -> Result<RpcResponse<Output>, RpcError>;
+   |                                   ^^^^^

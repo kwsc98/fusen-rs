@@ -9,40 +9,57 @@
 - Rust 1.97, Edition 2024, Tokio, and JSON.
 - Clients support canonical `http://` and `https://` endpoints. Fusen V1 uses h2c over HTTP and TLS/ALPN `h2` over HTTPS; Spring Cloud V1 uses HTTP/1.1 over either scheme.
 - Client HTTPS uses Rustls Ring, TLS 1.2/1.3, bundled Mozilla WebPKI roots, and strict certificate/hostname validation. The built-in server remains plaintext; terminate inbound TLS at an ingress, sidecar, reverse proxy, or service mesh.
-- The stable extension surface is limited to `Middleware`, `Registry`, `Router`, `LoadBalancer`, `RetryPolicy`, and `MetricsRecorder`.
+- The stable extension surface is limited to `Middleware`, `Registry`, `ConfigSource`, `InstanceRouter`, `LoadBalancer`, `RetryPolicy`, and `MetricsRecorder`.
 - Transport, codecs, acceptors, connection pools, and lifecycle state machines are runtime internals.
 
-## Service Contract
+## Interface Contract
 
-One trait macro defines the service. Every RPC method declares its retry semantics and returns `Result<T, RpcError>`.
+One trait macro defines the shared client/server interface. Every RPC method accepts exactly one `RpcRequest<T>` and returns `Result<RpcResponse<T>, RpcError>`.
 
 ```rust,no_run
-use fusen_rs::{RpcError, method, service};
+use fusen_rs::{RpcError, RpcRequest, RpcResponse, interface};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct User { pub id: String }
 
-#[derive(Serialize, Deserialize)]
-pub struct CreateUser { pub id: String }
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+pub struct GetUserRequest {
+    #[rpc(path)]
+    pub id: String,
+    #[rpc(query)]
+    pub expand: Option<bool>,
+}
 
-#[service(name = "user", group = "prod", version = "1")]
-pub trait UserService {
-    #[method(
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+pub struct CreateUser {
+    #[rpc(body)]
+    pub id: String,
+}
+
+#[interface(name = "user", group = "prod", version = "1")]
+pub trait UserApi {
+    #[fusen_rs::method(
         idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}", query = ["expand"])
+        spring(method = "GET", path = "/users/{id}")
     )]
-    async fn get(&self, id: String, expand: Option<bool>) -> Result<User, RpcError>;
+    async fn get(
+        &self,
+        request: RpcRequest<GetUserRequest>,
+    ) -> Result<RpcResponse<User>, RpcError>;
 
-    #[method(
+    #[fusen_rs::method(
         idempotency = "none",
-        spring(method = "POST", path = "/users", body = "request")
+        spring(method = "POST", path = "/users")
     )]
-    async fn create(&self, request: CreateUser) -> Result<User, RpcError>;
+    async fn create(
+        &self,
+        request: RpcRequest<CreateUser>,
+    ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-The macro generates `UserServiceClient`, `UserServiceClientBuilder`, and `UserServiceServer`. Implementations directly implement the generated trait; there is no implementation macro. Idempotency defaults to `none` and is never inferred from the HTTP method. Spring path parameters come from `{name}` placeholders, while query and body sources must be listed explicitly. Spring HEAD mappings return `Result<(), RpcError>` because HEAD has no response body. Fusen V1 always encodes every argument by name.
+The macro generates `UserApiClient` and `UserApiServer<T>`. The generated client and user handler both implement `UserApi`; all clients use the generic `ClientBuilder<UserApiClient>`. `RpcMessage` fields declare Spring roles with `#[rpc(path)]`, `#[rpc(query)]`, or `#[rpc(body)]`, while Fusen V1 always encodes every DTO field into its `arguments` object. DTO attribute errors fail during derive; cross-type path/schema inconsistencies return classified errors from client connect or server build before network I/O.
 
 ## Client
 
@@ -50,17 +67,17 @@ The macro generates `UserServiceClient`, `UserServiceClientBuilder`, and `UserSe
 
 ```rust,no_run
 # use fusen_rs::{ClientError, ClientRuntime, WireProtocol};
-# use crate::UserServiceClient;
+# use crate::UserApiClient;
 # async fn run() -> Result<(), ClientError> {
 let runtime = ClientRuntime::builder().build()?;
 
-let client = UserServiceClient::builder(&runtime)
+let client = UserApiClient::builder(&runtime)
     .direct("http://127.0.0.1:8081")
     .protocol(WireProtocol::FusenV1)
     .connect()
     .await?;
 
-// Generated RPC methods return Result<T, RpcError>.
+// Generated RPC methods return Result<RpcResponse<T>, RpcError>.
 runtime.shutdown().await?;
 # Ok(())
 # }
@@ -83,10 +100,10 @@ If a successful HTTP/wire response cannot decode its `result` into the generated
 
 ```rust,no_run
 # use fusen_rs::{Server, ServerError};
-# use crate::{UserServiceServer, UserServiceImpl};
+# use crate::{UserApiServer, UserApiHandler};
 # async fn run() -> Result<(), ServerError> {
 let server = Server::builder("0.0.0.0:0")
-    .service(UserServiceServer::new(UserServiceImpl))
+    .interface(UserApiServer::new(UserApiHandler))
     .build()?;
 
 let running = server.start().await?;
@@ -134,7 +151,7 @@ Both protocols use `x-request-id`, `x-fusen-timeout-ms`, and `x-fusen-attempt`. 
 | TCP connections | - | 2048 |
 | H2 streams per connection | - | 128 |
 
-Queues are disabled by default. `QueueConfig::bounded(capacity)` enables a bounded queue whose wait remains part of the logical deadline. Admission and byte budgets otherwise fail fast.
+Queues are disabled by default. Configure `QueueConfig::builder().capacity(...).max_wait(...).build()?` and install it through `ClientAdmissionConfigBuilder` to enable a bounded queue; its wait remains part of the logical deadline. Admission and byte budgets otherwise fail fast.
 
 Byte budgets cover decoded/encoded payload retained by the runtime and queued body chunks until Hyper consumes or cancels them. Protocol framing, HPACK/H2 codec staging, and OS socket buffers are separately bounded transport overhead and are not charged to body budgets.
 
@@ -147,7 +164,7 @@ Byte budgets cover decoded/encoded payload retained by the runtime and queued bo
 | `fusen-config` | Static parsing and last-good hot configuration |
 | `fusen-nacos` | Nacos registry and configuration adapters |
 | `fusen-observability` | Metrics SPI and optional telemetry adapters |
-| `fusen-procedural-macro` | Service declaration and generated wrappers |
+| `fusen-procedural-macro` | Interface declaration, message derive, and generated wrappers |
 | `fusen-rs` | HTTP/HTTPS client, plaintext HTTP server, middleware, and policy runtimes |
 
 See [architecture](docs/architecture.md), [module contracts](docs/modules/README.md), [compatibility](docs/compatibility.md), and [examples](examples/README.md).

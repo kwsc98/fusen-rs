@@ -27,31 +27,134 @@ pub mod error;
 pub type RegistryFuture<T> =
     Pin<Box<dyn Future<Output = Result<T, RegistryError>> + Send + 'static>>;
 
+/// Parameters for preparing one provider registration.
+#[derive(Clone, Debug)]
+pub struct RegistrationRequest {
+    registration: Arc<ServiceRegistration>,
+    protocol: WireProtocol,
+}
+
+impl RegistrationRequest {
+    /// Creates a registration request.
+    pub fn new(registration: Arc<ServiceRegistration>, protocol: WireProtocol) -> Self {
+        Self {
+            registration,
+            protocol,
+        }
+    }
+
+    /// Returns the immutable provider registration.
+    pub fn registration(&self) -> &Arc<ServiceRegistration> {
+        &self.registration
+    }
+
+    /// Returns the wire protocol being published.
+    pub const fn protocol(&self) -> WireProtocol {
+        self.protocol
+    }
+
+    /// Consumes this request into its parts.
+    pub fn into_parts(self) -> (Arc<ServiceRegistration>, WireProtocol) {
+        (self.registration, self.protocol)
+    }
+}
+
+/// Parameters for preparing one discovery subscription.
+#[derive(Clone, Debug)]
+pub struct SubscriptionRequest {
+    selector: ServiceSelector,
+    protocol: WireProtocol,
+}
+
+impl SubscriptionRequest {
+    /// Creates a subscription request.
+    pub fn new(selector: ServiceSelector, protocol: WireProtocol) -> Self {
+        Self { selector, protocol }
+    }
+
+    /// Returns the service selector.
+    pub const fn selector(&self) -> &ServiceSelector {
+        &self.selector
+    }
+
+    /// Returns the requested wire protocol.
+    pub const fn protocol(&self) -> WireProtocol {
+        self.protocol
+    }
+
+    /// Consumes this request into its parts.
+    pub fn into_parts(self) -> (ServiceSelector, WireProtocol) {
+        (self.selector, self.protocol)
+    }
+}
+
 /// Pluggable provider that prepares registration and subscription ownership before activation.
 ///
 /// Implementations must construct handles without starting remote side effects. The runtime stores
 /// each handle before calling its `activate` method, so cancellation always has a cleanup owner.
-pub trait Registry: Send + Sync {
+pub trait Registry: Send + Sync + 'static {
     /// Prepares one service registration without publishing it yet.
     fn prepare_registration(
         &self,
-        registration: Arc<ServiceRegistration>,
-        protocol: WireProtocol,
+        request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError>;
 
     /// Prepares one service subscription without installing it yet.
     fn prepare_subscription(
         &self,
-        selector: ServiceSelector,
-        protocol: WireProtocol,
+        request: SubscriptionRequest,
     ) -> Result<SubscriptionHandle, RegistryError>;
+}
+
+impl<T> Registry for Arc<T>
+where
+    T: Registry + ?Sized,
+{
+    fn prepare_registration(
+        &self,
+        request: RegistrationRequest,
+    ) -> Result<RegistrationHandle, RegistryError> {
+        (**self).prepare_registration(request)
+    }
+
+    fn prepare_subscription(
+        &self,
+        request: SubscriptionRequest,
+    ) -> Result<SubscriptionHandle, RegistryError> {
+        (**self).prepare_subscription(request)
+    }
+}
+
+/// Safe constructors for provider-owned registry lifecycles.
+pub mod provider {
+    use super::*;
+
+    /// Creates a registration handle from activation and cleanup operations.
+    pub fn registration<A, C, CF>(activate: A, close: C) -> RegistrationHandle
+    where
+        A: Future<Output = Result<(), RegistryError>> + Send + 'static,
+        C: FnOnce() -> CF + Send + 'static,
+        CF: Future<Output = Result<(), RegistryError>> + Send + 'static,
+    {
+        super::prepare_registration(activate, close)
+    }
+
+    /// Creates a subscription handle and stable directory from provider operations.
+    pub fn subscription<A, C, CF>(directory: Directory, activate: A, close: C) -> SubscriptionHandle
+    where
+        A: Future<Output = Result<(), RegistryError>> + Send + 'static,
+        C: FnOnce() -> CF + Send + 'static,
+        CF: Future<Output = Result<(), RegistryError>> + Send + 'static,
+    {
+        super::prepare_subscription(directory, activate, close)
+    }
 }
 
 /// Creates a registration handle from provider-owned activation and cleanup operations.
 ///
 /// Neither future is polled before the first call to [`RegistrationHandle::activate`]. Cleanup is
 /// constructed at most once and only after activation has reached a terminal result.
-pub fn prepare_registration<A, C, CF>(activate: A, close: C) -> RegistrationHandle
+fn prepare_registration<A, C, CF>(activate: A, close: C) -> RegistrationHandle
 where
     A: Future<Output = Result<(), RegistryError>> + Send + 'static,
     C: FnOnce() -> CF + Send + 'static,
@@ -71,11 +174,7 @@ where
 ///
 /// Neither future is polled before the first call to [`SubscriptionHandle::activate`]. Cleanup is
 /// constructed at most once and only after activation has reached a terminal result.
-pub fn prepare_subscription<A, C, CF>(
-    directory: Directory,
-    activate: A,
-    close: C,
-) -> SubscriptionHandle
+fn prepare_subscription<A, C, CF>(directory: Directory, activate: A, close: C) -> SubscriptionHandle
 where
     A: Future<Output = Result<(), RegistryError>> + Send + 'static,
     C: FnOnce() -> CF + Send + 'static,

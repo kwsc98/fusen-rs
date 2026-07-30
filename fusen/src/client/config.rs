@@ -1,5 +1,5 @@
 use crate::{
-    error::{ClientError, ClientErrorKind},
+    ConfigValidationError, ConfigValidationErrorKind,
     resilience::breaker::DEFAULT_ENDPOINT_IDLE_EVICTION,
 };
 use std::time::Duration;
@@ -13,27 +13,19 @@ pub struct QueueConfig {
     max_wait: Duration,
 }
 
-impl QueueConfig {
-    /// Disables admission queuing and makes overload fail fast.
-    pub const fn disabled() -> Self {
+impl Default for QueueConfig {
+    fn default() -> Self {
         Self {
             capacity: 0,
             max_wait: Duration::from_millis(50),
         }
     }
+}
 
-    /// Enables a bounded queue with a 50 millisecond maximum wait.
-    pub fn bounded(capacity: usize) -> Self {
-        Self {
-            capacity,
-            max_wait: Duration::from_millis(50),
-        }
-    }
-
-    /// Replaces the queue wait limit.
-    pub const fn with_max_wait(mut self, max_wait: Duration) -> Self {
-        self.max_wait = max_wait;
-        self
+impl QueueConfig {
+    /// Starts a builder with fail-fast queueing disabled.
+    pub fn builder() -> QueueConfigBuilder {
+        QueueConfigBuilder(Self::default())
     }
 
     /// Returns the maximum queued invocations. Zero means disabled.
@@ -41,15 +33,33 @@ impl QueueConfig {
         self.capacity
     }
 
-    /// Returns the maximum queue wait, still bounded by the invocation deadline.
+    /// Returns the maximum queue wait, bounded by the invocation deadline.
     pub const fn max_wait(&self) -> Duration {
         self.max_wait
     }
 }
 
-impl Default for QueueConfig {
-    fn default() -> Self {
-        Self::disabled()
+/// Builder for [`QueueConfig`].
+#[derive(Clone, Debug)]
+pub struct QueueConfigBuilder(QueueConfig);
+
+impl QueueConfigBuilder {
+    /// Sets the maximum queued invocations. Zero disables queueing.
+    pub const fn capacity(mut self, capacity: usize) -> Self {
+        self.0.capacity = capacity;
+        self
+    }
+
+    /// Sets the maximum queue wait.
+    pub const fn max_wait(mut self, max_wait: Duration) -> Self {
+        self.0.max_wait = max_wait;
+        self
+    }
+
+    /// Validates and builds the queue configuration.
+    pub fn build(self) -> Result<QueueConfig, ConfigValidationError> {
+        validate_queue(&self.0)?;
+        Ok(self.0)
     }
 }
 
@@ -74,115 +84,104 @@ impl Default for ClientAdmissionConfig {
             max_response_body_bytes: 2 * MIB,
             max_inflight_request_body_bytes: 64 * MIB,
             max_inflight_response_body_bytes: 64 * MIB,
-            queue: QueueConfig::disabled(),
+            queue: QueueConfig::default(),
         }
     }
 }
 
 impl ClientAdmissionConfig {
+    /// Starts a builder with bounded production defaults.
+    pub fn builder() -> ClientAdmissionConfigBuilder {
+        ClientAdmissionConfigBuilder(Self::default())
+    }
+
+    /// Returns the runtime-wide logical invocation limit.
+    pub const fn max_in_flight(&self) -> usize {
+        self.max_in_flight
+    }
+
+    /// Returns the per-endpoint physical attempt limit.
+    pub const fn max_in_flight_per_endpoint(&self) -> usize {
+        self.max_in_flight_per_endpoint
+    }
+
+    /// Returns the maximum encoded request body size.
+    pub const fn max_request_body_bytes(&self) -> usize {
+        self.max_request_body_bytes
+    }
+
+    /// Returns the maximum decoded response body size.
+    pub const fn max_response_body_bytes(&self) -> usize {
+        self.max_response_body_bytes
+    }
+
+    /// Returns the runtime-wide encoded request byte budget.
+    pub const fn max_inflight_request_body_bytes(&self) -> usize {
+        self.max_inflight_request_body_bytes
+    }
+
+    /// Returns the runtime-wide buffered response byte budget.
+    pub const fn max_inflight_response_body_bytes(&self) -> usize {
+        self.max_inflight_response_body_bytes
+    }
+
+    /// Returns optional queue behavior.
+    pub const fn queue(&self) -> &QueueConfig {
+        &self.queue
+    }
+}
+
+/// Builder for [`ClientAdmissionConfig`].
+#[derive(Clone, Debug)]
+pub struct ClientAdmissionConfigBuilder(ClientAdmissionConfig);
+
+impl ClientAdmissionConfigBuilder {
     /// Sets the runtime-wide logical invocation limit.
     pub const fn max_in_flight(mut self, value: usize) -> Self {
-        self.max_in_flight = value;
+        self.0.max_in_flight = value;
         self
     }
 
     /// Sets the per-endpoint physical attempt limit.
     pub const fn max_in_flight_per_endpoint(mut self, value: usize) -> Self {
-        self.max_in_flight_per_endpoint = value;
+        self.0.max_in_flight_per_endpoint = value;
         self
     }
 
     /// Sets the maximum encoded request body size.
     pub const fn max_request_body_bytes(mut self, value: usize) -> Self {
-        self.max_request_body_bytes = value;
+        self.0.max_request_body_bytes = value;
         self
     }
 
     /// Sets the maximum decoded response body size.
     pub const fn max_response_body_bytes(mut self, value: usize) -> Self {
-        self.max_response_body_bytes = value;
+        self.0.max_response_body_bytes = value;
         self
     }
 
     /// Sets the runtime-wide encoded request byte budget.
     pub const fn max_inflight_request_body_bytes(mut self, value: usize) -> Self {
-        self.max_inflight_request_body_bytes = value;
+        self.0.max_inflight_request_body_bytes = value;
         self
     }
 
     /// Sets the runtime-wide buffered response byte budget.
     pub const fn max_inflight_response_body_bytes(mut self, value: usize) -> Self {
-        self.max_inflight_response_body_bytes = value;
+        self.0.max_inflight_response_body_bytes = value;
         self
     }
 
-    /// Sets optional queue behavior.
+    /// Replaces optional queue behavior.
     pub fn queue(mut self, value: QueueConfig) -> Self {
-        self.queue = value;
+        self.0.queue = value;
         self
     }
 
-    pub(crate) const fn max_in_flight_value(&self) -> usize {
-        self.max_in_flight
-    }
-
-    pub(crate) const fn max_in_flight_per_endpoint_value(&self) -> usize {
-        self.max_in_flight_per_endpoint
-    }
-
-    pub(crate) const fn request_body_limit(&self) -> usize {
-        self.max_request_body_bytes
-    }
-
-    pub(crate) const fn response_body_limit(&self) -> usize {
-        self.max_response_body_bytes
-    }
-
-    pub(crate) const fn request_byte_budget(&self) -> usize {
-        self.max_inflight_request_body_bytes
-    }
-
-    pub(crate) const fn response_byte_budget(&self) -> usize {
-        self.max_inflight_response_body_bytes
-    }
-
-    pub(crate) fn queue_value(&self) -> &QueueConfig {
-        &self.queue
-    }
-
-    /// Returns the runtime-wide logical invocation limit.
-    pub const fn max_in_flight_value_public(&self) -> usize {
-        self.max_in_flight
-    }
-
-    /// Returns the per-endpoint attempt limit.
-    pub const fn max_in_flight_per_endpoint_value_public(&self) -> usize {
-        self.max_in_flight_per_endpoint
-    }
-
-    /// Returns the maximum encoded request body size.
-    pub const fn max_request_body_bytes_value(&self) -> usize {
-        self.max_request_body_bytes
-    }
-
-    /// Returns the maximum decoded response body size.
-    pub const fn max_response_body_bytes_value(&self) -> usize {
-        self.max_response_body_bytes
-    }
-
-    /// Returns the global encoded-request byte budget.
-    pub const fn max_inflight_request_body_bytes_value(&self) -> usize {
-        self.max_inflight_request_body_bytes
-    }
-
-    /// Returns the global buffered-response byte budget.
-    pub const fn max_inflight_response_body_bytes_value(&self) -> usize {
-        self.max_inflight_response_body_bytes
-    }
-
-    /// Returns queue behavior.
-    pub const fn queue_config(&self) -> &QueueConfig {
-        &self.queue
+    /// Validates and builds admission limits.
+    pub fn build(self) -> Result<ClientAdmissionConfig, ConfigValidationError> {
+        validate_admission(&self.0)?;
+        Ok(self.0)
     }
 }
 
@@ -213,94 +212,98 @@ impl Default for DiscoveryConfig {
 }
 
 impl DiscoveryConfig {
-    /// Sets the initial ready deadline.
+    /// Starts a builder with bounded production defaults.
+    pub fn builder() -> DiscoveryConfigBuilder {
+        DiscoveryConfigBuilder(Self::default())
+    }
+
+    /// Returns the initial directory-ready deadline.
+    pub const fn initial_timeout(&self) -> Duration {
+        self.initial_timeout
+    }
+
+    /// Returns one provider operation timeout.
+    pub const fn operation_timeout(&self) -> Duration {
+        self.operation_timeout
+    }
+
+    /// Returns one subscription close timeout.
+    pub const fn close_timeout(&self) -> Duration {
+        self.close_timeout
+    }
+
+    /// Returns the maximum routable stale duration.
+    pub const fn max_staleness(&self) -> Duration {
+        self.max_staleness
+    }
+
+    /// Returns the reconnect backoff base.
+    pub const fn reconnect_base(&self) -> Duration {
+        self.reconnect_base
+    }
+
+    /// Returns the reconnect backoff cap.
+    pub const fn reconnect_cap(&self) -> Duration {
+        self.reconnect_cap
+    }
+
+    /// Returns the shared subscription limit.
+    pub const fn max_subscriptions(&self) -> usize {
+        self.max_subscriptions
+    }
+}
+
+/// Builder for [`DiscoveryConfig`].
+#[derive(Clone, Debug)]
+pub struct DiscoveryConfigBuilder(DiscoveryConfig);
+
+impl DiscoveryConfigBuilder {
+    /// Sets the initial directory-ready deadline.
     pub const fn initial_timeout(mut self, value: Duration) -> Self {
-        self.initial_timeout = value;
+        self.0.initial_timeout = value;
         self
     }
 
     /// Sets one provider operation timeout.
     pub const fn operation_timeout(mut self, value: Duration) -> Self {
-        self.operation_timeout = value;
+        self.0.operation_timeout = value;
         self
     }
 
     /// Sets one subscription close timeout.
     pub const fn close_timeout(mut self, value: Duration) -> Self {
-        self.close_timeout = value;
+        self.0.close_timeout = value;
         self
     }
 
-    /// Sets how long the last ready snapshot remains routable after provider disconnection.
+    /// Sets how long the last ready snapshot remains routable.
     pub const fn max_staleness(mut self, value: Duration) -> Self {
-        self.max_staleness = value;
+        self.0.max_staleness = value;
         self
     }
 
-    /// Sets full-jitter reconnect bounds.
-    pub const fn reconnect_backoff(mut self, base: Duration, cap: Duration) -> Self {
-        self.reconnect_base = base;
-        self.reconnect_cap = cap;
+    /// Sets the reconnect backoff base.
+    pub const fn reconnect_base(mut self, value: Duration) -> Self {
+        self.0.reconnect_base = value;
+        self
+    }
+
+    /// Sets the reconnect backoff cap.
+    pub const fn reconnect_cap(mut self, value: Duration) -> Self {
+        self.0.reconnect_cap = value;
         self
     }
 
     /// Sets the maximum number of shared service subscriptions.
     pub const fn max_subscriptions(mut self, value: usize) -> Self {
-        self.max_subscriptions = value;
+        self.0.max_subscriptions = value;
         self
     }
 
-    pub(crate) const fn initial_timeout_value(&self) -> Duration {
-        self.initial_timeout
-    }
-
-    pub(crate) const fn operation_timeout_value(&self) -> Duration {
-        self.operation_timeout
-    }
-
-    pub(crate) const fn close_timeout_value(&self) -> Duration {
-        self.close_timeout
-    }
-
-    pub(crate) const fn max_staleness_value(&self) -> Duration {
-        self.max_staleness
-    }
-
-    pub(crate) const fn reconnect_base_value(&self) -> Duration {
-        self.reconnect_base
-    }
-
-    pub(crate) const fn reconnect_cap_value(&self) -> Duration {
-        self.reconnect_cap
-    }
-
-    pub(crate) const fn max_subscriptions_value(&self) -> usize {
-        self.max_subscriptions
-    }
-
-    /// Returns the initial Ready deadline.
-    pub const fn initial_timeout_value_public(&self) -> Duration {
-        self.initial_timeout
-    }
-    /// Returns one provider operation timeout.
-    pub const fn operation_timeout_value_public(&self) -> Duration {
-        self.operation_timeout
-    }
-    /// Returns one subscription close timeout.
-    pub const fn close_timeout_value_public(&self) -> Duration {
-        self.close_timeout
-    }
-    /// Returns the maximum routable stale duration.
-    pub const fn max_staleness_value_public(&self) -> Duration {
-        self.max_staleness
-    }
-    /// Returns reconnect backoff bounds.
-    pub const fn reconnect_backoff_bounds(&self) -> (Duration, Duration) {
-        (self.reconnect_base, self.reconnect_cap)
-    }
-    /// Returns the shared subscription limit.
-    pub const fn max_subscriptions_value_public(&self) -> usize {
-        self.max_subscriptions
+    /// Validates and builds discovery settings.
+    pub fn build(self) -> Result<DiscoveryConfig, ConfigValidationError> {
+        validate_discovery(&self.0)?;
+        Ok(self.0)
     }
 }
 
@@ -327,57 +330,76 @@ impl Default for RetryConfig {
 }
 
 impl RetryConfig {
-    /// Sets the hard attempt limit, including the first attempt. Valid values are 1 through 3.
-    pub const fn max_attempts(mut self, value: u8) -> Self {
-        self.max_attempts = value;
-        self
+    /// Starts a builder with conservative production defaults.
+    pub fn builder() -> RetryConfigBuilder {
+        RetryConfigBuilder(Self::default())
     }
 
-    /// Sets full-jitter exponential backoff bounds.
-    pub const fn backoff(mut self, base: Duration, cap: Duration) -> Self {
-        self.backoff_base = base;
-        self.backoff_cap = cap;
-        self
-    }
-
-    /// Sets the per-service retry token bucket.
-    pub const fn budget(mut self, capacity: u32, refill_per_second: u32) -> Self {
-        self.budget_capacity = capacity;
-        self.budget_refill_per_second = refill_per_second;
-        self
-    }
-
-    pub(crate) const fn max_attempts_value(&self) -> u8 {
+    /// Returns the hard attempt limit, including the first attempt.
+    pub const fn max_attempts(&self) -> u8 {
         self.max_attempts
     }
 
-    pub(crate) const fn backoff_base_value(&self) -> Duration {
+    /// Returns the full-jitter backoff base.
+    pub const fn backoff_base(&self) -> Duration {
         self.backoff_base
     }
 
-    pub(crate) const fn backoff_cap_value(&self) -> Duration {
+    /// Returns the full-jitter backoff cap.
+    pub const fn backoff_cap(&self) -> Duration {
         self.backoff_cap
     }
 
-    pub(crate) const fn budget_capacity_value(&self) -> u32 {
+    /// Returns the per-interface retry token capacity.
+    pub const fn budget_capacity(&self) -> u32 {
         self.budget_capacity
     }
 
-    pub(crate) const fn budget_refill_value(&self) -> u32 {
+    /// Returns retry tokens refilled per second.
+    pub const fn budget_refill_per_second(&self) -> u32 {
         self.budget_refill_per_second
     }
+}
 
-    /// Returns the hard-bounded configured attempt count.
-    pub const fn max_attempts_value_public(&self) -> u8 {
-        self.max_attempts
+/// Builder for [`RetryConfig`].
+#[derive(Clone, Debug)]
+pub struct RetryConfigBuilder(RetryConfig);
+
+impl RetryConfigBuilder {
+    /// Sets the hard attempt limit, including the first attempt.
+    pub const fn max_attempts(mut self, value: u8) -> Self {
+        self.0.max_attempts = value;
+        self
     }
-    /// Returns full-jitter backoff bounds.
-    pub const fn backoff_value(&self) -> (Duration, Duration) {
-        (self.backoff_base, self.backoff_cap)
+
+    /// Sets the full-jitter backoff base.
+    pub const fn backoff_base(mut self, value: Duration) -> Self {
+        self.0.backoff_base = value;
+        self
     }
-    /// Returns retry token-bucket capacity and refill rate.
-    pub const fn budget_value(&self) -> (u32, u32) {
-        (self.budget_capacity, self.budget_refill_per_second)
+
+    /// Sets the full-jitter backoff cap.
+    pub const fn backoff_cap(mut self, value: Duration) -> Self {
+        self.0.backoff_cap = value;
+        self
+    }
+
+    /// Sets the per-interface retry token capacity.
+    pub const fn budget_capacity(mut self, value: u32) -> Self {
+        self.0.budget_capacity = value;
+        self
+    }
+
+    /// Sets retry tokens refilled per second.
+    pub const fn budget_refill_per_second(mut self, value: u32) -> Self {
+        self.0.budget_refill_per_second = value;
+        self
+    }
+
+    /// Validates and builds retry settings.
+    pub fn build(self) -> Result<RetryConfig, ConfigValidationError> {
+        validate_retry(&self.0)?;
+        Ok(self.0)
     }
 }
 
@@ -418,69 +440,107 @@ impl BreakerThreshold {
         }
     }
 
-    /// Creates a threshold builder from endpoint defaults.
-    pub fn endpoint_defaults() -> Self {
-        Self::endpoint_default()
+    /// Starts a builder from endpoint-breaker defaults.
+    pub fn endpoint_builder() -> BreakerThresholdBuilder {
+        BreakerThresholdBuilder(Self::endpoint_default())
     }
 
-    /// Creates a threshold builder from service defaults.
-    pub fn service_defaults() -> Self {
-        Self::service_default()
-    }
-
-    /// Replaces all rolling-window and half-open thresholds.
-    #[allow(clippy::too_many_arguments)]
-    pub const fn thresholds(
-        mut self,
-        window: Duration,
-        buckets: u8,
-        minimum_samples: u32,
-        failure_ratio: f64,
-        open_duration: Duration,
-        half_open_probes: u32,
-        close_successes: u32,
-    ) -> Self {
-        self.window = window;
-        self.buckets = buckets;
-        self.minimum_samples = minimum_samples;
-        self.failure_ratio = failure_ratio;
-        self.open_duration = open_duration;
-        self.half_open_probes = half_open_probes;
-        self.close_successes = close_successes;
-        self
+    /// Starts a builder from interface-breaker defaults.
+    pub fn service_builder() -> BreakerThresholdBuilder {
+        BreakerThresholdBuilder(Self::service_default())
     }
 
     /// Returns the rolling window.
-    pub const fn window_value(&self) -> Duration {
+    pub const fn window(&self) -> Duration {
         self.window
     }
+
     /// Returns the bucket count.
-    pub const fn buckets_value(&self) -> u8 {
+    pub const fn buckets(&self) -> u8 {
         self.buckets
     }
+
     /// Returns the minimum sample count.
-    pub const fn minimum_samples_value(&self) -> u32 {
+    pub const fn minimum_samples(&self) -> u32 {
         self.minimum_samples
     }
-    /// Returns the failure ratio.
-    pub const fn failure_ratio_value(&self) -> f64 {
+
+    /// Returns the failure ratio threshold.
+    pub const fn failure_ratio(&self) -> f64 {
         self.failure_ratio
     }
+
     /// Returns the initial open duration.
-    pub const fn open_duration_value(&self) -> Duration {
+    pub const fn open_duration(&self) -> Duration {
         self.open_duration
     }
+
     /// Returns the half-open concurrency.
-    pub const fn half_open_probes_value(&self) -> u32 {
+    pub const fn half_open_probes(&self) -> u32 {
         self.half_open_probes
     }
+
     /// Returns consecutive successes required to close.
-    pub const fn close_successes_value(&self) -> u32 {
+    pub const fn close_successes(&self) -> u32 {
         self.close_successes
     }
 }
 
-/// Service and endpoint circuit-breaker settings.
+/// Builder for [`BreakerThreshold`].
+#[derive(Clone, Debug)]
+pub struct BreakerThresholdBuilder(BreakerThreshold);
+
+impl BreakerThresholdBuilder {
+    /// Sets the rolling window.
+    pub const fn window(mut self, value: Duration) -> Self {
+        self.0.window = value;
+        self
+    }
+
+    /// Sets the rolling bucket count.
+    pub const fn buckets(mut self, value: u8) -> Self {
+        self.0.buckets = value;
+        self
+    }
+
+    /// Sets the minimum sample count.
+    pub const fn minimum_samples(mut self, value: u32) -> Self {
+        self.0.minimum_samples = value;
+        self
+    }
+
+    /// Sets the failure ratio threshold.
+    pub const fn failure_ratio(mut self, value: f64) -> Self {
+        self.0.failure_ratio = value;
+        self
+    }
+
+    /// Sets the initial open duration.
+    pub const fn open_duration(mut self, value: Duration) -> Self {
+        self.0.open_duration = value;
+        self
+    }
+
+    /// Sets the half-open concurrency.
+    pub const fn half_open_probes(mut self, value: u32) -> Self {
+        self.0.half_open_probes = value;
+        self
+    }
+
+    /// Sets consecutive successes required to close.
+    pub const fn close_successes(mut self, value: u32) -> Self {
+        self.0.close_successes = value;
+        self
+    }
+
+    /// Validates and builds breaker thresholds.
+    pub fn build(self) -> Result<BreakerThreshold, ConfigValidationError> {
+        validate_threshold(&self.0, ThresholdScope::Standalone)?;
+        Ok(self.0)
+    }
+}
+
+/// Interface and endpoint circuit-breaker settings.
 #[derive(Clone, Debug)]
 pub struct CircuitBreakerConfig {
     endpoint: BreakerThreshold,
@@ -503,74 +563,80 @@ impl Default for CircuitBreakerConfig {
 }
 
 impl CircuitBreakerConfig {
-    /// Replaces endpoint thresholds.
-    pub fn endpoint(mut self, value: BreakerThreshold) -> Self {
-        self.endpoint = value;
-        self
-    }
-
-    /// Replaces service thresholds.
-    pub fn service(mut self, value: BreakerThreshold) -> Self {
-        self.service = value;
-        self
-    }
-
-    /// Replaces open-duration, endpoint-map, and idle-eviction bounds.
-    pub const fn bounds(
-        mut self,
-        max_open_duration: Duration,
-        max_endpoint_entries: usize,
-        idle_eviction: Duration,
-    ) -> Self {
-        self.max_open_duration = max_open_duration;
-        self.max_endpoint_entries = max_endpoint_entries;
-        self.idle_eviction = idle_eviction;
-        self
+    /// Starts a builder with bounded production defaults.
+    pub fn builder() -> CircuitBreakerConfigBuilder {
+        CircuitBreakerConfigBuilder(Self::default())
     }
 
     /// Returns endpoint thresholds.
-    pub const fn endpoint_threshold(&self) -> &BreakerThreshold {
+    pub const fn endpoint(&self) -> &BreakerThreshold {
         &self.endpoint
     }
-    /// Returns service thresholds.
-    pub const fn service_threshold(&self) -> &BreakerThreshold {
+
+    /// Returns interface-wide thresholds.
+    pub const fn service(&self) -> &BreakerThreshold {
         &self.service
     }
+
     /// Returns the maximum repeated-open interval.
     pub const fn max_open_duration(&self) -> Duration {
         self.max_open_duration
     }
+
     /// Returns the endpoint breaker entry limit.
     pub const fn max_endpoint_entries(&self) -> usize {
         self.max_endpoint_entries
     }
+
     /// Returns the endpoint idle eviction interval.
     pub const fn idle_eviction(&self) -> Duration {
         self.idle_eviction
     }
+}
 
-    pub(crate) fn endpoint_value(&self) -> &BreakerThreshold {
-        &self.endpoint
+/// Builder for [`CircuitBreakerConfig`].
+#[derive(Clone, Debug)]
+pub struct CircuitBreakerConfigBuilder(CircuitBreakerConfig);
+
+impl CircuitBreakerConfigBuilder {
+    /// Replaces endpoint thresholds.
+    pub fn endpoint(mut self, value: BreakerThreshold) -> Self {
+        self.0.endpoint = value;
+        self
     }
 
-    pub(crate) fn service_value(&self) -> &BreakerThreshold {
-        &self.service
+    /// Replaces interface-wide thresholds.
+    pub fn service(mut self, value: BreakerThreshold) -> Self {
+        self.0.service = value;
+        self
     }
 
-    pub(crate) const fn max_open_duration_value(&self) -> Duration {
-        self.max_open_duration
+    /// Sets the maximum repeated-open interval.
+    pub const fn max_open_duration(mut self, value: Duration) -> Self {
+        self.0.max_open_duration = value;
+        self
     }
 
-    pub(crate) const fn max_endpoint_entries_value(&self) -> usize {
-        self.max_endpoint_entries
+    /// Sets the endpoint breaker entry limit.
+    pub const fn max_endpoint_entries(mut self, value: usize) -> Self {
+        self.0.max_endpoint_entries = value;
+        self
     }
 
-    pub(crate) const fn idle_eviction_value(&self) -> Duration {
-        self.idle_eviction
+    /// Sets the endpoint idle eviction interval.
+    pub const fn idle_eviction(mut self, value: Duration) -> Self {
+        self.0.idle_eviction = value;
+        self
+    }
+
+    /// Validates and builds circuit-breaker settings.
+    pub fn build(self) -> Result<CircuitBreakerConfig, ConfigValidationError> {
+        validate_circuit_breaker(&self.0)?;
+        Ok(self.0)
     }
 }
 
-/// Internal HTTP and HTTPS connection-pool behavior.
+/// HTTP and HTTPS connection-pool behavior.
 #[derive(Clone, Debug)]
 pub struct ClientHttpConfig {
     http1_max_idle_per_host: usize,
@@ -593,69 +659,76 @@ impl Default for ClientHttpConfig {
 }
 
 impl ClientHttpConfig {
-    /// Sets HTTP/1 idle pooling.
-    pub const fn http1(mut self, max_idle_per_host: usize, idle_timeout: Option<Duration>) -> Self {
-        self.http1_max_idle_per_host = max_idle_per_host;
-        self.pool_idle_timeout = idle_timeout;
-        self
+    /// Starts a builder with bounded production defaults.
+    pub fn builder() -> ClientHttpConfigBuilder {
+        ClientHttpConfigBuilder(Self::default())
     }
 
-    /// Sets h2c and TLS/ALPN h2 pool sharding and keep-alive behavior.
-    pub const fn http2(
-        mut self,
-        connections_per_host: usize,
-        keep_alive_interval: Option<Duration>,
-        keep_alive_timeout: Duration,
-    ) -> Self {
-        self.http2_connections_per_host = connections_per_host;
-        self.http2_keep_alive_interval = keep_alive_interval;
-        self.http2_keep_alive_timeout = keep_alive_timeout;
-        self
-    }
-
-    /// Returns the HTTP/1 idle connection limit.
+    /// Returns the HTTP/1 idle connection limit per host.
     pub const fn http1_max_idle_per_host(&self) -> usize {
         self.http1_max_idle_per_host
     }
-    /// Returns the shared idle timeout.
+
+    /// Returns the shared connection-pool idle timeout.
     pub const fn pool_idle_timeout(&self) -> Option<Duration> {
         self.pool_idle_timeout
     }
-    /// Returns h2c and TLS/ALPN h2 connection shards per endpoint.
+
+    /// Returns HTTP/2 connection shards per endpoint.
     pub const fn http2_connections_per_host(&self) -> usize {
         self.http2_connections_per_host
     }
-    /// Returns the h2c and TLS/ALPN h2 keep-alive interval.
+
+    /// Returns the HTTP/2 keep-alive interval.
     pub const fn http2_keep_alive_interval(&self) -> Option<Duration> {
         self.http2_keep_alive_interval
     }
-    /// Returns the h2c and TLS/ALPN h2 keep-alive timeout.
+
+    /// Returns the HTTP/2 keep-alive acknowledgement timeout.
     pub const fn http2_keep_alive_timeout(&self) -> Duration {
         self.http2_keep_alive_timeout
     }
 }
 
-impl BreakerThreshold {
-    pub(crate) const fn window(&self) -> Duration {
-        self.window
+/// Builder for [`ClientHttpConfig`].
+#[derive(Clone, Debug)]
+pub struct ClientHttpConfigBuilder(ClientHttpConfig);
+
+impl ClientHttpConfigBuilder {
+    /// Sets the HTTP/1 idle connection limit per host.
+    pub const fn http1_max_idle_per_host(mut self, value: usize) -> Self {
+        self.0.http1_max_idle_per_host = value;
+        self
     }
-    pub(crate) const fn buckets(&self) -> u8 {
-        self.buckets
+
+    /// Sets the shared connection-pool idle timeout.
+    pub const fn pool_idle_timeout(mut self, value: Option<Duration>) -> Self {
+        self.0.pool_idle_timeout = value;
+        self
     }
-    pub(crate) const fn minimum_samples(&self) -> u32 {
-        self.minimum_samples
+
+    /// Sets HTTP/2 connection shards per endpoint.
+    pub const fn http2_connections_per_host(mut self, value: usize) -> Self {
+        self.0.http2_connections_per_host = value;
+        self
     }
-    pub(crate) const fn failure_ratio(&self) -> f64 {
-        self.failure_ratio
+
+    /// Sets the HTTP/2 keep-alive interval.
+    pub const fn http2_keep_alive_interval(mut self, value: Option<Duration>) -> Self {
+        self.0.http2_keep_alive_interval = value;
+        self
     }
-    pub(crate) const fn open_duration(&self) -> Duration {
-        self.open_duration
+
+    /// Sets the HTTP/2 keep-alive acknowledgement timeout.
+    pub const fn http2_keep_alive_timeout(mut self, value: Duration) -> Self {
+        self.0.http2_keep_alive_timeout = value;
+        self
     }
-    pub(crate) const fn half_open_probes(&self) -> u32 {
-        self.half_open_probes
-    }
-    pub(crate) const fn close_successes(&self) -> u32 {
-        self.close_successes
+
+    /// Validates and builds HTTP pool settings.
+    pub fn build(self) -> Result<ClientHttpConfig, ConfigValidationError> {
+        validate_http(&self.0)?;
+        Ok(self.0)
     }
 }
 
@@ -733,72 +806,20 @@ impl ClientConfig {
         &self.http
     }
 
-    pub(crate) fn validate(&self) -> Result<(), ClientError> {
-        let admission = &self.admission;
-        let discovery = &self.discovery;
-        let retry = &self.retry;
-        let breaker = &self.circuit_breaker;
-        let positive_durations = [
-            self.request_timeout,
-            self.connect_timeout,
-            self.shutdown_timeout,
-            discovery.initial_timeout,
-            discovery.operation_timeout,
-            discovery.close_timeout,
-            discovery.reconnect_base,
-            discovery.reconnect_cap,
-            retry.backoff_base,
-            retry.backoff_cap,
-            breaker.max_open_duration,
-            breaker.idle_eviction,
-            self.http.http2_keep_alive_timeout,
-        ];
-        if positive_durations.iter().any(Duration::is_zero)
-            || admission.max_in_flight == 0
-            || admission.max_in_flight_per_endpoint == 0
-            || admission.max_request_body_bytes == 0
-            || admission.max_response_body_bytes == 0
-            || admission.max_inflight_request_body_bytes < admission.max_request_body_bytes
-            || admission.max_inflight_response_body_bytes < admission.max_response_body_bytes
-            || discovery.max_subscriptions == 0
-            || discovery.reconnect_base > discovery.reconnect_cap
-            || !(1..=3).contains(&retry.max_attempts)
-            || retry.backoff_base > retry.backoff_cap
-            || retry.budget_capacity == 0
-            || retry.budget_refill_per_second == 0
-            || breaker.max_endpoint_entries == 0
-            || self.http.http2_connections_per_host == 0
-            || self
-                .http
-                .pool_idle_timeout
-                .is_some_and(|duration| duration.is_zero())
-            || self
-                .http
-                .http2_keep_alive_interval
-                .is_some_and(|duration| duration.is_zero())
-            || [breaker.endpoint_value(), breaker.service_value()]
-                .iter()
-                .any(|threshold| {
-                    threshold.window.is_zero()
-                        || threshold.buckets == 0
-                        || threshold.minimum_samples == 0
-                        || !(0.0..=1.0).contains(&threshold.failure_ratio)
-                        || threshold.open_duration.is_zero()
-                        || threshold.half_open_probes == 0
-                        || threshold.close_successes == 0
-                })
-            || (admission.queue.capacity > 0 && admission.queue.max_wait.is_zero())
-        {
-            return Err(ClientError::message(
-                ClientErrorKind::Build,
-                "client limits, deadlines, and policy values are invalid",
-            ));
-        }
-        Ok(())
+    pub(crate) fn validate(&self) -> Result<(), ConfigValidationError> {
+        positive_duration(self.request_timeout, "client.request_timeout")?;
+        positive_duration(self.connect_timeout, "client.connect_timeout")?;
+        positive_duration(self.shutdown_timeout, "client.shutdown_timeout")?;
+        validate_admission(&self.admission)?;
+        validate_discovery(&self.discovery)?;
+        validate_retry(&self.retry)?;
+        validate_circuit_breaker(&self.circuit_breaker)?;
+        validate_http(&self.http)
     }
 }
 
 /// Builder for [`ClientConfig`].
+#[derive(Clone, Debug)]
 pub struct ClientConfigBuilder(ClientConfig);
 
 impl ClientConfigBuilder {
@@ -851,355 +872,285 @@ impl ClientConfigBuilder {
     }
 
     /// Validates and builds the immutable configuration.
-    pub fn build(self) -> Result<ClientConfig, ClientError> {
+    pub fn build(self) -> Result<ClientConfig, ConfigValidationError> {
         self.0.validate()?;
         Ok(self.0)
     }
 }
 
+fn validate_queue(config: &QueueConfig) -> Result<(), ConfigValidationError> {
+    if config.capacity > 0 && config.max_wait.is_zero() {
+        return Err(inconsistent(
+            "client.admission.queue.max_wait",
+            "must be positive when queue capacity is non-zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_admission(config: &ClientAdmissionConfig) -> Result<(), ConfigValidationError> {
+    positive_usize(config.max_in_flight, "client.admission.max_in_flight")?;
+    positive_usize(
+        config.max_in_flight_per_endpoint,
+        "client.admission.max_in_flight_per_endpoint",
+    )?;
+    positive_usize(
+        config.max_request_body_bytes,
+        "client.admission.max_request_body_bytes",
+    )?;
+    positive_usize(
+        config.max_response_body_bytes,
+        "client.admission.max_response_body_bytes",
+    )?;
+    if config.max_inflight_request_body_bytes < config.max_request_body_bytes {
+        return Err(inconsistent(
+            "client.admission.max_inflight_request_body_bytes",
+            "must be at least max_request_body_bytes",
+        ));
+    }
+    if config.max_inflight_response_body_bytes < config.max_response_body_bytes {
+        return Err(inconsistent(
+            "client.admission.max_inflight_response_body_bytes",
+            "must be at least max_response_body_bytes",
+        ));
+    }
+    validate_queue(&config.queue)
+}
+
+fn validate_discovery(config: &DiscoveryConfig) -> Result<(), ConfigValidationError> {
+    positive_duration(config.initial_timeout, "client.discovery.initial_timeout")?;
+    positive_duration(
+        config.operation_timeout,
+        "client.discovery.operation_timeout",
+    )?;
+    positive_duration(config.close_timeout, "client.discovery.close_timeout")?;
+    positive_duration(config.reconnect_base, "client.discovery.reconnect_base")?;
+    positive_duration(config.reconnect_cap, "client.discovery.reconnect_cap")?;
+    if config.reconnect_base > config.reconnect_cap {
+        return Err(inconsistent(
+            "client.discovery.reconnect_base",
+            "must not exceed reconnect_cap",
+        ));
+    }
+    positive_usize(
+        config.max_subscriptions,
+        "client.discovery.max_subscriptions",
+    )
+}
+
+fn validate_retry(config: &RetryConfig) -> Result<(), ConfigValidationError> {
+    if !(1..=3).contains(&config.max_attempts) {
+        return Err(out_of_range(
+            "client.retry.max_attempts",
+            "must be between 1 and 3 inclusive",
+        ));
+    }
+    positive_duration(config.backoff_base, "client.retry.backoff_base")?;
+    positive_duration(config.backoff_cap, "client.retry.backoff_cap")?;
+    if config.backoff_base > config.backoff_cap {
+        return Err(inconsistent(
+            "client.retry.backoff_base",
+            "must not exceed backoff_cap",
+        ));
+    }
+    positive_u32(config.budget_capacity, "client.retry.budget_capacity")?;
+    positive_u32(
+        config.budget_refill_per_second,
+        "client.retry.budget_refill_per_second",
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ThresholdScope {
+    Endpoint,
+    Service,
+    Standalone,
+}
+
+fn validate_threshold(
+    config: &BreakerThreshold,
+    scope: ThresholdScope,
+) -> Result<(), ConfigValidationError> {
+    let paths = match scope {
+        ThresholdScope::Endpoint => [
+            "client.circuit_breaker.endpoint.window",
+            "client.circuit_breaker.endpoint.buckets",
+            "client.circuit_breaker.endpoint.minimum_samples",
+            "client.circuit_breaker.endpoint.failure_ratio",
+            "client.circuit_breaker.endpoint.open_duration",
+            "client.circuit_breaker.endpoint.half_open_probes",
+            "client.circuit_breaker.endpoint.close_successes",
+        ],
+        ThresholdScope::Service => [
+            "client.circuit_breaker.service.window",
+            "client.circuit_breaker.service.buckets",
+            "client.circuit_breaker.service.minimum_samples",
+            "client.circuit_breaker.service.failure_ratio",
+            "client.circuit_breaker.service.open_duration",
+            "client.circuit_breaker.service.half_open_probes",
+            "client.circuit_breaker.service.close_successes",
+        ],
+        ThresholdScope::Standalone => [
+            "breaker_threshold.window",
+            "breaker_threshold.buckets",
+            "breaker_threshold.minimum_samples",
+            "breaker_threshold.failure_ratio",
+            "breaker_threshold.open_duration",
+            "breaker_threshold.half_open_probes",
+            "breaker_threshold.close_successes",
+        ],
+    };
+    positive_duration(config.window, paths[0])?;
+    if config.buckets == 0 {
+        return Err(out_of_range(paths[1], "must be greater than zero"));
+    }
+    positive_u32(config.minimum_samples, paths[2])?;
+    if !config.failure_ratio.is_finite() || !(0.0..=1.0).contains(&config.failure_ratio) {
+        return Err(out_of_range(paths[3], "must be finite and between 0 and 1"));
+    }
+    positive_duration(config.open_duration, paths[4])?;
+    positive_u32(config.half_open_probes, paths[5])?;
+    positive_u32(config.close_successes, paths[6])
+}
+
+fn validate_circuit_breaker(config: &CircuitBreakerConfig) -> Result<(), ConfigValidationError> {
+    validate_threshold(&config.endpoint, ThresholdScope::Endpoint)?;
+    validate_threshold(&config.service, ThresholdScope::Service)?;
+    positive_duration(
+        config.max_open_duration,
+        "client.circuit_breaker.max_open_duration",
+    )?;
+    positive_usize(
+        config.max_endpoint_entries,
+        "client.circuit_breaker.max_endpoint_entries",
+    )?;
+    positive_duration(config.idle_eviction, "client.circuit_breaker.idle_eviction")
+}
+
+fn validate_http(config: &ClientHttpConfig) -> Result<(), ConfigValidationError> {
+    if config
+        .pool_idle_timeout
+        .is_some_and(|value| value.is_zero())
+    {
+        return Err(out_of_range(
+            "client.http.pool_idle_timeout",
+            "must be positive when configured",
+        ));
+    }
+    positive_usize(
+        config.http2_connections_per_host,
+        "client.http.http2_connections_per_host",
+    )?;
+    if config
+        .http2_keep_alive_interval
+        .is_some_and(|value| value.is_zero())
+    {
+        return Err(out_of_range(
+            "client.http.http2_keep_alive_interval",
+            "must be positive when configured",
+        ));
+    }
+    positive_duration(
+        config.http2_keep_alive_timeout,
+        "client.http.http2_keep_alive_timeout",
+    )
+}
+
+fn positive_duration(
+    value: Duration,
+    field_path: &'static str,
+) -> Result<(), ConfigValidationError> {
+    if value.is_zero() {
+        Err(out_of_range(field_path, "must be greater than zero"))
+    } else {
+        Ok(())
+    }
+}
+
+fn positive_usize(value: usize, field_path: &'static str) -> Result<(), ConfigValidationError> {
+    if value == 0 {
+        Err(out_of_range(field_path, "must be greater than zero"))
+    } else {
+        Ok(())
+    }
+}
+
+fn positive_u32(value: u32, field_path: &'static str) -> Result<(), ConfigValidationError> {
+    if value == 0 {
+        Err(out_of_range(field_path, "must be greater than zero"))
+    } else {
+        Ok(())
+    }
+}
+
+const fn out_of_range(field_path: &'static str, reason: &'static str) -> ConfigValidationError {
+    ConfigValidationError::new(ConfigValidationErrorKind::OutOfRange, field_path, reason)
+}
+
+const fn inconsistent(field_path: &'static str, reason: &'static str) -> ConfigValidationError {
+    ConfigValidationError::new(ConfigValidationErrorKind::Inconsistent, field_path, reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Debug;
-
-    fn assert_default_cases<T>(cases: &[(&str, T, T)])
-    where
-        T: Debug + PartialEq,
-    {
-        for (name, actual, expected) in cases {
-            assert_eq!(actual, expected, "unexpected default for {name}");
-        }
-    }
 
     #[test]
-    fn public_default_getters_match_the_runtime_contract() {
+    fn default_getters_match_the_runtime_contract() {
         let config = ClientConfig::default();
-        let admission = config.admission();
-        let queue = admission.queue_config();
-        let discovery = config.discovery();
-        let retry = config.retry();
-        let breaker = config.circuit_breaker();
-        let endpoint_breaker = breaker.endpoint_threshold();
-        let service_breaker = breaker.service_threshold();
-        let http = config.http();
-
-        assert_default_cases(&[
-            (
-                "client.request_timeout",
-                config.request_timeout(),
-                Duration::from_secs(10),
-            ),
-            (
-                "client.connect_timeout",
-                config.connect_timeout(),
-                Duration::from_secs(3),
-            ),
-            (
-                "client.shutdown_timeout",
-                config.shutdown_timeout(),
-                Duration::from_secs(30),
-            ),
-            (
-                "admission.queue.max_wait",
-                queue.max_wait(),
-                Duration::from_millis(50),
-            ),
-            (
-                "discovery.initial_timeout",
-                discovery.initial_timeout_value_public(),
-                Duration::from_secs(5),
-            ),
-            (
-                "discovery.operation_timeout",
-                discovery.operation_timeout_value_public(),
-                Duration::from_secs(5),
-            ),
-            (
-                "discovery.close_timeout",
-                discovery.close_timeout_value_public(),
-                Duration::from_secs(5),
-            ),
-            (
-                "discovery.max_staleness",
-                discovery.max_staleness_value_public(),
-                Duration::from_secs(30),
-            ),
-            (
-                "circuit_breaker.endpoint.window",
-                endpoint_breaker.window_value(),
-                Duration::from_secs(10),
-            ),
-            (
-                "circuit_breaker.endpoint.open_duration",
-                endpoint_breaker.open_duration_value(),
-                Duration::from_secs(10),
-            ),
-            (
-                "circuit_breaker.service.window",
-                service_breaker.window_value(),
-                Duration::from_secs(30),
-            ),
-            (
-                "circuit_breaker.service.open_duration",
-                service_breaker.open_duration_value(),
-                Duration::from_secs(15),
-            ),
-            (
-                "circuit_breaker.max_open_duration",
-                breaker.max_open_duration(),
-                Duration::from_secs(120),
-            ),
-            (
-                "circuit_breaker.idle_eviction",
-                breaker.idle_eviction(),
-                Duration::from_secs(600),
-            ),
-            (
-                "http.http2_keep_alive_timeout",
-                http.http2_keep_alive_timeout(),
-                Duration::from_secs(20),
-            ),
-        ]);
-        assert_default_cases(&[
-            (
-                "admission.max_in_flight",
-                admission.max_in_flight_value_public(),
-                1024,
-            ),
-            (
-                "admission.max_in_flight_per_endpoint",
-                admission.max_in_flight_per_endpoint_value_public(),
-                128,
-            ),
-            (
-                "admission.max_request_body_bytes",
-                admission.max_request_body_bytes_value(),
-                2 * MIB,
-            ),
-            (
-                "admission.max_response_body_bytes",
-                admission.max_response_body_bytes_value(),
-                2 * MIB,
-            ),
-            (
-                "admission.max_inflight_request_body_bytes",
-                admission.max_inflight_request_body_bytes_value(),
-                64 * MIB,
-            ),
-            (
-                "admission.max_inflight_response_body_bytes",
-                admission.max_inflight_response_body_bytes_value(),
-                64 * MIB,
-            ),
-            ("admission.queue.capacity", queue.capacity(), 0),
-            (
-                "discovery.max_subscriptions",
-                discovery.max_subscriptions_value_public(),
-                1024,
-            ),
-            (
-                "circuit_breaker.max_endpoint_entries",
-                breaker.max_endpoint_entries(),
-                10_000,
-            ),
-            (
-                "http.http1_max_idle_per_host",
-                http.http1_max_idle_per_host(),
-                128,
-            ),
-            (
-                "http.http2_connections_per_host",
-                http.http2_connections_per_host(),
-                1,
-            ),
-        ]);
-        assert_default_cases(&[
-            (
-                "retry.max_attempts",
-                retry.max_attempts_value_public(),
-                3_u8,
-            ),
-            (
-                "circuit_breaker.endpoint.buckets",
-                endpoint_breaker.buckets_value(),
-                10,
-            ),
-            (
-                "circuit_breaker.service.buckets",
-                service_breaker.buckets_value(),
-                10,
-            ),
-        ]);
-        assert_default_cases(&[
-            (
-                "circuit_breaker.endpoint.minimum_samples",
-                endpoint_breaker.minimum_samples_value(),
-                20_u32,
-            ),
-            (
-                "circuit_breaker.endpoint.half_open_probes",
-                endpoint_breaker.half_open_probes_value(),
-                1,
-            ),
-            (
-                "circuit_breaker.endpoint.close_successes",
-                endpoint_breaker.close_successes_value(),
-                2,
-            ),
-            (
-                "circuit_breaker.service.minimum_samples",
-                service_breaker.minimum_samples_value(),
-                50,
-            ),
-            (
-                "circuit_breaker.service.half_open_probes",
-                service_breaker.half_open_probes_value(),
-                2,
-            ),
-            (
-                "circuit_breaker.service.close_successes",
-                service_breaker.close_successes_value(),
-                3,
-            ),
-        ]);
-        assert_default_cases(&[
-            (
-                "circuit_breaker.endpoint.failure_ratio",
-                endpoint_breaker.failure_ratio_value(),
-                0.5_f64,
-            ),
-            (
-                "circuit_breaker.service.failure_ratio",
-                service_breaker.failure_ratio_value(),
-                0.6,
-            ),
-        ]);
-        assert_default_cases(&[
-            (
-                "discovery.reconnect_backoff",
-                discovery.reconnect_backoff_bounds(),
-                (Duration::from_millis(100), Duration::from_secs(30)),
-            ),
-            (
-                "retry.backoff",
-                retry.backoff_value(),
-                (Duration::from_millis(10), Duration::from_millis(200)),
-            ),
-        ]);
-        assert_default_cases(&[("retry.budget", retry.budget_value(), (100_u32, 10_u32))]);
-        assert_default_cases(&[
-            (
-                "http.pool_idle_timeout",
-                http.pool_idle_timeout(),
-                Some(Duration::from_secs(90)),
-            ),
-            (
-                "http.http2_keep_alive_interval",
-                http.http2_keep_alive_interval(),
-                None,
-            ),
-        ]);
+        assert_eq!(config.request_timeout(), Duration::from_secs(10));
+        assert_eq!(config.admission().max_in_flight(), 1024);
+        assert_eq!(config.admission().queue().capacity(), 0);
+        assert_eq!(
+            config.discovery().reconnect_base(),
+            Duration::from_millis(100)
+        );
+        assert_eq!(config.retry().max_attempts(), 3);
+        assert_eq!(config.retry().budget_capacity(), 100);
+        assert_eq!(config.circuit_breaker().endpoint().minimum_samples(), 20);
+        assert_eq!(config.circuit_breaker().service().minimum_samples(), 50);
+        assert_eq!(config.http().http2_connections_per_host(), 1);
     }
 
     #[test]
-    fn invalid_attempt_count_is_rejected() {
-        let error = ClientConfig::builder()
-            .retry(RetryConfig::default().max_attempts(4))
+    fn validation_reports_stable_kind_path_and_reason() {
+        let retry = RetryConfig::builder().max_attempts(4).build().unwrap_err();
+        assert_eq!(retry.kind(), ConfigValidationErrorKind::OutOfRange);
+        assert_eq!(retry.field_path(), "client.retry.max_attempts");
+        assert_eq!(retry.reason(), "must be between 1 and 3 inclusive");
+
+        let admission = ClientAdmissionConfig::builder()
+            .max_request_body_bytes(1025)
+            .max_inflight_request_body_bytes(1024)
             .build()
             .unwrap_err();
-        assert_eq!(error.kind(), ClientErrorKind::Build);
+        assert_eq!(admission.kind(), ConfigValidationErrorKind::Inconsistent);
+        assert_eq!(
+            admission.field_path(),
+            "client.admission.max_inflight_request_body_bytes"
+        );
     }
 
     #[test]
-    fn cross_field_boundaries_pass_and_one_step_overages_fail() {
-        const BODY_BUDGET: usize = 1024;
-        const BACKOFF_CAP: Duration = Duration::from_millis(10);
-        const ONE_NANOSECOND: Duration = Duration::from_nanos(1);
-
-        let cases = [
-            (
-                "request body limit and global budget",
-                ClientConfig::builder()
-                    .admission(
-                        ClientAdmissionConfig::default()
-                            .max_request_body_bytes(BODY_BUDGET)
-                            .max_inflight_request_body_bytes(BODY_BUDGET),
-                    )
-                    .build(),
-                ClientConfig::builder()
-                    .admission(
-                        ClientAdmissionConfig::default()
-                            .max_request_body_bytes(BODY_BUDGET + 1)
-                            .max_inflight_request_body_bytes(BODY_BUDGET),
-                    )
-                    .build(),
-            ),
-            (
-                "response body limit and global budget",
-                ClientConfig::builder()
-                    .admission(
-                        ClientAdmissionConfig::default()
-                            .max_response_body_bytes(BODY_BUDGET)
-                            .max_inflight_response_body_bytes(BODY_BUDGET),
-                    )
-                    .build(),
-                ClientConfig::builder()
-                    .admission(
-                        ClientAdmissionConfig::default()
-                            .max_response_body_bytes(BODY_BUDGET + 1)
-                            .max_inflight_response_body_bytes(BODY_BUDGET),
-                    )
-                    .build(),
-            ),
-            (
-                "discovery reconnect base and cap",
-                ClientConfig::builder()
-                    .discovery(
-                        DiscoveryConfig::default().reconnect_backoff(BACKOFF_CAP, BACKOFF_CAP),
-                    )
-                    .build(),
-                ClientConfig::builder()
-                    .discovery(
-                        DiscoveryConfig::default()
-                            .reconnect_backoff(BACKOFF_CAP + ONE_NANOSECOND, BACKOFF_CAP),
-                    )
-                    .build(),
-            ),
-            (
-                "retry backoff base and cap",
-                ClientConfig::builder()
-                    .retry(RetryConfig::default().backoff(BACKOFF_CAP, BACKOFF_CAP))
-                    .build(),
-                ClientConfig::builder()
-                    .retry(
-                        RetryConfig::default().backoff(BACKOFF_CAP + ONE_NANOSECOND, BACKOFF_CAP),
-                    )
-                    .build(),
-            ),
-            (
-                "queue capacity and wait",
-                ClientConfig::builder()
-                    .admission(
-                        ClientAdmissionConfig::default()
-                            .queue(QueueConfig::disabled().with_max_wait(Duration::ZERO)),
-                    )
-                    .build(),
-                ClientConfig::builder()
-                    .admission(
-                        ClientAdmissionConfig::default()
-                            .queue(QueueConfig::bounded(1).with_max_wait(Duration::ZERO)),
-                    )
-                    .build(),
-            ),
-        ];
-
-        for (name, boundary, one_step_over) in cases {
-            assert!(
-                boundary.is_ok(),
-                "{name} equality/disabled boundary must be accepted: {boundary:?}"
-            );
-            let error = one_step_over.expect_err("one-step overage must be rejected");
-            assert_eq!(error.kind(), ClientErrorKind::Build, "{name}");
-        }
+    fn independent_builders_accept_cross_field_boundaries() {
+        let retry = RetryConfig::builder()
+            .backoff_base(Duration::from_millis(10))
+            .backoff_cap(Duration::from_millis(10))
+            .build()
+            .unwrap();
+        let queue = QueueConfig::builder()
+            .capacity(0)
+            .max_wait(Duration::ZERO)
+            .build()
+            .unwrap();
+        let admission = ClientAdmissionConfig::builder()
+            .queue(queue)
+            .build()
+            .unwrap();
+        ClientConfig::builder()
+            .retry(retry)
+            .admission(admission)
+            .build()
+            .unwrap();
     }
 }

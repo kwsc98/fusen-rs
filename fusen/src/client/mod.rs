@@ -6,11 +6,12 @@ mod runtime;
 mod subscription;
 mod transport;
 
-#[doc(hidden)]
-pub use builder::ServiceClientBuilder;
+pub use builder::ClientBuilder;
 pub use config::{
-    BreakerThreshold, CircuitBreakerConfig, ClientAdmissionConfig, ClientConfig,
-    ClientConfigBuilder, ClientHttpConfig, DiscoveryConfig, QueueConfig, RetryConfig,
+    BreakerThreshold, BreakerThresholdBuilder, CircuitBreakerConfig, CircuitBreakerConfigBuilder,
+    ClientAdmissionConfig, ClientAdmissionConfigBuilder, ClientConfig, ClientConfigBuilder,
+    ClientHttpConfig, ClientHttpConfigBuilder, DiscoveryConfig, DiscoveryConfigBuilder,
+    QueueConfig, QueueConfigBuilder, RetryConfig, RetryConfigBuilder,
 };
 #[doc(hidden)]
 pub use invocation::ServiceClient;

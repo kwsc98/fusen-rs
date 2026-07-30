@@ -1,12 +1,15 @@
-use rpc::service;
+use rpc::interface;
 
 mod lookalike {
     pub struct RpcError;
 }
 
-#[service(name = "user")]
+#[interface(name = "user")]
 trait UserService {
-    async fn get(&self) -> Result<(), lookalike::RpcError>;
+    async fn get(
+        &self,
+        request: rpc::RpcRequest<()>,
+    ) -> Result<rpc::RpcResponse<()>, lookalike::RpcError>;
 }
 
 fn main() {}

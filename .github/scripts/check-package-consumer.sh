@@ -70,24 +70,33 @@ EOF
 
     if [[ "$package" == "fusen-rs" ]]; then
         cat >"$consumer_dir/src/lib.rs" <<'EOF'
-use fusen_rs::{RpcError, service};
+use fusen_rs::{ClientBuilder, ClientRuntime, RpcError, RpcRequest, RpcResponse, interface};
 
-#[service(name = "package-consumer")]
-pub trait PackageConsumerService {
+#[interface(name = "package-consumer")]
+pub trait PackageConsumerApi {
     #[fusen_rs::method(idempotency = "safe")]
-    async fn ping(&self, value: String) -> Result<String, RpcError>;
+    async fn ping(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
 }
 
-pub struct PackageConsumerServiceImpl;
+pub struct PackageConsumerHandler;
 
-impl PackageConsumerService for PackageConsumerServiceImpl {
-    async fn ping(&self, value: String) -> Result<String, RpcError> {
-        Ok(value)
+impl PackageConsumerApi for PackageConsumerHandler {
+    async fn ping(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new("pong".to_owned()))
     }
 }
 
-pub fn packaged_server() -> PackageConsumerServiceServer<PackageConsumerServiceImpl> {
-    PackageConsumerServiceServer::new(PackageConsumerServiceImpl)
+pub fn packaged_server() -> PackageConsumerApiServer<PackageConsumerHandler> {
+    PackageConsumerApiServer::new(PackageConsumerHandler)
+}
+
+pub fn packaged_client(runtime: &ClientRuntime) -> ClientBuilder<PackageConsumerApiClient> {
+    PackageConsumerApiClient::builder(runtime)
+}
+
+pub fn assert_client_implements_interface(client: &PackageConsumerApiClient) {
+    fn accepts_interface(_: &impl PackageConsumerApi) {}
+    accepts_interface(client);
 }
 EOF
     else

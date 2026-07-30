@@ -3,11 +3,10 @@ use super::{
     routes::{MatchedRoute, RouteTable, validate_query_pairs},
 };
 use crate::{
-    RpcCategory, RpcContext, RpcError,
+    MiddlewareStage, RetryHint, RpcCategory, RpcContext, RpcError, RpcSide,
     context::RpcContextParts,
     middleware::{Next, Terminal},
     runtime::{
-        BoxFuture,
         admission::{AdmissionError, AdmissionGate, AdmissionGuard},
         budget::ByteBudget,
         deadline::Deadline,
@@ -21,7 +20,10 @@ use crate::{
     },
 };
 use fusen_contract::{ProtocolSet, WireProtocol};
-use fusen_observability::{MetricEvent, MetricOutcome, MetricSide};
+use fusen_observability::{
+    AdmissionRejectedEvent, InvocationFinishedEvent, InvocationStartedEvent, MetricEvent,
+    MetricOutcome, MetricSide,
+};
 use futures_util::FutureExt;
 use http::{
     HeaderMap, Request, Response, StatusCode,
@@ -34,7 +36,7 @@ use std::{
     future::Future,
     panic::AssertUnwindSafe,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant as StdInstant},
 };
 use tokio::sync::Semaphore;
@@ -174,7 +176,7 @@ impl HttpApp {
                     "draining",
                     "server is draining",
                 )
-                .mark_retryable());
+                .with_retry_hint(RetryHint::Retryable));
             }
             super::READY => {}
             _ => unreachable!("validated readiness state"),
@@ -202,12 +204,14 @@ impl HttpApp {
         let _admission = self.acquire_admission(control.deadline).await?;
 
         let started = StdInstant::now();
-        self.metrics.record(&MetricEvent::InvocationStarted {
-            side: MetricSide::Server,
-            protocol: protocol.as_str(),
-            service: matched.route.service.selector().service_id(),
-            method: matched.route.method.fusen_identity(),
-        });
+        self.metrics.record(&MetricEvent::InvocationStarted(
+            InvocationStartedEvent::new(
+                MetricSide::Server,
+                protocol.as_str(),
+                matched.route.service.selector().service_id(),
+                matched.route.method.fusen_identity(),
+            ),
+        ));
         let span = tracing::info_span!(
             "fusen.server.invocation",
             request_id = %control.request_id,
@@ -240,17 +244,19 @@ impl HttpApp {
                 (outcome, Some(error_code), response)
             }
         };
-        self.metrics.record(&MetricEvent::InvocationFinished {
-            side: MetricSide::Server,
-            protocol: protocol.as_str(),
-            service: matched.route.service.selector().service_id(),
-            method: matched.route.method.fusen_identity(),
-            outcome,
-            status_class: Some(status_class(response.status())),
-            error_code: error_code.as_deref(),
-            duration: started.elapsed(),
-            attempts: control.attempt,
-        });
+        self.metrics.record(&MetricEvent::InvocationFinished(
+            InvocationFinishedEvent::new(
+                MetricSide::Server,
+                protocol.as_str(),
+                matched.route.service.selector().service_id(),
+                matched.route.method.fusen_identity(),
+                outcome,
+                Some(status_class(response.status())),
+                error_code.as_deref(),
+                started.elapsed(),
+                control.attempt,
+            ),
+        ));
         let mut response = response;
         response.headers_mut().insert(
             wire::REQUEST_ID,
@@ -268,7 +274,6 @@ impl HttpApp {
         control: &RequestControl,
     ) -> Result<Response<GuardedBody>, RpcError> {
         let request_headers = application_headers(request.headers());
-        let query = request.uri().query().map(str::to_owned);
         let content_length = parse_content_length(request.headers())?;
         let body_required = protocol == WireProtocol::FusenV1 || matched.spring_has_body();
         validate_content_type(
@@ -293,6 +298,63 @@ impl HttpApp {
                 "this SpringCloudV1 route does not accept a request body",
             ));
         }
+        let context = RpcContext::new(RpcContextParts {
+            side: RpcSide::Server,
+            stage: MiddlewareStage::ServerHead,
+            request_id: control.request_id.clone(),
+            protocol,
+            interface: matched.route.service,
+            method: matched.route.method,
+            deadline: control.deadline,
+            attempt: std::num::NonZeroU8::new(control.attempt),
+            endpoint: None,
+            headers: request_headers,
+            extensions: http::Extensions::new(),
+            arguments: None,
+            response_limit: self.max_response_body,
+            response_wire_overhead: match protocol {
+                WireProtocol::FusenV1 => 11,
+                WireProtocol::SpringCloudV1 => 0,
+                _ => unreachable!("the protocol was validated before dispatch"),
+            },
+            response_budget: self.response_budget.clone(),
+        });
+        let terminal = HeadTerminal {
+            app: self,
+            request: Mutex::new(Some(request)),
+            matched,
+            protocol,
+            control,
+            content_length,
+            body_required,
+        };
+        let response = control
+            .deadline
+            .run(Next::new(&matched.route.head_middleware, &terminal).run(context))
+            .await
+            .map_err(|_| deadline_exceeded())??;
+        encode_success(
+            protocol,
+            response,
+            self.max_response_body,
+            &self.response_budget,
+        )
+    }
+
+    async fn execute_body(
+        &self,
+        request: Request<Incoming>,
+        mut context: RpcContext,
+        execution: BodyExecution<'_>,
+    ) -> crate::MiddlewareResult {
+        let BodyExecution {
+            matched,
+            protocol,
+            control,
+            content_length,
+            body_required,
+        } = execution;
+        let query = request.uri().query().map(str::to_owned);
         let (_parts, body) = request.into_parts();
         let arguments = if body_required {
             let (bytes, body_permit) = control
@@ -330,40 +392,18 @@ impl HttpApp {
         } else {
             matched.spring_arguments(query.as_deref(), None, self.max_query_pairs)?
         };
-
-        let context = RpcContext::new(RpcContextParts {
-            request_id: control.request_id.clone(),
-            protocol,
-            service: matched.route.service,
-            method: matched.route.method,
-            deadline: control.deadline,
-            attempt: control.attempt,
-            headers: request_headers,
-            arguments,
-            response_limit: self.max_response_body,
-            response_wire_overhead: match protocol {
-                WireProtocol::FusenV1 => 11,
-                WireProtocol::SpringCloudV1 => 0,
-                _ => unreachable!("the protocol was validated before dispatch"),
-            },
-            response_budget: self.response_budget.clone(),
-        });
+        context.set_stage(MiddlewareStage::ServerCall);
+        context.set_arguments(arguments);
         let terminal = ServiceTerminal {
             dispatch: matched.route.dispatch.as_ref(),
             max_response_body: self.max_response_body,
             response_budget: self.response_budget.clone(),
         };
-        let response = control
+        control
             .deadline
             .run(Next::new(&matched.route.middleware, &terminal).run(context))
             .await
-            .map_err(|_| deadline_exceeded())??;
-        encode_success(
-            protocol,
-            response,
-            self.max_response_body,
-            &self.response_budget,
-        )
+            .map_err(|_| deadline_exceeded())?
     }
 
     fn validate_head(&self, request: &Request<Incoming>) -> Result<(), RpcError> {
@@ -406,10 +446,9 @@ impl HttpApp {
             Err(AdmissionError::Overloaded) => {}
         }
         let Some(queue) = &self.queue_slots else {
-            self.metrics.record(&MetricEvent::AdmissionRejected {
-                side: MetricSide::Server,
-                reason: "concurrency",
-            });
+            self.metrics.record(&MetricEvent::AdmissionRejected(
+                AdmissionRejectedEvent::new(MetricSide::Server, "concurrency"),
+            ));
             return Err(overloaded());
         };
         let queue_permit = queue
@@ -461,12 +500,56 @@ struct ServiceTerminal<'a> {
 }
 
 impl Terminal for ServiceTerminal<'_> {
-    fn call<'a>(&'a self, context: RpcContext) -> BoxFuture<'a, crate::RpcResult> {
+    fn call<'a>(&'a self, context: RpcContext) -> crate::MiddlewareFuture<'a> {
         self.dispatch.call(ServerInvocation::new(
             context,
             self.max_response_body,
             self.response_budget.clone(),
         ))
+    }
+}
+
+struct HeadTerminal<'a> {
+    app: &'a HttpApp,
+    request: Mutex<Option<Request<Incoming>>>,
+    matched: &'a MatchedRoute,
+    protocol: WireProtocol,
+    control: &'a RequestControl,
+    content_length: Option<usize>,
+    body_required: bool,
+}
+
+struct BodyExecution<'a> {
+    matched: &'a MatchedRoute,
+    protocol: WireProtocol,
+    control: &'a RequestControl,
+    content_length: Option<usize>,
+    body_required: bool,
+}
+
+impl Terminal for HeadTerminal<'_> {
+    fn call<'a>(&'a self, context: RpcContext) -> crate::MiddlewareFuture<'a> {
+        let request = self
+            .request
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .expect("head middleware terminal runs at most once");
+        Box::pin(async move {
+            self.app
+                .execute_body(
+                    request,
+                    context,
+                    BodyExecution {
+                        matched: self.matched,
+                        protocol: self.protocol,
+                        control: self.control,
+                        content_length: self.content_length,
+                        body_required: self.body_required,
+                    },
+                )
+                .await
+        })
     }
 }
 
@@ -495,7 +578,8 @@ fn overloaded() -> RpcError {
 }
 
 fn draining() -> RpcError {
-    RpcError::framework(RpcCategory::Unavailable, "draining", "server is draining").mark_retryable()
+    RpcError::framework(RpcCategory::Unavailable, "draining", "server is draining")
+        .with_retry_hint(RetryHint::Retryable)
 }
 
 fn deadline_exceeded() -> RpcError {

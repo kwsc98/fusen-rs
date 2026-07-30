@@ -1,13 +1,12 @@
 //! Deterministic Server/Registry startup, rollback, and shutdown coverage.
 
 use fusen_register::{
-    RegistrationHandle, Registry, SubscriptionHandle, error::RegistryError, prepare_registration,
+    RegistrationHandle, RegistrationRequest, Registry, SubscriptionHandle, SubscriptionRequest,
+    error::RegistryError, provider,
 };
 use fusen_rs::{
-    ClientRuntime, RpcError, Server, ServerConfig, ServerErrorKind, ServerRegistryConfig,
-    ServerState, WireProtocol,
-    contract::{ProtocolSet, ServiceRegistration, ServiceSelector},
-    service,
+    ClientRuntime, RpcError, RpcRequest, RpcResponse, Server, ServerConfig, ServerErrorKind,
+    ServerRegistryConfig, ServerState, contract::ProtocolSet, interface,
 };
 use std::{
     future::pending,
@@ -16,16 +15,16 @@ use std::{
 };
 use tokio::sync::{Barrier, Semaphore, oneshot};
 
-#[service(name = "alpha-registry-e2e")]
+#[interface(name = "alpha-registry-e2e")]
 trait AlphaRegistryService {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/registry/alpha"))]
-    async fn call(&self) -> Result<String, RpcError>;
+    async fn call(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
 }
 
-#[service(name = "zeta-registry-e2e")]
+#[interface(name = "zeta-registry-e2e")]
 trait ZetaRegistryService {
     #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/registry/zeta"))]
-    async fn call(&self) -> Result<String, RpcError>;
+    async fn call(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct RegistryServiceImpl;
@@ -36,26 +35,26 @@ struct BlockingRegistryServiceImpl {
 }
 
 impl AlphaRegistryService for RegistryServiceImpl {
-    async fn call(&self) -> Result<String, RpcError> {
-        Ok("alpha".into())
+    async fn call(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new("alpha".into()))
     }
 }
 
 impl ZetaRegistryService for RegistryServiceImpl {
-    async fn call(&self) -> Result<String, RpcError> {
-        Ok("zeta".into())
+    async fn call(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new("zeta".into()))
     }
 }
 
 impl AlphaRegistryService for BlockingRegistryServiceImpl {
-    async fn call(&self) -> Result<String, RpcError> {
+    async fn call(&self, _request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError> {
         self.entered.wait().await;
         let _permit = self
             .release
             .acquire()
             .await
             .expect("test service release remains open");
-        Ok("drained".into())
+        Ok(RpcResponse::new("drained".into()))
     }
 }
 
@@ -67,8 +66,7 @@ struct CoordinatedCloseRegistry {
 impl Registry for CoordinatedCloseRegistry {
     fn prepare_registration(
         &self,
-        _registration: Arc<ServiceRegistration>,
-        _protocol: WireProtocol,
+        _request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError> {
         let close_started = self
             .close_started
@@ -82,17 +80,19 @@ impl Registry for CoordinatedCloseRegistry {
             .unwrap()
             .take()
             .expect("test registry has one close release");
-        Ok(prepare_registration(async { Ok(()) }, move || async move {
-            let _ = close_started.send(());
-            let _ = close_release.await;
-            Ok(())
-        }))
+        Ok(provider::registration(
+            async { Ok(()) },
+            move || async move {
+                let _ = close_started.send(());
+                let _ = close_release.await;
+                Ok(())
+            },
+        ))
     }
 
     fn prepare_subscription(
         &self,
-        _selector: ServiceSelector,
-        _protocol: WireProtocol,
+        _request: SubscriptionRequest,
     ) -> Result<SubscriptionHandle, RegistryError> {
         Err(RegistryError::message(
             fusen_register::error::RegistryOperation::PrepareSubscription,
@@ -128,9 +128,9 @@ impl FakeRegistry {
 impl Registry for FakeRegistry {
     fn prepare_registration(
         &self,
-        registration: Arc<ServiceRegistration>,
-        protocol: WireProtocol,
+        request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError> {
+        let (registration, protocol) = request.into_parts();
         let identity: Arc<str> = Arc::from(registration.selector().identity());
         let key = format!("{}:{}:{}", self.name, protocol.as_str(), identity);
         push(&self.events, format!("prepare:{key}"));
@@ -143,7 +143,7 @@ impl Registry for FakeRegistry {
         let close_identity = identity;
         let fail_close = self.behavior.fail_close.clone();
         let pending_close = self.behavior.pending_close.clone();
-        Ok(prepare_registration(
+        Ok(provider::registration(
             async move {
                 push(&activation_events, format!("activate:{activation_key}"));
                 if fail_activate.as_deref() == Some(activation_identity.as_ref()) {
@@ -168,8 +168,7 @@ impl Registry for FakeRegistry {
 
     fn prepare_subscription(
         &self,
-        _selector: ServiceSelector,
-        _protocol: WireProtocol,
+        _request: SubscriptionRequest,
     ) -> Result<SubscriptionHandle, RegistryError> {
         Err(RegistryError::message(
             fusen_register::error::RegistryOperation::PrepareSubscription,
@@ -193,8 +192,8 @@ async fn registrations_follow_stable_order_and_close_in_reverse() {
             "second",
             FakeRegistry::new("second", events.clone(), FakeBehavior::default()),
         )
-        .service(ZetaRegistryServiceServer::new(RegistryServiceImpl))
-        .service(AlphaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(ZetaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(AlphaRegistryServiceServer::new(RegistryServiceImpl))
         .build()
         .unwrap()
         .start()
@@ -224,18 +223,21 @@ async fn shutdown_closes_listener_before_registry_and_connection_drain_in_parall
         close_release: Mutex::new(Some(close_release_receiver)),
     };
     let config = ServerConfig::builder()
-        .registry(ServerRegistryConfig::default().limits(
-            Duration::from_secs(5),
-            Duration::from_secs(5),
-            1,
-        ))
+        .registry(
+            ServerRegistryConfig::builder()
+                .startup_timeout(Duration::from_secs(5))
+                .operation_timeout(Duration::from_secs(5))
+                .max_concurrent_operations(1)
+                .build()
+                .unwrap(),
+        )
         .graceful_shutdown_timeout(Duration::from_secs(5))
         .build()
         .unwrap();
     let server = Server::builder("127.0.0.1:0")
         .config(config)
         .registry("coordinated", registry)
-        .service(AlphaRegistryServiceServer::new(
+        .interface(AlphaRegistryServiceServer::new(
             BlockingRegistryServiceImpl {
                 entered: entered.clone(),
                 release: service_release.clone(),
@@ -253,7 +255,7 @@ async fn shutdown_closes_listener_before_registry_and_connection_drain_in_parall
         .connect()
         .await
         .unwrap();
-    let invocation = tokio::spawn(async move { client.call().await });
+    let invocation = tokio::spawn(async move { client.call(RpcRequest::new(())).await });
     entered.wait().await;
 
     let handle = server.handle();
@@ -270,7 +272,7 @@ async fn shutdown_closes_listener_before_registry_and_connection_drain_in_parall
 
     service_release.add_permits(1);
     close_release.send(()).unwrap();
-    assert_eq!(invocation.await.unwrap().unwrap(), "drained");
+    assert_eq!(invocation.await.unwrap().unwrap().into_body(), "drained");
     shutdown.await.unwrap().unwrap();
     server.wait().await.unwrap();
     runtime.shutdown().await.unwrap();
@@ -289,8 +291,8 @@ async fn activation_failure_rolls_back_every_started_handle_in_reverse() {
             "registry",
             FakeRegistry::new("registry", events.clone(), behavior),
         )
-        .service(ZetaRegistryServiceServer::new(RegistryServiceImpl))
-        .service(AlphaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(ZetaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(AlphaRegistryServiceServer::new(RegistryServiceImpl))
         .build()
         .unwrap()
         .start()
@@ -328,8 +330,8 @@ async fn rollback_provider_error_does_not_replace_the_startup_failure() {
             "registry",
             FakeRegistry::new("registry", events.clone(), behavior),
         )
-        .service(ZetaRegistryServiceServer::new(RegistryServiceImpl))
-        .service(AlphaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(ZetaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(AlphaRegistryServiceServer::new(RegistryServiceImpl))
         .build()
         .unwrap()
         .start()
@@ -401,8 +403,8 @@ async fn one_registry_server(
     Server::builder("127.0.0.1:0")
         .config(server_config(ProtocolSet::FUSEN_V1, operation_timeout))
         .registry("registry", FakeRegistry::new("registry", events, behavior))
-        .service(ZetaRegistryServiceServer::new(RegistryServiceImpl))
-        .service(AlphaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(ZetaRegistryServiceServer::new(RegistryServiceImpl))
+        .interface(AlphaRegistryServiceServer::new(RegistryServiceImpl))
         .build()
         .unwrap()
         .start()
@@ -413,11 +415,14 @@ async fn one_registry_server(
 fn server_config(protocols: ProtocolSet, operation_timeout: Duration) -> ServerConfig {
     ServerConfig::builder()
         .protocols(protocols)
-        .registry(ServerRegistryConfig::default().limits(
-            Duration::from_secs(1),
-            operation_timeout,
-            1,
-        ))
+        .registry(
+            ServerRegistryConfig::builder()
+                .startup_timeout(Duration::from_secs(1))
+                .operation_timeout(operation_timeout)
+                .max_concurrent_operations(1)
+                .build()
+                .unwrap(),
+        )
         .graceful_shutdown_timeout(Duration::from_secs(1))
         .build()
         .unwrap()

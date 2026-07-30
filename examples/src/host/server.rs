@@ -20,8 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = Server::builder("0.0.0.0:8081")
         .config(config)
         .metrics(LogMetricsRecorder)
-        .service(DemoServiceServer::new(DemoServiceImpl).middleware(TracingMiddleware))
-        .service(DemoServiceV2Server::new(DemoServiceImplV2).middleware(TracingMiddleware))
+        .interface(DemoServiceServer::new(DemoServiceImpl).middleware(TracingMiddleware))
+        .interface(DemoServiceV2Server::new(DemoServiceImplV2).middleware(TracingMiddleware))
         .build()?
         .start()
         .await?;

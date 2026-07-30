@@ -11,9 +11,9 @@
 ### Public Contract
 
 - Workspace 统一为 Rust 1.97、Edition 2024、resolver 3、禁止 unsafe，并集中 lint policy。
-- 服务声明统一为 `service` trait 宏与 `method` 元数据；RPC 显式返回 `Result<T, RpcError>`，实现类型直接实现 trait。
+- 接口声明统一为 `#[interface]` trait 宏、`#[method]` 元数据和 `RpcMessage` DTO schema；Client 与 Handler 实现同一个 trait，方法统一使用 `RpcRequest<T>` 和 `Result<RpcResponse<T>, RpcError>`。
 - 调用错误拆分为 `RpcError`、`ClientError`、`ServerError`、`RegistryError` 与 `ConfigError`，字段私有并提供稳定分类/getter。
-- 公开扩展面收敛为 Middleware、Registry、Router、LoadBalancer、RetryPolicy 与 MetricsRecorder；transport/codec/acceptor/pool/lifecycle internals 全部私有。
+- 公开扩展面收敛为 Middleware、Registry、InstanceRouter、LoadBalancer、RetryPolicy、ConfigSource 与 MetricsRecorder；transport/codec/acceptor/pool/lifecycle internals 全部私有。
 - 所有配置采用私有字段、`Default`、builder/setter 与 getter；可扩展 enum/error 标记为 non-exhaustive。
 
 ### Protocol And Runtime
@@ -41,7 +41,7 @@
 
 ### Safety And Observability
 
-- Middleware、service、Router、LoadBalancer、RetryPolicy、Registry 与 MetricsRecorder 分别建立 panic boundary。
+- Middleware 在 ClientCall、ClientAttempt、ServerHead、ServerCall 四个阶段共享同一对象安全接口；Middleware、Handler、InstanceRouter、LoadBalancer、RetryPolicy、Registry、ConfigSource 与 MetricsRecorder 分别建立 panic boundary。
 - Core 产生结构化 tracing event；MetricsRecorder 同步非阻塞，panic 后原子禁用，labels 受低 cardinality 与脱敏约束。
 - 增加真实 H1/H2 golden fixtures、macro compile tests、paused-time lifecycle/resilience tests、资源预算测试和跨平台 CI/release gates。
 

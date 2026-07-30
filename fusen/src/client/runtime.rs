@@ -1,5 +1,4 @@
 use super::{
-    builder::ServiceClientBuilder,
     config::ClientConfig,
     endpoint_breakers::{EndpointBreakerSource, EndpointBreakers},
     subscription::SubscriptionManager,
@@ -7,7 +6,7 @@ use super::{
 };
 use crate::{
     ClientError, ClientErrorKind, Middleware, RetryPolicy,
-    middleware::{MiddlewareDyn, erase_middleware},
+    middleware::erase_middleware,
     resilience::{
         breaker::{BreakerConfig, BreakerPhase, CircuitBreaker},
         retry::{RetryBudget, StandardRetryPolicy},
@@ -15,7 +14,10 @@ use crate::{
     runtime::{admission::AdmissionGate, budget::ByteBudget, metrics::SafeMetrics},
 };
 use fusen_contract::{ServiceDescriptor, WireProtocol};
-use fusen_observability::{CircuitState, MetricEvent, MetricOutcome, MetricsRecorder};
+use fusen_observability::{
+    CircuitState, CircuitStateChangedEvent, MetricEvent, MetricOutcome, MetricsRecorder,
+    ShutdownFinishedEvent,
+};
 use fusen_register::Registry;
 use std::{
     collections::HashMap,
@@ -54,7 +56,8 @@ pub struct ClientRuntime {
 pub struct ClientRuntimeBuilder {
     config: ClientConfig,
     registry: Option<Arc<dyn Registry>>,
-    middleware: Vec<Arc<dyn MiddlewareDyn>>,
+    middleware: Vec<Arc<dyn Middleware>>,
+    attempt_middleware: Vec<Arc<dyn Middleware>>,
     metrics: Option<Arc<dyn MetricsRecorder>>,
     retry_policy: Arc<dyn RetryPolicy>,
 }
@@ -66,6 +69,7 @@ impl ClientRuntime {
             config: ClientConfig::default(),
             registry: None,
             middleware: Vec::new(),
+            attempt_middleware: Vec::new(),
             metrics: None,
             retry_policy: Arc::new(StandardRetryPolicy),
         }
@@ -97,11 +101,6 @@ impl ClientRuntime {
             })?;
         }
     }
-
-    #[doc(hidden)]
-    pub fn service_builder(&self, service: &'static ServiceDescriptor) -> ServiceClientBuilder {
-        ServiceClientBuilder::new(self, service)
-    }
 }
 
 impl ClientRuntimeBuilder {
@@ -126,6 +125,12 @@ impl ClientRuntimeBuilder {
         self
     }
 
+    /// Appends global middleware around every physical transport attempt.
+    pub fn attempt_middleware(mut self, middleware: impl Middleware) -> Self {
+        self.attempt_middleware.push(erase_middleware(middleware));
+        self
+    }
+
     /// Installs the synchronous, non-blocking metrics recorder.
     pub fn metrics(mut self, recorder: impl MetricsRecorder) -> Self {
         self.metrics = Some(Arc::new(recorder));
@@ -140,7 +145,13 @@ impl ClientRuntimeBuilder {
 
     /// Validates and creates all runtime-owned supervisors and HTTP/HTTPS pools.
     pub fn build(self) -> Result<ClientRuntime, ClientError> {
-        self.config.validate()?;
+        self.config.validate().map_err(|error| {
+            ClientError::with_source(
+                ClientErrorKind::Build,
+                format!("invalid client configuration at {}", error.field_path()),
+                error,
+            )
+        })?;
         let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
             ClientError::with_source(
                 ClientErrorKind::Build,
@@ -149,24 +160,25 @@ impl ClientRuntimeBuilder {
             )
         })?;
         let config = Arc::new(self.config);
-        let admission = AdmissionGate::new(config.admission().max_in_flight_value());
-        let queue_slots = (config.admission().queue_value().capacity() > 0)
-            .then(|| Arc::new(Semaphore::new(config.admission().queue_value().capacity())));
-        let request_budget = ByteBudget::new(config.admission().request_byte_budget());
-        let response_budget = ByteBudget::new(config.admission().response_byte_budget());
+        let admission = AdmissionGate::new(config.admission().max_in_flight());
+        let queue_slots = (config.admission().queue().capacity() > 0)
+            .then(|| Arc::new(Semaphore::new(config.admission().queue().capacity())));
+        let request_budget = ByteBudget::new(config.admission().max_inflight_request_body_bytes());
+        let response_budget =
+            ByteBudget::new(config.admission().max_inflight_response_body_bytes());
         let transport = Arc::new(Mutex::new(Some(HttpTransport::new(
             config.connect_timeout(),
             config.http(),
         )?)));
         let metrics = SafeMetrics::new(self.metrics);
         let endpoint_threshold = breaker_config(
-            config.circuit_breaker().endpoint_value(),
-            config.circuit_breaker().max_open_duration_value(),
+            config.circuit_breaker().endpoint(),
+            config.circuit_breaker().max_open_duration(),
         );
         let endpoint_breakers = EndpointBreakers::new(
             endpoint_threshold,
-            config.circuit_breaker().max_endpoint_entries_value(),
-            config.circuit_breaker().idle_eviction_value(),
+            config.circuit_breaker().max_endpoint_entries(),
+            config.circuit_breaker().idle_eviction(),
         );
         let subscriptions = self.registry.as_ref().map(|registry| {
             SubscriptionManager::new(
@@ -183,6 +195,7 @@ impl ClientRuntimeBuilder {
         let inner = Arc::new(ClientRuntimeInner {
             config: config.clone(),
             middleware: Arc::from(self.middleware),
+            attempt_middleware: Arc::from(self.attempt_middleware),
             metrics: metrics.clone(),
             retry_policy: self.retry_policy,
             admission: admission.clone(),
@@ -217,7 +230,8 @@ impl ClientRuntimeBuilder {
 
 pub(crate) struct ClientRuntimeInner {
     pub config: Arc<ClientConfig>,
-    pub middleware: Arc<[Arc<dyn MiddlewareDyn>]>,
+    pub middleware: Arc<[Arc<dyn Middleware>]>,
+    pub attempt_middleware: Arc<[Arc<dyn Middleware>]>,
     pub metrics: SafeMetrics,
     pub retry_policy: Arc<dyn RetryPolicy>,
     pub admission: Arc<AdmissionGate>,
@@ -262,15 +276,17 @@ impl ClientRuntimeInner {
                 let service_id = service.selector().service_id().to_owned();
                 CircuitBreaker::observed(
                     breaker_config(
-                        self.config.circuit_breaker().service_value(),
-                        self.config.circuit_breaker().max_open_duration_value(),
+                        self.config.circuit_breaker().service(),
+                        self.config.circuit_breaker().max_open_duration(),
                     ),
                     Arc::new(move |phase| {
-                        metrics.record(&MetricEvent::CircuitStateChanged {
-                            scope: "service",
-                            service: &service_id,
-                            state: metric_circuit_state(phase),
-                        });
+                        metrics.record(&MetricEvent::CircuitStateChanged(
+                            CircuitStateChangedEvent::new(
+                                "service",
+                                &service_id,
+                                metric_circuit_state(phase),
+                            ),
+                        ));
                     }),
                 )
             })
@@ -292,11 +308,13 @@ impl ClientRuntimeInner {
             source,
             endpoint,
             Arc::new(move |phase| {
-                metrics.record(&MetricEvent::CircuitStateChanged {
-                    scope: "endpoint",
-                    service: &service_id,
-                    state: metric_circuit_state(phase),
-                });
+                metrics.record(&MetricEvent::CircuitStateChanged(
+                    CircuitStateChangedEvent::new(
+                        "endpoint",
+                        &service_id,
+                        metric_circuit_state(phase),
+                    ),
+                ));
             }),
         )
     }
@@ -310,8 +328,8 @@ impl ClientRuntimeInner {
             .entry(service.identity().to_owned())
             .or_insert_with(|| {
                 Arc::new(RetryBudget::new(
-                    self.config.retry().budget_capacity_value(),
-                    self.config.retry().budget_refill_value(),
+                    self.config.retry().budget_capacity(),
+                    self.config.retry().budget_refill_per_second(),
                 ))
             })
             .clone()
@@ -322,7 +340,7 @@ impl ClientRuntimeInner {
             .endpoint_bulkheads
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if bulkheads.len() >= self.config.circuit_breaker().max_endpoint_entries_value()
+        if bulkheads.len() >= self.config.circuit_breaker().max_endpoint_entries()
             && !bulkheads.contains_key(endpoint)
             && let Some(key) = bulkheads.keys().next().cloned()
         {
@@ -332,7 +350,7 @@ impl ClientRuntimeInner {
             .entry(endpoint.to_owned())
             .or_insert_with(|| {
                 Arc::new(Semaphore::new(
-                    self.config.admission().max_in_flight_per_endpoint_value(),
+                    self.config.admission().max_in_flight_per_endpoint(),
                 ))
             })
             .clone()
@@ -426,15 +444,17 @@ async fn client_shutdown_coordinator(coordinator: ClientShutdown) {
     }
     coordinator.admission.close();
     coordinator.state.store(CLIENT_CLOSED, Ordering::Release);
-    coordinator.metrics.record(&MetricEvent::ShutdownFinished {
-        runtime: "client",
-        outcome: match &result {
-            Ok(()) => MetricOutcome::Success,
-            Err(error) if error.kind() == ClientErrorKind::Timeout => MetricOutcome::Timeout,
-            Err(_) => MetricOutcome::Error,
-        },
-        duration: started.elapsed(),
-    });
+    coordinator
+        .metrics
+        .record(&MetricEvent::ShutdownFinished(ShutdownFinishedEvent::new(
+            "client",
+            match &result {
+                Ok(()) => MetricOutcome::Success,
+                Err(error) if error.kind() == ClientErrorKind::Timeout => MetricOutcome::Timeout,
+                Err(_) => MetricOutcome::Error,
+            },
+            started.elapsed(),
+        )));
     coordinator.completion.send_replace(Some(result));
 }
 
@@ -449,14 +469,13 @@ fn close_transport(transport: &Mutex<Option<HttpTransport>>) {
 mod tests {
     use super::*;
     use fusen_contract::{
-        InstanceId, ServiceInstance, ServiceRegistration, ServiceSelector, ServiceWeight,
-        WireProtocol,
+        InstanceId, ServiceInstance, ServiceSelector, ServiceWeight, WireProtocol,
     };
     use fusen_register::{
-        RegistrationHandle, SubscriptionHandle,
+        RegistrationHandle, RegistrationRequest, SubscriptionHandle, SubscriptionRequest,
         directory::directory,
         error::{RegistryError, RegistryErrorKind, RegistryOperation},
-        prepare_subscription,
+        provider,
     };
     use std::{future::pending, time::Duration};
     use tokio::sync::Notify;
@@ -469,8 +488,7 @@ mod tests {
     impl Registry for PendingCloseRegistry {
         fn prepare_registration(
             &self,
-            _registration: Arc<ServiceRegistration>,
-            _protocol: WireProtocol,
+            _request: RegistrationRequest,
         ) -> Result<RegistrationHandle, RegistryError> {
             Err(RegistryError::message(
                 RegistryOperation::PrepareRegistration,
@@ -481,13 +499,12 @@ mod tests {
 
         fn prepare_subscription(
             &self,
-            _selector: ServiceSelector,
-            _protocol: WireProtocol,
+            _request: SubscriptionRequest,
         ) -> Result<SubscriptionHandle, RegistryError> {
             let (publisher, directory) = directory();
             let close_started = self.close_started.clone();
             let close_publisher = publisher.clone();
-            Ok(prepare_subscription(
+            Ok(provider::subscription(
                 directory,
                 async move {
                     publisher.publish_ready(vec![ServiceInstance::new(

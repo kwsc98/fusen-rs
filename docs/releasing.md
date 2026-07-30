@@ -277,12 +277,12 @@ cargo +1.97.0 add --manifest-path "$registry_consumer_dir/Cargo.toml" \
   --registry crates-io 'fusen-rs@=0.9.0'
 
 cat >"$registry_consumer_dir/src/lib.rs" <<'RUST'
-use fusen_rs::{RpcError, service};
+use fusen_rs::{RpcError, RpcRequest, RpcResponse, interface};
 
-#[service(name = "registry-consumer")]
-pub trait RegistryConsumerService {
+#[interface(name = "registry-consumer")]
+pub trait RegistryConsumerApi {
     #[fusen_rs::method(idempotency = "safe")]
-    async fn ping(&self, value: String) -> Result<String, RpcError>;
+    async fn ping(&self, request: RpcRequest<()>) -> Result<RpcResponse<String>, RpcError>;
 }
 RUST
 

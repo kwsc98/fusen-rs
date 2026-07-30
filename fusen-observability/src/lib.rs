@@ -7,6 +7,7 @@
 //! application. Implementations must be non-blocking; the runtime disables a recorder after its
 //! first panic.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 /// OpenTelemetry metrics adapter. Applications retain ownership of their provider/exporter guard.
@@ -67,102 +68,365 @@ pub enum DirectoryMetricState {
     Closed,
 }
 
+/// A logical invocation entering admission.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct InvocationStartedEvent<'a> {
+    side: MetricSide,
+    protocol: &'a str,
+    service: &'a str,
+    method: &'a str,
+}
+
+impl<'a> InvocationStartedEvent<'a> {
+    /// Creates an invocation-started event.
+    pub const fn new(
+        side: MetricSide,
+        protocol: &'a str,
+        service: &'a str,
+        method: &'a str,
+    ) -> Self {
+        Self {
+            side,
+            protocol,
+            service,
+            method,
+        }
+    }
+    /// Returns the client/server side.
+    pub const fn side(&self) -> MetricSide {
+        self.side
+    }
+    /// Returns the wire protocol name.
+    pub const fn protocol(&self) -> &'a str {
+        self.protocol
+    }
+    /// Returns the interface identifier.
+    pub const fn service(&self) -> &'a str {
+        self.service
+    }
+    /// Returns the method name.
+    pub const fn method(&self) -> &'a str {
+        self.method
+    }
+}
+
+/// A logical invocation's terminal outcome.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct InvocationFinishedEvent<'a> {
+    side: MetricSide,
+    protocol: &'a str,
+    service: &'a str,
+    method: &'a str,
+    outcome: MetricOutcome,
+    status_class: Option<&'a str>,
+    error_code: Option<&'a str>,
+    duration: Duration,
+    attempts: u8,
+}
+
+impl<'a> InvocationFinishedEvent<'a> {
+    /// Creates an invocation-finished event.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        side: MetricSide,
+        protocol: &'a str,
+        service: &'a str,
+        method: &'a str,
+        outcome: MetricOutcome,
+        status_class: Option<&'a str>,
+        error_code: Option<&'a str>,
+        duration: Duration,
+        attempts: u8,
+    ) -> Self {
+        Self {
+            side,
+            protocol,
+            service,
+            method,
+            outcome,
+            status_class,
+            error_code,
+            duration,
+            attempts,
+        }
+    }
+    /// Returns the client/server side.
+    pub const fn side(&self) -> MetricSide {
+        self.side
+    }
+    /// Returns the wire protocol name.
+    pub const fn protocol(&self) -> &'a str {
+        self.protocol
+    }
+    /// Returns the interface identifier.
+    pub const fn service(&self) -> &'a str {
+        self.service
+    }
+    /// Returns the method name.
+    pub const fn method(&self) -> &'a str {
+        self.method
+    }
+    /// Returns the terminal outcome.
+    pub const fn outcome(&self) -> MetricOutcome {
+        self.outcome
+    }
+    /// Returns the HTTP status class.
+    pub const fn status_class(&self) -> Option<&'a str> {
+        self.status_class
+    }
+    /// Returns the stable error code.
+    pub const fn error_code(&self) -> Option<&'a str> {
+        self.error_code
+    }
+    /// Returns the end-to-end duration.
+    pub const fn duration(&self) -> Duration {
+        self.duration
+    }
+    /// Returns the number of attempts.
+    pub const fn attempts(&self) -> u8 {
+        self.attempts
+    }
+}
+
+/// A physical transport attempt's terminal outcome.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct AttemptFinishedEvent<'a> {
+    protocol: &'a str,
+    service: &'a str,
+    method: &'a str,
+    attempt: u8,
+    outcome: MetricOutcome,
+    failure_class: Option<&'a str>,
+    duration: Duration,
+}
+
+impl<'a> AttemptFinishedEvent<'a> {
+    /// Creates an attempt-finished event.
+    pub const fn new(
+        protocol: &'a str,
+        service: &'a str,
+        method: &'a str,
+        attempt: u8,
+        outcome: MetricOutcome,
+        failure_class: Option<&'a str>,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            protocol,
+            service,
+            method,
+            attempt,
+            outcome,
+            failure_class,
+            duration,
+        }
+    }
+    /// Returns the wire protocol name.
+    pub const fn protocol(&self) -> &'a str {
+        self.protocol
+    }
+    /// Returns the interface identifier.
+    pub const fn service(&self) -> &'a str {
+        self.service
+    }
+    /// Returns the method name.
+    pub const fn method(&self) -> &'a str {
+        self.method
+    }
+    /// Returns the attempt number.
+    pub const fn attempt(&self) -> u8 {
+        self.attempt
+    }
+    /// Returns the terminal outcome.
+    pub const fn outcome(&self) -> MetricOutcome {
+        self.outcome
+    }
+    /// Returns the failure class.
+    pub const fn failure_class(&self) -> Option<&'a str> {
+        self.failure_class
+    }
+    /// Returns the attempt duration.
+    pub const fn duration(&self) -> Duration {
+        self.duration
+    }
+}
+
+/// An admission or bounded-resource rejection.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct AdmissionRejectedEvent<'a> {
+    side: MetricSide,
+    reason: &'a str,
+}
+
+impl<'a> AdmissionRejectedEvent<'a> {
+    /// Creates an admission-rejected event.
+    pub const fn new(side: MetricSide, reason: &'a str) -> Self {
+        Self { side, reason }
+    }
+    /// Returns the client/server side.
+    pub const fn side(&self) -> MetricSide {
+        self.side
+    }
+    /// Returns the static rejection reason.
+    pub const fn reason(&self) -> &'a str {
+        self.reason
+    }
+}
+
+/// A registry lifecycle operation's terminal outcome.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct RegistryOperationEvent<'a> {
+    registry: &'a str,
+    operation: &'a str,
+    outcome: MetricOutcome,
+    duration: Duration,
+}
+
+impl<'a> RegistryOperationEvent<'a> {
+    /// Creates a registry-operation event.
+    pub const fn new(
+        registry: &'a str,
+        operation: &'a str,
+        outcome: MetricOutcome,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            registry,
+            operation,
+            outcome,
+            duration,
+        }
+    }
+    /// Returns the registry name.
+    pub const fn registry(&self) -> &'a str {
+        self.registry
+    }
+    /// Returns the operation name.
+    pub const fn operation(&self) -> &'a str {
+        self.operation
+    }
+    /// Returns the terminal outcome.
+    pub const fn outcome(&self) -> MetricOutcome {
+        self.outcome
+    }
+    /// Returns the operation duration.
+    pub const fn duration(&self) -> Duration {
+        self.duration
+    }
+}
+
+/// A discovery directory state transition.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct DirectoryStateChangedEvent<'a> {
+    service: &'a str,
+    state: DirectoryMetricState,
+}
+
+impl<'a> DirectoryStateChangedEvent<'a> {
+    /// Creates a directory-state event.
+    pub const fn new(service: &'a str, state: DirectoryMetricState) -> Self {
+        Self { service, state }
+    }
+    /// Returns the interface identifier.
+    pub const fn service(&self) -> &'a str {
+        self.service
+    }
+    /// Returns the new directory state.
+    pub const fn state(&self) -> DirectoryMetricState {
+        self.state
+    }
+}
+
+/// A circuit-breaker state transition.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct CircuitStateChangedEvent<'a> {
+    scope: &'a str,
+    service: &'a str,
+    state: CircuitState,
+}
+
+impl<'a> CircuitStateChangedEvent<'a> {
+    /// Creates a circuit-state event.
+    pub const fn new(scope: &'a str, service: &'a str, state: CircuitState) -> Self {
+        Self {
+            scope,
+            service,
+            state,
+        }
+    }
+    /// Returns `service` or `endpoint`.
+    pub const fn scope(&self) -> &'a str {
+        self.scope
+    }
+    /// Returns the interface identifier.
+    pub const fn service(&self) -> &'a str {
+        self.service
+    }
+    /// Returns the new circuit state.
+    pub const fn state(&self) -> CircuitState {
+        self.state
+    }
+}
+
+/// A client or server shutdown's terminal outcome.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ShutdownFinishedEvent<'a> {
+    runtime: &'a str,
+    outcome: MetricOutcome,
+    duration: Duration,
+}
+
+impl<'a> ShutdownFinishedEvent<'a> {
+    /// Creates a shutdown-finished event.
+    pub const fn new(runtime: &'a str, outcome: MetricOutcome, duration: Duration) -> Self {
+        Self {
+            runtime,
+            outcome,
+            duration,
+        }
+    }
+    /// Returns `client` or `server`.
+    pub const fn runtime(&self) -> &'a str {
+        self.runtime
+    }
+    /// Returns the terminal outcome.
+    pub const fn outcome(&self) -> MetricOutcome {
+        self.outcome
+    }
+    /// Returns the shutdown duration.
+    pub const fn duration(&self) -> Duration {
+        self.duration
+    }
+}
+
 /// One low-cardinality runtime measurement.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum MetricEvent<'a> {
     /// A logical invocation entered admission.
-    InvocationStarted {
-        /// Client or server side.
-        side: MetricSide,
-        /// Stable wire protocol name.
-        protocol: &'a str,
-        /// Static service identifier.
-        service: &'a str,
-        /// Static method name.
-        method: &'a str,
-    },
-    /// A logical invocation reached its one terminal outcome.
-    InvocationFinished {
-        /// Client or server side.
-        side: MetricSide,
-        /// Stable wire protocol name.
-        protocol: &'a str,
-        /// Static service identifier.
-        service: &'a str,
-        /// Static method name.
-        method: &'a str,
-        /// Terminal outcome.
-        outcome: MetricOutcome,
-        /// HTTP status class (`2xx`, `4xx`, and so on), when available.
-        status_class: Option<&'a str>,
-        /// Stable framework or application error code, when available.
-        error_code: Option<&'a str>,
-        /// End-to-end logical duration.
-        duration: Duration,
-        /// Number of physical attempts made by the invocation.
-        attempts: u8,
-    },
+    InvocationStarted(InvocationStartedEvent<'a>),
+    /// A logical invocation reached its terminal outcome.
+    InvocationFinished(InvocationFinishedEvent<'a>),
     /// One physical transport attempt completed.
-    AttemptFinished {
-        /// Stable protocol name.
-        protocol: &'a str,
-        /// Static service identifier.
-        service: &'a str,
-        /// Static method name.
-        method: &'a str,
-        /// Attempt number, starting at one.
-        attempt: u8,
-        /// Terminal attempt outcome.
-        outcome: MetricOutcome,
-        /// Typed, low-cardinality failure class.
-        failure_class: Option<&'a str>,
-        /// Attempt duration.
-        duration: Duration,
-    },
+    AttemptFinished(AttemptFinishedEvent<'a>),
     /// Admission or a bounded resource rejected work.
-    AdmissionRejected {
-        /// Client or server side.
-        side: MetricSide,
-        /// Static rejection class such as `concurrency` or `body_bytes`.
-        reason: &'a str,
-    },
+    AdmissionRejected(AdmissionRejectedEvent<'a>),
     /// One registry lifecycle operation completed.
-    RegistryOperation {
-        /// Application-supplied, validated registry name.
-        registry: &'a str,
-        /// Static operation name.
-        operation: &'a str,
-        /// Terminal outcome.
-        outcome: MetricOutcome,
-        /// Operation duration.
-        duration: Duration,
-    },
+    RegistryOperation(RegistryOperationEvent<'a>),
     /// A discovery directory changed state.
-    DirectoryStateChanged {
-        /// Static service identifier.
-        service: &'a str,
-        /// New state.
-        state: DirectoryMetricState,
-    },
+    DirectoryStateChanged(DirectoryStateChangedEvent<'a>),
     /// A service or endpoint circuit changed state.
-    CircuitStateChanged {
-        /// `service` or `endpoint`; endpoint identity is intentionally omitted.
-        scope: &'a str,
-        /// Static service identifier.
-        service: &'a str,
-        /// New state.
-        state: CircuitState,
-    },
+    CircuitStateChanged(CircuitStateChangedEvent<'a>),
     /// A client or server shutdown completed.
-    ShutdownFinished {
-        /// `client` or `server`.
-        runtime: &'a str,
-        /// Terminal outcome.
-        outcome: MetricOutcome,
-        /// Shutdown duration.
-        duration: Duration,
-    },
+    ShutdownFinished(ShutdownFinishedEvent<'a>),
 }
 
 /// Synchronous sink for low-cardinality runtime metrics.
@@ -172,6 +436,15 @@ pub enum MetricEvent<'a> {
 pub trait MetricsRecorder: Send + Sync + 'static {
     /// Records one measurement.
     fn record(&self, event: &MetricEvent<'_>);
+}
+
+impl<T> MetricsRecorder for Arc<T>
+where
+    T: MetricsRecorder + ?Sized,
+{
+    fn record(&self, event: &MetricEvent<'_>) {
+        (**self).record(event);
+    }
 }
 
 /// A recorder that intentionally discards every event.
@@ -195,13 +468,13 @@ mod tests {
 
     #[test]
     fn debug_output_does_not_require_high_cardinality_fields() {
-        let event = MetricEvent::AdmissionRejected {
-            side: MetricSide::Server,
-            reason: "concurrency",
-        };
+        let event = MetricEvent::AdmissionRejected(AdmissionRejectedEvent::new(
+            MetricSide::Server,
+            "concurrency",
+        ));
         assert_eq!(
             format!("{event:?}"),
-            "AdmissionRejected { side: Server, reason: \"concurrency\" }"
+            "AdmissionRejected(AdmissionRejectedEvent { side: Server, reason: \"concurrency\" })"
         );
     }
 }

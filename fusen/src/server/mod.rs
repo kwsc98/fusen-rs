@@ -5,7 +5,7 @@ mod transport;
 
 use crate::{
     Middleware, ServerError, ServerErrorKind,
-    middleware::{MiddlewareDyn, erase_middleware},
+    middleware::erase_middleware,
     runtime::metrics::SafeMetrics,
     server::{
         http::{HttpApp, HttpAppConfig},
@@ -18,8 +18,10 @@ use fusen_contract::{
     InstanceId, ProtocolSet, ServiceDescriptor, ServiceEndpoint, ServiceRegistration,
     ServiceWeight, WireProtocol,
 };
-use fusen_observability::{MetricEvent, MetricOutcome, MetricsRecorder};
-use fusen_register::{RegistrationHandle, Registry};
+use fusen_observability::{
+    MetricEvent, MetricOutcome, MetricsRecorder, RegistryOperationEvent, ShutdownFinishedEvent,
+};
+use fusen_register::{RegistrationHandle, RegistrationRequest, Registry};
 use futures_util::{StreamExt, future::join_all, stream};
 use std::{
     collections::HashSet,
@@ -39,7 +41,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub use config::{
-    HttpServerConfig, ServerConfig, ServerConfigBuilder, ServerRegistryConfig, ServerRequestConfig,
+    HttpServerConfig, HttpServerConfigBuilder, ServerConfig, ServerConfigBuilder,
+    ServerRegistryConfig, ServerRegistryConfigBuilder, ServerRequestConfig,
+    ServerRequestConfigBuilder,
 };
 
 pub(crate) const NOT_READY: u8 = 0;
@@ -127,7 +131,8 @@ pub struct ServerBuilder {
     advertised_endpoint: Option<Result<ServiceEndpoint, String>>,
     config: ServerConfig,
     registries: Vec<NamedRegistry>,
-    middleware: Vec<Arc<dyn MiddlewareDyn>>,
+    head_middleware: Vec<Arc<dyn Middleware>>,
+    middleware: Vec<Arc<dyn Middleware>>,
     services: Vec<PreparedService>,
     metrics: Option<Arc<dyn MetricsRecorder>>,
 }
@@ -143,6 +148,7 @@ impl Server {
             advertised_endpoint: None,
             config: ServerConfig::default(),
             registries: Vec::new(),
+            head_middleware: Vec::new(),
             middleware: Vec::new(),
             services: Vec::new(),
             metrics: None,
@@ -205,14 +211,14 @@ impl Server {
             readiness.clone(),
             HttpAppConfig {
                 protocols: self.config.protocols(),
-                request_timeout: request.request_timeout(),
+                request_timeout: request.timeout(),
                 max_uri_bytes: http_config.max_uri_bytes(),
                 max_query_pairs: http_config.max_query_pairs(),
                 max_headers: http_config.max_headers(),
                 max_header_bytes: http_config.max_header_bytes(),
                 max_request_body: request.max_request_body_bytes(),
                 max_response_body: request.max_response_body_bytes(),
-                max_concurrent_requests: request.max_concurrent_requests_value(),
+                max_concurrent_requests: request.max_concurrent_requests(),
                 queue_capacity: request.queue_capacity(),
                 queue_max_wait: request.queue_max_wait(),
                 request_byte_budget: request.max_inflight_request_body_bytes(),
@@ -306,15 +312,21 @@ impl ServerBuilder {
         self
     }
 
+    /// Appends global middleware that runs before an accepted request body is polled.
+    pub fn head_middleware(mut self, middleware: impl Middleware) -> Self {
+        self.head_middleware.push(erase_middleware(middleware));
+        self
+    }
+
     /// Installs the synchronous, non-blocking metrics recorder.
     pub fn metrics(mut self, recorder: impl MetricsRecorder) -> Self {
         self.metrics = Some(Arc::new(recorder));
         self
     }
 
-    /// Adds one macro-generated service wrapper.
-    pub fn service(mut self, service: impl IntoServerService) -> Self {
-        self.services.push(service.into_server_service());
+    /// Adds one macro-generated interface server.
+    pub fn interface(mut self, interface: impl IntoServerService) -> Self {
+        self.services.push(interface.into_server_service());
         self
     }
 
@@ -330,7 +342,13 @@ impl ServerBuilder {
             .advertised_endpoint
             .transpose()
             .map_err(|error| ServerError::message(ServerErrorKind::Validation, error))?;
-        self.config.validate()?;
+        self.config.validate().map_err(|error| {
+            ServerError::with_source(
+                ServerErrorKind::Validation,
+                format!("invalid server configuration at {}", error.field_path()),
+                error,
+            )
+        })?;
         validate_registry_names(&self.registries)?;
         if self.services.is_empty() {
             return Err(ServerError::message(
@@ -342,7 +360,12 @@ impl ServerBuilder {
         let mut routes = Vec::new();
         let mut descriptor_list = Vec::new();
         for prepared in self.services {
-            let descriptor = prepared.descriptor();
+            let descriptor = prepared.descriptor().map_err(|reason| {
+                ServerError::message(
+                    ServerErrorKind::Validation,
+                    format!("invalid interface schema: {reason}"),
+                )
+            })?;
             if !descriptors.insert(descriptor.identity()) {
                 return Err(ServerError::message(
                     ServerErrorKind::Validation,
@@ -369,7 +392,15 @@ impl ServerBuilder {
             );
             middleware.extend(self.middleware.iter().cloned());
             middleware.extend(prepared.middleware.iter().cloned());
-            let middleware: Arc<[Arc<dyn MiddlewareDyn>]> = Arc::from(middleware);
+            let middleware: Arc<[Arc<dyn Middleware>]> = Arc::from(middleware);
+            let mut head_middleware = Vec::with_capacity(
+                self.head_middleware
+                    .len()
+                    .saturating_add(prepared.head_middleware.len()),
+            );
+            head_middleware.extend(self.head_middleware.iter().cloned());
+            head_middleware.extend(prepared.head_middleware.iter().cloned());
+            let head_middleware: Arc<[Arc<dyn Middleware>]> = Arc::from(head_middleware);
             for protocol in self.config.protocols().iter() {
                 for method in descriptor.methods() {
                     routes.push(Route {
@@ -377,6 +408,7 @@ impl ServerBuilder {
                         service: descriptor,
                         method,
                         dispatch: prepared.dispatch.clone(),
+                        head_middleware: head_middleware.clone(),
                         middleware: middleware.clone(),
                     });
                 }
@@ -527,10 +559,10 @@ async fn coordinate(mut coordinator: Coordinator) {
     let force_cancel = CancellationToken::new();
     let http = coordinator.config.http();
     let transport_config = TransportConfig {
-        max_connections: http.max_connections_value(),
+        max_connections: http.max_connections(),
         max_headers: http.max_headers(),
         max_request_head_bytes: http.max_uri_bytes().saturating_add(http.max_header_bytes()),
-        http1_header_read_timeout: http.http1_header_read_timeout_value(),
+        http1_header_read_timeout: http.http1_header_read_timeout(),
         http2_max_concurrent_streams: http.http2_max_concurrent_streams(),
         http2_keep_alive_interval: http.http2_keep_alive_interval(),
         http2_keep_alive_timeout: http.http2_keep_alive_timeout(),
@@ -705,15 +737,17 @@ async fn drain_runtime(
             listener_error,
         ),
     };
-    coordinator.metrics.record(&MetricEvent::ShutdownFinished {
-        runtime: "server",
-        outcome: match &result {
-            Ok(()) => MetricOutcome::Success,
-            Err(error) if error.kind() == ServerErrorKind::Timeout => MetricOutcome::Timeout,
-            Err(_) => MetricOutcome::Error,
-        },
-        duration: started.elapsed(),
-    });
+    coordinator
+        .metrics
+        .record(&MetricEvent::ShutdownFinished(ShutdownFinishedEvent::new(
+            "server",
+            match &result {
+                Ok(()) => MetricOutcome::Success,
+                Err(error) if error.kind() == ServerErrorKind::Timeout => MetricOutcome::Timeout,
+                Err(_) => MetricOutcome::Error,
+            },
+            started.elapsed(),
+        )));
     result
 }
 
@@ -740,8 +774,10 @@ fn prepare_registrations(
 ) -> Result<(), ServerError> {
     for item in plan {
         let prepared = catch_unwind(AssertUnwindSafe(|| {
-            item.registry
-                .prepare_registration(item.registration.clone(), item.protocol)
+            item.registry.prepare_registration(RegistrationRequest::new(
+                item.registration.clone(),
+                item.protocol,
+            ))
         }));
         let handle = match prepared {
             Ok(Ok(handle)) => handle,
@@ -783,16 +819,18 @@ async fn activate_registrations(
         async move {
             let started = StdInstant::now();
             let result = tokio::time::timeout(operation_timeout, handle.activate()).await;
-            metrics.record(&MetricEvent::RegistryOperation {
-                registry: &name,
-                operation: "activate_registration",
-                outcome: match &result {
-                    Ok(Ok(())) => MetricOutcome::Success,
-                    Err(_) => MetricOutcome::Timeout,
-                    Ok(Err(_)) => MetricOutcome::Error,
-                },
-                duration: started.elapsed(),
-            });
+            metrics.record(&MetricEvent::RegistryOperation(
+                RegistryOperationEvent::new(
+                    &name,
+                    "activate_registration",
+                    match &result {
+                        Ok(Ok(())) => MetricOutcome::Success,
+                        Err(_) => MetricOutcome::Timeout,
+                        Ok(Err(_)) => MetricOutcome::Error,
+                    },
+                    started.elapsed(),
+                ),
+            ));
             match result {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(error)) => Err(ServerError::with_source(
@@ -940,16 +978,18 @@ async fn close_registrations(
                 let started = StdInstant::now();
                 let operation_deadline = deadline.min(Instant::now() + operation_timeout);
                 let result = tokio::time::timeout_at(operation_deadline, handle.close()).await;
-                metrics.record(&MetricEvent::RegistryOperation {
-                    registry: &name,
-                    operation: "close_registration",
-                    outcome: match &result {
-                        Ok(Ok(())) => MetricOutcome::Success,
-                        Err(_) => MetricOutcome::Timeout,
-                        Ok(Err(_)) => MetricOutcome::Error,
-                    },
-                    duration: started.elapsed(),
-                });
+                metrics.record(&MetricEvent::RegistryOperation(
+                    RegistryOperationEvent::new(
+                        &name,
+                        "close_registration",
+                        match &result {
+                            Ok(Ok(())) => MetricOutcome::Success,
+                            Err(_) => MetricOutcome::Timeout,
+                            Ok(Err(_)) => MetricOutcome::Error,
+                        },
+                        started.elapsed(),
+                    ),
+                ));
                 result
             }
         });

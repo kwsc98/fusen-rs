@@ -15,7 +15,7 @@ impl LoadBalancer for RandomLoadBalancer {
     ) -> Result<usize, RpcError> {
         debug!(
             request_id = %context.request_id(),
-            service = context.service().identity(),
+            service = context.interface().identity(),
             method = context.method().fusen_identity(),
             "load balancing request"
         );

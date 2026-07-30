@@ -1,17 +1,16 @@
 //! Real-socket coverage for server admission and request-body resource ordering.
 
 use fusen_register::{
-    RegistrationHandle, Registry, SubscriptionHandle,
+    RegistrationHandle, RegistrationRequest, Registry, SubscriptionHandle, SubscriptionRequest,
     error::{RegistryError, RegistryErrorKind, RegistryOperation},
-    prepare_registration,
+    provider,
 };
 use fusen_rs::{
-    ClientAdmissionConfig, ClientConfig, ClientRuntime, HttpServerConfig, Middleware, Next,
-    ProblemDetails, RpcCategory, RpcContext, RpcError, RpcOrigin, RpcResult, Server, ServerConfig,
-    ServerRequestConfig, ServerState, WireProtocol,
-    contract::{ProtocolSet, ServiceRegistration, ServiceSelector},
-    service,
+    ClientAdmissionConfig, ClientConfig, ClientRuntime, HttpServerConfig, Middleware,
+    MiddlewareFuture, Next, RpcCategory, RpcContext, RpcError, RpcOrigin, RpcRequest, RpcResponse,
+    Server, ServerConfig, ServerRequestConfig, ServerState, contract::ProtocolSet, interface,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     io,
     net::{IpAddr, SocketAddr},
@@ -29,25 +28,44 @@ use tokio::{
 
 const SERVER_ADMISSION_LIMIT: usize = 1024;
 
-#[service(name = "server-resource-e2e")]
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+struct ResourceBodyRequest {
+    #[rpc(body)]
+    value: String,
+}
+
+#[derive(Serialize, Deserialize, fusen_rs::RpcMessage)]
+struct HoldRequest {
+    #[rpc(path)]
+    value: String,
+}
+
+#[interface(name = "server-resource-e2e")]
 trait ResourceService {
     #[fusen_rs::method(
         idempotency = "none",
-        spring(method = "POST", path = "/resources/echo", body = "value")
+        spring(method = "POST", path = "/resources/echo")
     )]
-    async fn echo(&self, value: String) -> Result<String, RpcError>;
+    async fn echo(
+        &self,
+        request: RpcRequest<ResourceBodyRequest>,
+    ) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(
         idempotency = "none",
-        spring(method = "POST", path = "/resources/panic", body = "value")
+        spring(method = "POST", path = "/resources/panic")
     )]
-    async fn panic_after_decode(&self, value: String) -> Result<String, RpcError>;
+    async fn panic_after_decode(
+        &self,
+        request: RpcRequest<ResourceBodyRequest>,
+    ) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(
         idempotency = "safe",
         spring(method = "GET", path = "/resources/hold/{value}")
     )]
-    async fn hold(&self, value: String) -> Result<String, RpcError>;
+    async fn hold(&self, request: RpcRequest<HoldRequest>)
+    -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct ResourceServiceImpl {
@@ -55,15 +73,26 @@ struct ResourceServiceImpl {
 }
 
 impl ResourceService for ResourceServiceImpl {
-    async fn echo(&self, value: String) -> Result<String, RpcError> {
-        Ok(value)
+    async fn echo(
+        &self,
+        request: RpcRequest<ResourceBodyRequest>,
+    ) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(request.into_body().value))
     }
 
-    async fn panic_after_decode(&self, value: String) -> Result<String, RpcError> {
+    async fn panic_after_decode(
+        &self,
+        request: RpcRequest<ResourceBodyRequest>,
+    ) -> Result<RpcResponse<String>, RpcError> {
+        let value = request.into_body().value;
         panic!("private panic after decoding {value}")
     }
 
-    async fn hold(&self, value: String) -> Result<String, RpcError> {
+    async fn hold(
+        &self,
+        request: RpcRequest<HoldRequest>,
+    ) -> Result<RpcResponse<String>, RpcError> {
+        let value = request.into_body().value;
         if let Some(saturation) = &self.saturation {
             saturation.entered.fetch_add(1, Ordering::AcqRel);
             saturation.changed.notify_waiters();
@@ -74,7 +103,7 @@ impl ResourceService for ResourceServiceImpl {
                 .await
                 .expect("test release semaphore remains open");
         }
-        Ok(value)
+        Ok(RpcResponse::new(value))
     }
 }
 
@@ -98,7 +127,7 @@ impl Saturation {
     }
 
     async fn wait_until_entered(&self, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        let completed = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let changed = self.changed.notified();
                 if self.entered.load(Ordering::Acquire) >= expected {
@@ -107,23 +136,23 @@ impl Saturation {
                 changed.await;
             }
         })
-        .await
-        .expect("the expected admitted requests must enter the service");
+        .await;
+        assert!(
+            completed.is_ok(),
+            "expected {expected} admitted requests to enter the handler, observed {}",
+            self.entered.load(Ordering::Acquire)
+        );
     }
 }
 
 struct PanicOnceMiddleware(AtomicUsize);
 
 impl Middleware for PanicOnceMiddleware {
-    fn handle<'a>(
-        &'a self,
-        context: RpcContext,
-        next: Next<'a>,
-    ) -> impl std::future::Future<Output = RpcResult> + Send + 'a {
+    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
         if self.0.fetch_add(1, Ordering::AcqRel) == 0 {
             panic!("private synchronous middleware panic");
         }
-        async move { next.run(context).await }
+        Box::pin(async move { next.run(context).await })
     }
 }
 
@@ -168,16 +197,20 @@ async fn not_ready_returns_without_receiving_the_declared_body() {
     let config = ServerConfig::builder()
         .protocols(ProtocolSet::SPRING_CLOUD_V1)
         .request(
-            ServerRequestConfig::default()
-                .body_limits(16, 1024)
-                .inflight_body_budgets(16, 1024),
+            ServerRequestConfig::builder()
+                .max_request_body_bytes(16)
+                .max_response_body_bytes(1024)
+                .max_inflight_request_body_bytes(16)
+                .max_inflight_response_body_bytes(1024)
+                .build()
+                .unwrap(),
         )
         .build()
         .unwrap();
     let server = Server::builder("127.0.0.1:0")
         .config(config)
         .registry("startup-gate", registry)
-        .service(ResourceServiceServer::new(ResourceServiceImpl {
+        .interface(ResourceServiceServer::new(ResourceServiceImpl {
             saturation: None,
         }))
         .build()
@@ -206,13 +239,25 @@ async fn not_ready_returns_without_receiving_the_declared_body() {
 async fn the_1025th_request_is_rejected_while_1024_are_in_flight() {
     let saturation = Saturation::new();
     let server_config = ServerConfig::builder()
-        .http(HttpServerConfig::default().http2(2048, None, Duration::from_secs(10)))
-        .request(ServerRequestConfig::default().max_concurrent_requests(SERVER_ADMISSION_LIMIT))
+        .http(
+            HttpServerConfig::builder()
+                .http2_max_concurrent_streams(2048)
+                .http2_keep_alive_interval(None)
+                .http2_keep_alive_timeout(Duration::from_secs(10))
+                .build()
+                .unwrap(),
+        )
+        .request(
+            ServerRequestConfig::builder()
+                .max_concurrent_requests(SERVER_ADMISSION_LIMIT)
+                .build()
+                .unwrap(),
+        )
         .build()
         .unwrap();
     let server = Server::builder("127.0.0.1:0")
         .config(server_config)
-        .service(ResourceServiceServer::new(ResourceServiceImpl {
+        .interface(ResourceServiceServer::new(ResourceServiceImpl {
             saturation: Some(saturation.clone()),
         }))
         .build()
@@ -223,9 +268,11 @@ async fn the_1025th_request_is_rejected_while_1024_are_in_flight() {
     let client_config = ClientConfig::builder()
         .request_timeout(Duration::from_secs(30))
         .admission(
-            ClientAdmissionConfig::default()
+            ClientAdmissionConfig::builder()
                 .max_in_flight(2048)
-                .max_in_flight_per_endpoint(2048),
+                .max_in_flight_per_endpoint(2048)
+                .build()
+                .unwrap(),
         )
         .build()
         .unwrap();
@@ -242,15 +289,26 @@ async fn the_1025th_request_is_rejected_while_1024_are_in_flight() {
     let calls = (0..SERVER_ADMISSION_LIMIT)
         .map(|index| {
             let client = client.clone();
-            tokio::spawn(async move { client.hold(index.to_string()).await })
+            tokio::spawn(async move {
+                client
+                    .hold(RpcRequest::new(HoldRequest {
+                        value: index.to_string(),
+                    }))
+                    .await
+            })
         })
         .collect::<Vec<_>>();
     saturation.wait_until_full().await;
 
-    let rejected = tokio::time::timeout(Duration::from_secs(2), client.hold("overflow".into()))
-        .await
-        .expect("fail-fast admission must not wait for an existing request")
-        .expect_err("the 1025th request must be rejected");
+    let rejected = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.hold(RpcRequest::new(HoldRequest {
+            value: "overflow".into(),
+        })),
+    )
+    .await
+    .expect("fail-fast admission must not wait for an existing request")
+    .expect_err("the 1025th request must be rejected");
     assert_eq!(rejected.category(), RpcCategory::ResourceExhausted);
     assert_eq!(rejected.origin(), RpcOrigin::Remote);
     assert_eq!(rejected.code().as_str(), "overloaded");
@@ -347,7 +405,7 @@ async fn request_byte_budget_is_restored_after_handler_panic() {
         b"\"panic\"",
     )
     .await;
-    assert_problem(&response, 500, "service_panic");
+    assert_problem(&response, 500, "handler_panic");
 
     assert_echo_succeeds(addr, "after-panic").await;
     server.shutdown().await.unwrap();
@@ -362,7 +420,7 @@ async fn graceful_shutdown_drains_an_inflight_http1_response() {
         .unwrap();
     let server = Server::builder("127.0.0.1:0")
         .config(config)
-        .service(ResourceServiceServer::new(ResourceServiceImpl {
+        .interface(ResourceServiceServer::new(ResourceServiceImpl {
             saturation: Some(saturation.clone()),
         }))
         .build()
@@ -409,7 +467,7 @@ async fn synchronous_middleware_panic_does_not_poison_an_http1_connection() {
     let server = Server::builder("127.0.0.1:0")
         .config(config)
         .middleware(PanicOnceMiddleware(AtomicUsize::new(0)))
-        .service(ResourceServiceServer::new(ResourceServiceImpl {
+        .interface(ResourceServiceServer::new(ResourceServiceImpl {
             saturation: None,
         }))
         .build()
@@ -473,9 +531,9 @@ struct StartupGateRegistry {
 impl Registry for StartupGateRegistry {
     fn prepare_registration(
         &self,
-        registration: Arc<ServiceRegistration>,
-        _protocol: WireProtocol,
+        request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError> {
+        let registration = request.registration();
         let endpoint = registration.endpoint().as_url();
         let host = endpoint
             .host_str()
@@ -492,7 +550,7 @@ impl Registry for StartupGateRegistry {
             let _ = sender.send(addr);
         }
         let activation_gate = self.activation_gate.clone();
-        Ok(prepare_registration(
+        Ok(provider::registration(
             async move {
                 let _permit = activation_gate.acquire_owned().await.map_err(|_| {
                     RegistryError::message(
@@ -509,8 +567,7 @@ impl Registry for StartupGateRegistry {
 
     fn prepare_subscription(
         &self,
-        _selector: ServiceSelector,
-        _protocol: WireProtocol,
+        _request: SubscriptionRequest,
     ) -> Result<SubscriptionHandle, RegistryError> {
         Err(RegistryError::message(
             RegistryOperation::PrepareSubscription,
@@ -528,7 +585,7 @@ struct RawResponse {
 async fn start_resource_server(config: ServerConfig) -> fusen_rs::RunningServer {
     Server::builder("127.0.0.1:0")
         .config(config)
-        .service(ResourceServiceServer::new(ResourceServiceImpl {
+        .interface(ResourceServiceServer::new(ResourceServiceImpl {
             saturation: None,
         }))
         .build()
@@ -542,10 +599,14 @@ fn body_limited_config(timeout: Duration) -> ServerConfig {
     ServerConfig::builder()
         .protocols(ProtocolSet::ALL)
         .request(
-            ServerRequestConfig::default()
+            ServerRequestConfig::builder()
                 .timeout(timeout)
-                .body_limits(16, 1024)
-                .inflight_body_budgets(16, 1024),
+                .max_request_body_bytes(16)
+                .max_response_body_bytes(1024)
+                .max_inflight_request_body_bytes(16)
+                .max_inflight_response_body_bytes(1024)
+                .build()
+                .unwrap(),
         )
         .build()
         .unwrap()
@@ -762,7 +823,14 @@ fn assert_problem(response: &RawResponse, status: u16, code: &str) {
     assert_eq!(problem.code.as_str(), code);
 }
 
-fn problem(response: &RawResponse) -> ProblemDetails {
+#[derive(Deserialize)]
+struct WireProblem {
+    status: u16,
+    code: String,
+    retryable: bool,
+}
+
+fn problem(response: &RawResponse) -> WireProblem {
     serde_json::from_slice(&response.body).expect("error response is Problem Details JSON")
 }
 

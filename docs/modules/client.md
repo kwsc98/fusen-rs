@@ -13,9 +13,9 @@ Fusen V1 在 HTTP endpoint 上使用 h2c，在 HTTPS endpoint 上要求 TLS 1.2/
 
 ## 逻辑调用
 
-全局与服务局部 Middleware 每次逻辑调用各执行一次，位于 Router、LoadBalancer 与全部物理 attempts 之外。成功通过 Middleware 后，runtime 冻结可重放请求模板，并在每次 attempt 重新读取最新 Directory snapshot。
+全局与 interface-local `ClientCall` Middleware 每次逻辑调用各执行一次，位于 InstanceRouter、LoadBalancer 与全部物理 attempts 之外。成功通过 Middleware 后，runtime 冻结可重放请求模板，并在每次 attempt 重新读取最新 Directory snapshot；global/local `ClientAttempt` Middleware 则包围每个物理 attempt。
 
-选择顺序为 Router -> open endpoint 过滤 -> LoadBalancer -> endpoint bulkhead。只要有尚未尝试的 endpoint，就不会重复选择本次调用已失败的 endpoint。无实例、非法 LB 结果、序列化、本地 admission 与调用方取消均不进入 circuit breaker。
+选择顺序为 InstanceRouter -> open endpoint 过滤 -> LoadBalancer -> endpoint bulkhead。只要有尚未尝试的 endpoint，就不会重复选择本次调用已失败的 endpoint。无实例、非法 LB 结果、序列化、本地 admission 与调用方取消均不进入 circuit breaker。
 
 ## Deadline、Retry 与 Breaker
 
@@ -29,7 +29,7 @@ HTTP/wire 成功但 typed `result` 无法反序列化为生成方法的 Rust 类
 
 ## Admission 与预算
 
-默认最多 1024 个逻辑调用、每 endpoint 128 个 attempts，单请求和响应各 2 MiB，全局请求和响应 byte budget 各 64 MiB。默认 fail-fast；只有显式配置 `QueueConfig::bounded(capacity)` 才允许排队，默认最长等待 50 ms 且始终计入逻辑 deadline。
+默认最多 1024 个逻辑调用、每 endpoint 128 个 attempts，单请求和响应各 2 MiB，全局请求和响应 byte budget 各 64 MiB。默认 fail-fast；只有通过 `QueueConfig::builder()` 设置非零 capacity 并安装到 admission 配置后才允许排队，max wait 始终计入逻辑 deadline。
 
 请求不会按 2 MiB 上限预分配。可重放请求模板在序列化写入前增量申请 byte permit，同一份 `Bytes` 在全部 attempts 与 backoff 期间只计费一次，并由 queued body chunk 持有到 Hyper transport 消费或取消。响应 body permit 持有到 decode 完成或取消，panic、timeout 和 cancellation 都必须归还 admission 与 byte permits。协议 framing、codec staging 与 socket buffer 属于独立有界的 transport overhead，不计入 body budget。
 
