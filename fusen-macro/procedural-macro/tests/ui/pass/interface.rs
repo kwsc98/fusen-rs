@@ -19,16 +19,11 @@ pub mod __macro {
             }
         }
 
-        pub enum Idempotency {
-            None,
-            Idempotent,
-            Safe,
-        }
-
         #[derive(Clone, Copy)]
         pub enum RpcFieldSource {
             Path,
             Query,
+            BodyField,
             Body,
         }
 
@@ -72,7 +67,7 @@ pub mod __macro {
 
         pub struct SpringCloudMethod;
 
-        pub fn spring_method(
+        pub fn http_method(
             _method: http::Method,
             _path: &str,
             _fields: &[RpcField],
@@ -86,7 +81,6 @@ pub mod __macro {
             pub fn new(
                 _id: MethodId,
                 _identity: impl Into<String>,
-                _idempotency: Idempotency,
                 _spring: Option<SpringCloudMethod>,
             ) -> Result<Self, DescriptorError> {
                 Ok(Self)
@@ -260,23 +254,22 @@ struct User(String);
 #[interface(name = "user", group = "prod", version = "1")]
 trait UserApi {
     #[fusen_procedural_macro::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}")
+        method = "GET", path = "/users/{user_id}"
     )]
     async fn get(
         &self,
-        #[rpc(call)] call: RpcCall,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expand: Option<bool>,
+        #[param(context)] call: RpcCall,
+        #[param(name = "user_id")] id: String,
+        #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
     #[fusen_procedural_macro::method(
-        idempotency = "none",
-        spring(method = "POST", path = "/users/batch")
+        method = "POST", path = "/users/batch"
     )]
     async fn batch(
         &self,
-        #[rpc(body)] names: Vec<String>,
+        names: Vec<String>,
+        notify: bool,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 
@@ -292,8 +285,15 @@ impl UserApi for Handler {
         Ok(RpcResponse::new(User(id)))
     }
 
-    async fn batch(&self, names: Vec<String>) -> Result<RpcResponse<User>, RpcError> {
-        Ok(RpcResponse::new(User(names.join(","))))
+    async fn batch(
+        &self,
+        names: Vec<String>,
+        notify: bool,
+    ) -> Result<RpcResponse<User>, RpcError> {
+        Ok(RpcResponse::new(User(format!(
+            "{}:{notify}",
+            names.join(",")
+        ))))
     }
 }
 

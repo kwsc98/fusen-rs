@@ -108,7 +108,7 @@ mod tests {
         runtime::{budget::ByteBudget, deadline::Deadline},
     };
     use fusen_contract::{
-        Idempotency, MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector, WireProtocol,
+        MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector, WireProtocol,
     };
     use std::{num::NonZeroU8, sync::OnceLock, time::Duration};
 
@@ -136,10 +136,7 @@ mod tests {
         SERVICE.get_or_init(|| {
             ServiceDescriptor::new(
                 ServiceSelector::new("middleware-test", None, None).unwrap(),
-                vec![
-                    MethodDescriptor::new(MethodId::new(0), "call", Idempotency::None, None)
-                        .unwrap(),
-                ],
+                vec![MethodDescriptor::new(MethodId::new(0), "call", None).unwrap()],
             )
             .unwrap()
         })

@@ -10,13 +10,12 @@ use fusen_rs::{RpcError, RpcResponse};
 #[fusen_rs::interface(name = "user", group = "prod", version = "1")]
 pub trait UserApi {
     #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}")
+        method = "GET", path = "/users/{id}"
     )]
     async fn get(
         &self,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expand: Option<bool>,
+        id: String,
+        #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
@@ -27,16 +26,19 @@ clients use the runtime's generic `ClientBuilder<UserApiClient>`.
 
 RPC methods must be `async`, take immutable `&self`, accept zero or more owned
 parameters with plain identifier patterns, and return
-`Result<RpcResponse<T>, RpcError>`. Idempotency is one of `none`, `idempotent`,
-or `safe` and defaults to `none`.
+`Result<RpcResponse<T>, RpcError>`. Every method must declare
+`#[method(method = "...", path = "...")]`; generated clients use the mapping to
+build requests, generated servers use it for routing, and it determines retry
+eligibility.
 
-Every business parameter declares exactly one Spring role with `#[rpc(path)]`,
-`#[rpc(query)]`, or `#[rpc(body)]`, plus an optional `name = "..."`; at most one
-body parameter is accepted. One optional `#[rpc(call)] RpcCall` parameter carries
-headers, extensions, and framework call information but is not serialized.
-Path and query parameters must serialize as JSON scalars; body parameters may
-contain any JSON value. Safe mappings permit only GET/HEAD. Fusen V1 always
-encodes business parameters by name, independently of their Spring roles.
+A wire name matching a path placeholder is inferred as a path parameter. Other
+GET/HEAD/OPTIONS/DELETE parameters default to query values; other POST/PUT/PATCH
+parameters become fields in a synthesized JSON body object. `#[param(query)]`
+overrides the default, `#[param(body)]` declares one complete raw JSON body,
+`#[param(context)]` carries an unencoded `RpcCall`, and `#[param(name = "...")]`
+renames the wire parameter. A raw body cannot coexist with synthesized body
+fields. Retry eligibility is inferred from the standard HTTP method. Fusen V1
+always encodes business parameters by name, independently of their HTTP roles.
 
 Generated code resolves a renamed `fusen-rs` dependency and targets only its
 hidden macro ABI. This package is not a runtime extension surface.

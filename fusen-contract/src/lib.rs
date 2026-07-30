@@ -4,7 +4,7 @@
 mod protocol;
 mod service;
 
-pub use protocol::{Idempotency, ProtocolSet, WireProtocol};
+pub use protocol::{ProtocolSet, WireProtocol};
 pub use service::{
     ContractError, InstanceId, Metadata, MethodDescriptor, MethodId, ServiceDescriptor,
     ServiceEndpoint, ServiceInstance, ServiceRegistration, ServiceSelector, ServiceWeight,

@@ -38,33 +38,33 @@ struct CreateUser {
 
 #[interface(name = "wire-contract", group = "prod", version = "1")]
 trait WireContract {
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/echo/{name}"))]
-    async fn echo(&self, #[rpc(path)] name: String) -> Result<RpcResponse<String>, RpcError>;
+    #[fusen_rs::method(method = "GET", path = "/echo/{name}")]
+    async fn echo(&self, name: String) -> Result<RpcResponse<String>, RpcError>;
 
-    #[fusen_rs::method(idempotency = "none", spring(method = "POST", path = "/users/{id}"))]
+    #[fusen_rs::method(method = "POST", path = "/users/{id}")]
     async fn create(
         &self,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expand: Option<bool>,
-        #[rpc(body)] request: CreateUser,
+        id: String,
+        #[param(query)] expand: Option<bool>,
+        #[param(body)] request: CreateUser,
     ) -> Result<RpcResponse<String>, RpcError>;
 
-    #[fusen_rs::method(idempotency = "safe", spring(method = "HEAD", path = "/health"))]
+    #[fusen_rs::method(method = "HEAD", path = "/health")]
     async fn health(&self) -> Result<RpcResponse<()>, RpcError>;
 
-    #[fusen_rs::method(idempotency = "safe", spring(method = "HEAD", path = "/unhealthy"))]
+    #[fusen_rs::method(method = "HEAD", path = "/unhealthy")]
     async fn unhealthy(&self) -> Result<RpcResponse<()>, RpcError>;
 
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/filters"))]
+    #[fusen_rs::method(method = "GET", path = "/filters")]
     async fn filter(
         &self,
-        #[rpc(query)] enabled: Option<bool>,
+        #[param(query)] enabled: Option<bool>,
     ) -> Result<RpcResponse<Option<bool>>, RpcError>;
 
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/labels"))]
+    #[fusen_rs::method(method = "GET", path = "/labels")]
     async fn labels(
         &self,
-        #[rpc(query)] label: Vec<String>,
+        #[param(query)] label: Vec<String>,
     ) -> Result<RpcResponse<Vec<String>>, RpcError>;
 }
 

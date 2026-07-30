@@ -47,7 +47,7 @@ pub enum FailureClass {
 }
 
 impl FailureClass {
-    /// Returns whether the built-in policy may retry this failure for an idempotent method.
+    /// Returns whether the built-in policy may retry this failure for a replayable method.
     pub const fn is_retryable(self) -> bool {
         matches!(
             self,

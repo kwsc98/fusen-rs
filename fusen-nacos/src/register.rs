@@ -509,7 +509,7 @@ fn build_instance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusen_contract::{Idempotency, MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor};
+    use fusen_contract::{MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::{Notify, oneshot};
 
@@ -521,10 +521,7 @@ mod tests {
         let descriptor = Box::leak(Box::new(
             ServiceDescriptor::new(
                 selector(),
-                vec![
-                    MethodDescriptor::new(MethodId::new(0), "call", Idempotency::None, None)
-                        .unwrap(),
-                ],
+                vec![MethodDescriptor::new(MethodId::new(0), "call", None).unwrap()],
             )
             .unwrap(),
         ));

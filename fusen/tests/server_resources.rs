@@ -30,26 +30,17 @@ const SERVER_ADMISSION_LIMIT: usize = 1024;
 
 #[interface(name = "server-resource-e2e")]
 trait ResourceService {
-    #[fusen_rs::method(
-        idempotency = "none",
-        spring(method = "POST", path = "/resources/echo")
-    )]
-    async fn echo(&self, #[rpc(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
+    #[fusen_rs::method(method = "POST", path = "/resources/echo")]
+    async fn echo(&self, #[param(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
 
-    #[fusen_rs::method(
-        idempotency = "none",
-        spring(method = "POST", path = "/resources/panic")
-    )]
+    #[fusen_rs::method(method = "POST", path = "/resources/panic")]
     async fn panic_after_decode(
         &self,
-        #[rpc(body)] value: String,
+        #[param(body)] value: String,
     ) -> Result<RpcResponse<String>, RpcError>;
 
-    #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/resources/hold/{value}")
-    )]
-    async fn hold(&self, #[rpc(path)] value: String) -> Result<RpcResponse<String>, RpcError>;
+    #[fusen_rs::method(method = "GET", path = "/resources/hold/{value}")]
+    async fn hold(&self, value: String) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct ResourceServiceImpl {

@@ -106,40 +106,6 @@ impl From<WireProtocol> for ProtocolSet {
     }
 }
 
-/// Retry and HTTP-safety semantics declared for one RPC method.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum Idempotency {
-    /// Repeating the call can produce additional side effects.
-    #[default]
-    None,
-    /// Repeating the call has the same intended effect as one call.
-    Idempotent,
-    /// The call is read-only and is also idempotent.
-    Safe,
-}
-
-impl Idempotency {
-    /// Returns whether an identical call may be repeated without additional intended effects.
-    pub const fn is_idempotent(self) -> bool {
-        matches!(self, Self::Idempotent | Self::Safe)
-    }
-
-    /// Returns whether the call is declared read-only.
-    pub const fn is_safe(self) -> bool {
-        matches!(self, Self::Safe)
-    }
-
-    /// Returns the stable wire and diagnostic value.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Idempotent => "idempotent",
-            Self::Safe => "safe",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,12 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_and_idempotency_names_are_stable() {
+    fn protocol_names_are_stable() {
         assert_eq!(WireProtocol::FusenV1.as_str(), "fusen-v1");
         assert_eq!(WireProtocol::SpringCloudV1.as_str(), "spring-cloud-v1");
-        assert!(!Idempotency::None.is_idempotent());
-        assert!(Idempotency::Idempotent.is_idempotent());
-        assert!(Idempotency::Safe.is_idempotent());
-        assert!(Idempotency::Safe.is_safe());
     }
 }

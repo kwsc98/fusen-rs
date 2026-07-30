@@ -200,7 +200,7 @@ impl HttpApp {
         if protocol == WireProtocol::SpringCloudV1 {
             validate_query_pairs(request.uri().query(), self.max_query_pairs)?;
         }
-        validate_attempt(control.attempt, matched.route.method.idempotency())?;
+        validate_attempt(control.attempt, matched.route.method.allows_retries())?;
         let _admission = self.acquire_admission(control.deadline).await?;
 
         let started = StdInstant::now();

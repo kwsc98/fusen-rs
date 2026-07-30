@@ -43,6 +43,7 @@ REMOVED_ITEMS = {
     "HotConfigChangeListener",
     "Http1PoolConfig",
     "Http2PoolConfig",
+    "Idempotency",
     "InvocationFinish",
     "InvocationObserver",
     "InvocationOutcome",

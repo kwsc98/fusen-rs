@@ -17,13 +17,13 @@ use tokio::sync::{Barrier, Semaphore, oneshot};
 
 #[interface(name = "alpha-registry-e2e")]
 trait AlphaRegistryService {
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/registry/alpha"))]
+    #[fusen_rs::method(method = "GET", path = "/registry/alpha")]
     async fn call(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 
 #[interface(name = "zeta-registry-e2e")]
 trait ZetaRegistryService {
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/registry/zeta"))]
+    #[fusen_rs::method(method = "GET", path = "/registry/zeta")]
     async fn call(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 

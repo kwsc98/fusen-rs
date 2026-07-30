@@ -6,12 +6,11 @@ struct RpcResponse<T>(T);
 #[interface(name = "invalid-path-type")]
 trait InvalidPathType {
     #[fusen_procedural_macro::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}")
+        method = "GET", path = "/users/{id}"
     )]
     async fn get(
         &self,
-        #[rpc(path)] id: Option<String>,
+        id: Option<String>,
     ) -> Result<RpcResponse<()>, RpcError>;
 }
 

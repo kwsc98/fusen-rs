@@ -5,12 +5,12 @@ use rpc::{RpcError, RpcResponse, interface};
 #[interface(name = "renamed", group = "test", version = "1")]
 /// Interface contract used to prove dependency-renamed macro expansion.
 pub trait RenamedRuntimeApi {
-    #[rpc::method(idempotency = "safe", spring(method = "GET", path = "/renamed/{id}"))]
+    #[rpc::method(method = "GET", path = "/renamed/{id}")]
     /// Looks up one value through both generated protocol mappings.
     async fn lookup(
         &self,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expand: Option<bool>,
+        id: String,
+        #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError>;
 }
 

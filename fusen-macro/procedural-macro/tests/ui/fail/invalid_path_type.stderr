@@ -1,5 +1,5 @@
 error: path parameters must be required scalar values
-  --> tests/ui/fail/invalid_path_type.rs:14:26
+  --> tests/ui/fail/invalid_path_type.rs:13:13
    |
-14 |         #[rpc(path)] id: Option<String>,
-   |                          ^^^^^^^^^^^^^^
+13 |         id: Option<String>,
+   |             ^^^^^^^^^^^^^^

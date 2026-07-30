@@ -8,8 +8,8 @@ use crate::{
 };
 use bytes::{Buf, Bytes};
 use fusen_contract::{
-    Idempotency, MethodDescriptor, ServiceDescriptor, ServiceEndpoint,
-    SpringCloudParameterCardinality, SpringCloudParameterSource, WireProtocol,
+    MethodDescriptor, ServiceDescriptor, ServiceEndpoint, SpringCloudParameterCardinality,
+    SpringCloudParameterSource, WireProtocol,
 };
 use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, Uri, Version,
@@ -20,7 +20,7 @@ use http::{
 };
 use hyper::body::{Body, Frame, Incoming};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, value::RawValue};
+use serde_json::{Map, Value, value::RawValue};
 use std::{
     convert::Infallible,
     pin::Pin,
@@ -88,8 +88,8 @@ pub(crate) fn parse_request_control(
     })
 }
 
-pub(crate) fn validate_attempt(attempt: u8, idempotency: Idempotency) -> Result<(), RpcError> {
-    if attempt > 1 && !idempotency.is_idempotent() {
+pub(crate) fn validate_attempt(attempt: u8, method_allows_retries: bool) -> Result<(), RpcError> {
+    if attempt > 1 && !method_allows_retries {
         Err(invalid_attempt())
     } else {
         Ok(())
@@ -167,7 +167,7 @@ fn invalid_attempt() -> RpcError {
     RpcError::framework(
         RpcCategory::InvalidArgument,
         "invalid_attempt",
-        "x-fusen-attempt must start at one and retries require an idempotent method",
+        "x-fusen-attempt must start at one and retries require an HTTP method that permits replay",
     )
 }
 
@@ -306,6 +306,7 @@ pub(crate) fn encode_request_template(
             let mut path = spring.path().to_owned();
             let mut query = Vec::new();
             let mut body = None;
+            let mut body_fields = Map::new();
             for parameter in spring.parameters() {
                 let value = arguments
                     .get(parameter.name())
@@ -325,9 +326,15 @@ pub(crate) fn encode_request_template(
                         parameter.cardinality(),
                         &value,
                     )?,
+                    SpringCloudParameterSource::BodyField => {
+                        body_fields.insert(parameter.name().to_owned(), value);
+                    }
                     SpringCloudParameterSource::Body => body = Some(value),
                     _ => return Err(unsupported_spring_parameter_source()),
                 }
+            }
+            if body.is_none() && !body_fields.is_empty() {
+                body = Some(Value::Object(body_fields));
             }
             let query = (!query.is_empty()).then(|| query.join("&"));
             let (body, budget_permit) = match body {
@@ -1040,7 +1047,6 @@ impl Body for GuardedBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusen_contract::Idempotency;
     use http::StatusCode;
     use http_body_util::BodyExt;
 
@@ -1156,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn non_idempotent_retries_are_rejected() {
+    fn retries_for_non_replayable_methods_are_rejected() {
         let mut headers = HeaderMap::new();
         headers.insert(ATTEMPT, HeaderValue::from_static("2"));
         assert_eq!(
@@ -1164,7 +1170,7 @@ mod tests {
                 parse_request_control(&headers, Duration::from_secs(1))
                     .unwrap()
                     .attempt,
-                Idempotency::None,
+                false,
             )
             .unwrap_err()
             .code()

@@ -5,9 +5,10 @@ struct RpcResponse<T>(T);
 
 #[interface(name = "invalid-call")]
 trait InvalidCallType {
+    #[fusen_procedural_macro::method(method = "GET", path = "/call")]
     async fn call(
         &self,
-        #[rpc(call)] call: String,
+        #[param(context)] call: String,
     ) -> Result<RpcResponse<()>, RpcError>;
 }
 

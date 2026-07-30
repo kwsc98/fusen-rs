@@ -35,7 +35,7 @@ pub use error::{
     ServerErrorKind,
 };
 pub use fusen_contract as contract;
-pub use fusen_contract::{Idempotency, WireProtocol};
+pub use fusen_contract::WireProtocol;
 pub use fusen_observability::{MetricsRecorder, NoopMetricsRecorder};
 pub use fusen_procedural_macro::{interface, method};
 pub use fusen_register::{RegistrationHandle, Registry, SubscriptionHandle};
@@ -57,13 +57,13 @@ pub mod __macro {
     /// ABI version used by fusen-rs 0.9 generated code.
     pub mod v1 {
         pub use crate::client::ServiceClient;
-        pub use crate::interface::{RpcField, RpcFieldSource, encode_argument, spring_method};
+        pub use crate::interface::{RpcField, RpcFieldSource, encode_argument, http_method};
         pub use crate::service::{
             IntoServerService, PreparedService, ServerInvocation, ServerService, method_not_found,
         };
         pub use crate::{
-            ClientBuilder, ClientRuntime, Idempotency, Middleware, MiddlewareFuture, RpcArguments,
-            RpcCall, RpcError, RpcResponse, WireProtocol,
+            ClientBuilder, ClientRuntime, Middleware, MiddlewareFuture, RpcArguments, RpcCall,
+            RpcError, RpcResponse, WireProtocol,
         };
         pub use fusen_contract::{MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector};
         pub use http;

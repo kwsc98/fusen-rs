@@ -25,29 +25,26 @@ pub struct ResponseDto {
 #[interface(name = "demo")]
 pub trait DemoService {
     /// Returns a static greeting.
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/hello/v4"))]
+    #[fusen_rs::method(method = "GET", path = "/hello/v4")]
     async fn say_hello_v4(&self) -> Result<RpcResponse<String>, fusen_rs::RpcError>;
 
     /// Greets one caller by name.
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/hello/{name}"))]
-    async fn say_hello(
-        &self,
-        #[rpc(path)] name: String,
-    ) -> Result<RpcResponse<String>, fusen_rs::RpcError>;
+    #[fusen_rs::method(method = "GET", path = "/hello/{name}")]
+    async fn say_hello(&self, name: String) -> Result<RpcResponse<String>, fusen_rs::RpcError>;
 
     /// Demonstrates a JSON request and response body.
-    #[fusen_rs::method(idempotency = "none", spring(method = "POST", path = "/hello/v2"))]
+    #[fusen_rs::method(method = "POST", path = "/hello/v2")]
     async fn say_hello_v2(
         &self,
-        #[rpc(body)] request: RequestDto,
+        #[param(body)] request: RequestDto,
     ) -> Result<RpcResponse<ResponseDto>, fusen_rs::RpcError>;
 
     /// Divides two integers or returns a typed invalid-argument error.
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/divide"))]
+    #[fusen_rs::method(method = "GET", path = "/divide")]
     async fn divide(
         &self,
-        #[rpc(query)] a: i32,
-        #[rpc(query)] b: i32,
+        #[param(query)] a: i32,
+        #[param(query)] b: i32,
     ) -> Result<RpcResponse<String>, fusen_rs::RpcError>;
 }
 
@@ -55,9 +52,9 @@ pub trait DemoService {
 #[interface(name = "demo-v2", group = "v1", version = "1.0")]
 pub trait DemoServiceV2 {
     /// Returns a versioned greeting payload.
-    #[fusen_rs::method(idempotency = "none", spring(method = "POST", path = "/hello/v3"))]
+    #[fusen_rs::method(method = "POST", path = "/hello/v3")]
     async fn say_hello_v3(
         &self,
-        #[rpc(body)] request: RequestDto,
+        #[param(body)] request: RequestDto,
     ) -> Result<RpcResponse<ResponseDto>, fusen_rs::RpcError>;
 }

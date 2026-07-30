@@ -36,7 +36,7 @@ impl ServerInvocation {
         self.context.method().id()
     }
 
-    /// Returns server-bound call metadata for an explicit `#[rpc(call)]` parameter.
+    /// Returns server-bound call metadata for an explicit `#[param(context)]` parameter.
     #[doc(hidden)]
     pub fn rpc_call(&self) -> RpcCall {
         RpcCall::from_server(&self.context)

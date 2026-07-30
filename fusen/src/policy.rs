@@ -3,7 +3,7 @@ pub use crate::{
     resilience::{FailureClass, RetryDecision, RetryDecisionContext, RetryPolicy},
     rpc::{RpcCategory, RpcError},
 };
-pub use fusen_contract::{Idempotency, ServiceInstance};
+pub use fusen_contract::ServiceInstance;
 use rand::RngExt;
 use std::{ops::Deref, sync::Arc};
 

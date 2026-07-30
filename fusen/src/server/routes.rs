@@ -262,6 +262,19 @@ impl MatchedRoute {
                         }
                     }
                 }
+                SpringCloudParameterSource::BodyField => match body.as_ref() {
+                    Some(Value::Object(fields)) => {
+                        fields.get(parameter.name()).cloned().unwrap_or(Value::Null)
+                    }
+                    Some(_) => {
+                        return Err(RpcError::framework(
+                            RpcCategory::InvalidArgument,
+                            "invalid_json_body",
+                            "request body must be a JSON object",
+                        ));
+                    }
+                    None => Value::Null,
+                },
                 SpringCloudParameterSource::Body => body.clone().unwrap_or(Value::Null),
                 _ => {
                     return Err(RpcError::framework(
@@ -278,10 +291,12 @@ impl MatchedRoute {
 
     pub(crate) fn spring_has_body(&self) -> bool {
         self.route.method.spring_cloud().is_some_and(|mapping| {
-            mapping
-                .parameters()
-                .iter()
-                .any(|parameter| parameter.source() == SpringCloudParameterSource::Body)
+            mapping.parameters().iter().any(|parameter| {
+                matches!(
+                    parameter.source(),
+                    SpringCloudParameterSource::Body | SpringCloudParameterSource::BodyField
+                )
+            })
         })
     }
 }
@@ -378,7 +393,7 @@ mod tests {
     use super::*;
     use crate::{MiddlewareFuture, service::ServerInvocation};
     use fusen_contract::{
-        Idempotency, MethodId, ServiceSelector, SpringCloudMethod, SpringCloudParameter,
+        MethodId, ServiceSelector, SpringCloudMethod, SpringCloudParameter,
         SpringCloudParameterCardinality,
     };
 
@@ -421,7 +436,6 @@ mod tests {
                     MethodDescriptor::new(
                         MethodId::new(0),
                         service_id,
-                        Idempotency::None,
                         Some(SpringCloudMethod::new(method, path, parameters).unwrap()),
                     )
                     .unwrap(),
@@ -596,6 +610,40 @@ mod tests {
             .unwrap_err();
         assert_eq!(duplicate.category(), RpcCategory::InvalidArgument);
         assert_eq!(duplicate.code().as_str(), "duplicate_query_parameter");
+    }
+
+    #[test]
+    fn spring_body_fields_are_extracted_from_one_json_object() {
+        let parameters = ["name", "audit"]
+            .into_iter()
+            .map(|name| {
+                SpringCloudParameter::new(
+                    name,
+                    SpringCloudParameterSource::BodyField,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap()
+            })
+            .collect();
+        let route = spring_route_with_parameters("body-fields", Method::POST, "/users", parameters);
+        let table = RouteTable::build(vec![route]).unwrap();
+        let matched = table.match_spring(&Method::POST, "/users").unwrap();
+        assert!(matched.spring_has_body());
+
+        let arguments = matched
+            .spring_arguments(
+                None,
+                Some(serde_json::json!({"name": "Ada", "audit": true})),
+                0,
+            )
+            .unwrap();
+        assert_eq!(arguments.get("name"), Some(&serde_json::json!("Ada")));
+        assert_eq!(arguments.get("audit"), Some(&serde_json::json!(true)));
+
+        let error = matched
+            .spring_arguments(None, Some(serde_json::json!(["not", "an", "object"])), 0)
+            .unwrap_err();
+        assert_eq!(error.code().as_str(), "invalid_json_body");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 error: RPC success type must be RpcResponse<T>
-  --> tests/ui/fail/invalid_signature.rs:10:65
+  --> tests/ui/fail/invalid_signature.rs:11:67
    |
-10 |     async fn call(&self, #[rpc(body)] request: Input) -> Result<Output, RpcError>;
-   |                                                                 ^^^^^^
+11 |     async fn call(&self, #[param(body)] request: Input) -> Result<Output, RpcError>;
+   |                                                                   ^^^^^^

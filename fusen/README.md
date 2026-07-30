@@ -18,21 +18,22 @@ use fusen_rs::{RpcError, RpcResponse};
 #[fusen_rs::interface(name = "user", group = "prod", version = "1")]
 pub trait UserApi {
     #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}")
+        method = "GET", path = "/users/{id}"
     )]
     async fn get(
         &self,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expand: Option<bool>,
+        id: String,
+        #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-Every RPC accepts zero or more owned, named parameters and returns
-`Result<RpcResponse<T>, RpcError>`. Business parameters declare one of
-`#[rpc(path)]`, `#[rpc(query)]`, or `#[rpc(body)]`; a method needing request
-metadata may also declare one `#[rpc(call)] RpcCall`. The macro generates
+Every RPC requires `#[method(method = "...", path = "...")]`, accepts zero or
+more owned named parameters, and returns `Result<RpcResponse<T>, RpcError>`.
+Path placeholders are inferred by name; remaining read-method parameters become
+query values, while remaining POST/PUT/PATCH parameters become fields in one
+JSON body object. `#[param(query)]`, `#[param(body)]`, `#[param(context)]`, and
+`#[param(name = "...")]` provide explicit overrides. The macro generates
 `UserApiClient` and `UserApiServer<T>`; both the generated client and a user
 handler implement `UserApi`. Clients use the generic `ClientBuilder<UserApiClient>`.
 

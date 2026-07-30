@@ -1,5 +1,5 @@
 error: query parameters may not use Option<Vec<T>>; use Vec<T> so omission has one unambiguous empty-list meaning
-  --> tests/ui/fail/optional_repeated_query.rs:10:29
+  --> tests/ui/fail/optional_repeated_query.rs:11:31
    |
-10 |         #[rpc(query)] tags: Option<Vec<String>>,
-   |                             ^^^^^^^^^^^^^^^^^^^
+11 |         #[param(query)] tags: Option<Vec<String>>,
+   |                               ^^^^^^^^^^^^^^^^^^^

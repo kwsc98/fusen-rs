@@ -1,4 +1,4 @@
-use crate::{Idempotency, ProtocolSet, WireProtocol};
+use crate::{ProtocolSet, WireProtocol};
 use http::Method;
 use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
@@ -274,7 +274,9 @@ pub enum SpringCloudParameterSource {
     Path,
     /// A URL query parameter.
     Query,
-    /// The JSON request body. Spring Cloud V1 permits at most one body parameter.
+    /// A named field in a synthesized JSON request body object.
+    BodyField,
+    /// The complete JSON request body. It cannot be combined with body fields.
     Body,
 }
 
@@ -366,12 +368,11 @@ impl SpringCloudMethod {
     }
 }
 
-/// Versioned wire metadata and retry semantics for one generated RPC method.
+/// Versioned wire metadata for one generated RPC method.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodDescriptor {
     id: MethodId,
     fusen_identity: String,
-    idempotency: Idempotency,
     spring_cloud: Option<SpringCloudMethod>,
 }
 
@@ -380,15 +381,12 @@ impl MethodDescriptor {
     pub fn new(
         id: MethodId,
         fusen_identity: impl Into<String>,
-        idempotency: Idempotency,
         spring_cloud: Option<SpringCloudMethod>,
     ) -> Result<Self, ContractError> {
         let fusen_identity = validate_identifier(fusen_identity.into(), "Fusen method identity")?;
-        validate_idempotency_mapping(idempotency, spring_cloud.as_ref())?;
         Ok(Self {
             id,
             fusen_identity,
-            idempotency,
             spring_cloud,
         })
     }
@@ -403,40 +401,21 @@ impl MethodDescriptor {
         &self.fusen_identity
     }
 
-    /// Returns retry and safety semantics.
-    pub const fn idempotency(&self) -> Idempotency {
-        self.idempotency
+    /// Returns whether the standard HTTP method permits automatic replay.
+    ///
+    /// Methods without an HTTP mapping and mappings using POST or PATCH are never replayed.
+    pub fn allows_retries(&self) -> bool {
+        self.spring_cloud.as_ref().is_some_and(|mapping| {
+            matches!(
+                *mapping.method(),
+                Method::GET | Method::HEAD | Method::OPTIONS | Method::PUT | Method::DELETE
+            )
+        })
     }
 
     /// Returns the optional Spring Cloud V1 mapping.
     pub const fn spring_cloud(&self) -> Option<&SpringCloudMethod> {
         self.spring_cloud.as_ref()
-    }
-}
-
-fn validate_idempotency_mapping(
-    idempotency: Idempotency,
-    spring: Option<&SpringCloudMethod>,
-) -> Result<(), ContractError> {
-    let Some(spring) = spring else {
-        return Ok(());
-    };
-    let method = spring.method();
-    let valid = match idempotency {
-        Idempotency::None => true,
-        Idempotency::Safe => matches!(*method, Method::GET | Method::HEAD),
-        Idempotency::Idempotent => matches!(
-            *method,
-            Method::GET | Method::HEAD | Method::PUT | Method::DELETE | Method::POST
-        ),
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(ContractError::InvalidMethod(format!(
-            "Spring Cloud method {method} is incompatible with {} idempotency",
-            idempotency.as_str()
-        )))
     }
 }
 
@@ -726,6 +705,7 @@ fn validate_spring_cloud_method(
     let mut names = BTreeSet::new();
     let mut path_parameters = BTreeSet::new();
     let mut body_count = 0;
+    let mut body_field_count = 0;
     for parameter in parameters {
         if !names.insert(parameter.name()) {
             return Err(ContractError::InvalidMethod(format!(
@@ -750,6 +730,14 @@ fn validate_spring_cloud_method(
                 }
                 body_count += 1;
             }
+            SpringCloudParameterSource::BodyField => {
+                if parameter.cardinality() == SpringCloudParameterCardinality::Repeated {
+                    return Err(ContractError::InvalidMethod(
+                        "Spring Cloud repeated parameters may use only the Query source".into(),
+                    ));
+                }
+                body_field_count += 1;
+            }
             SpringCloudParameterSource::Query => {}
         }
     }
@@ -757,6 +745,18 @@ fn validate_spring_cloud_method(
         return Err(ContractError::InvalidMethod(
             "Spring Cloud V1 permits at most one body parameter".into(),
         ));
+    }
+    if body_count == 1 && body_field_count != 0 {
+        return Err(ContractError::InvalidMethod(
+            "a complete JSON body cannot be combined with synthesized body fields".into(),
+        ));
+    }
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+        && body_count + body_field_count != 0
+    {
+        return Err(ContractError::InvalidMethod(format!(
+            "HTTP {method} methods do not accept a JSON request body"
+        )));
     }
     if placeholders != path_parameters {
         return Err(ContractError::InvalidMethod(
@@ -823,7 +823,7 @@ mod tests {
     }
 
     fn method(id: u16, identity: &str) -> MethodDescriptor {
-        MethodDescriptor::new(MethodId::new(id), identity, Idempotency::None, None).unwrap()
+        MethodDescriptor::new(MethodId::new(id), identity, None).unwrap()
     }
 
     #[test]
@@ -919,6 +919,40 @@ mod tests {
         );
         assert!(two_bodies.is_err());
 
+        let raw_and_fields = SpringCloudMethod::new(
+            Method::POST,
+            "/users",
+            vec![
+                SpringCloudParameter::new(
+                    "document",
+                    SpringCloudParameterSource::Body,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                SpringCloudParameter::new(
+                    "audit",
+                    SpringCloudParameterSource::BodyField,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+            ],
+        );
+        assert!(raw_and_fields.is_err());
+
+        let get_body_field = SpringCloudMethod::new(
+            Method::GET,
+            "/users",
+            vec![
+                SpringCloudParameter::new(
+                    "filter",
+                    SpringCloudParameterSource::BodyField,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+            ],
+        );
+        assert!(get_body_field.is_err());
+
         for path in ["/users/", "/users//active"] {
             assert!(
                 SpringCloudMethod::new(Method::GET, path, Vec::new()).is_err(),
@@ -943,6 +977,7 @@ mod tests {
 
         for source in [
             SpringCloudParameterSource::Path,
+            SpringCloudParameterSource::BodyField,
             SpringCloudParameterSource::Body,
         ] {
             let parameter = SpringCloudParameter::new(
@@ -963,53 +998,47 @@ mod tests {
     #[test]
     fn method_keeps_fusen_identity_independent_from_optional_spring_route() {
         let spring = spring_get("/users", Vec::new());
-        let descriptor = MethodDescriptor::new(
-            MethodId::new(0),
-            "inventory.users.list",
-            Idempotency::Safe,
-            Some(spring),
-        )
-        .unwrap();
+        let descriptor =
+            MethodDescriptor::new(MethodId::new(0), "inventory.users.list", Some(spring)).unwrap();
         assert_eq!(descriptor.fusen_identity(), "inventory.users.list");
-        assert!(descriptor.idempotency().is_safe());
+        assert!(descriptor.allows_retries());
         assert_eq!(descriptor.spring_cloud().unwrap().path(), "/users");
     }
 
     #[test]
-    fn method_rejects_spring_mappings_that_conflict_with_idempotency() {
-        let safe_post = MethodDescriptor::new(
-            MethodId::new(0),
-            "safe-post",
-            Idempotency::Safe,
-            Some(SpringCloudMethod::new(Method::POST, "/users", Vec::new()).unwrap()),
+    fn method_derives_replay_eligibility_from_standard_http_semantics() {
+        for (index, method) in [
+            Method::GET,
+            Method::HEAD,
+            Method::OPTIONS,
+            Method::PUT,
+            Method::DELETE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let descriptor = MethodDescriptor::new(
+                MethodId::new(index as u16),
+                method.as_str().to_owned(),
+                Some(SpringCloudMethod::new(method, "/users", Vec::new()).unwrap()),
+            )
+            .unwrap();
+            assert!(descriptor.allows_retries());
+        }
+        for (index, method) in [Method::POST, Method::PATCH].into_iter().enumerate() {
+            let descriptor = MethodDescriptor::new(
+                MethodId::new(index as u16),
+                method.as_str().to_owned(),
+                Some(SpringCloudMethod::new(method, "/users", Vec::new()).unwrap()),
+            )
+            .unwrap();
+            assert!(!descriptor.allows_retries());
+        }
+        assert!(
+            !MethodDescriptor::new(MethodId::new(0), "fusen-only", None)
+                .unwrap()
+                .allows_retries()
         );
-        assert!(safe_post.is_err());
-
-        let idempotent_patch = MethodDescriptor::new(
-            MethodId::new(0),
-            "idempotent-patch",
-            Idempotency::Idempotent,
-            Some(SpringCloudMethod::new(Method::PATCH, "/users", Vec::new()).unwrap()),
-        );
-        assert!(idempotent_patch.is_err());
-
-        let idempotent_post = MethodDescriptor::new(
-            MethodId::new(0),
-            "idempotent-post",
-            Idempotency::Idempotent,
-            Some(SpringCloudMethod::new(Method::POST, "/users", Vec::new()).unwrap()),
-        )
-        .unwrap();
-        assert_eq!(idempotent_post.idempotency(), Idempotency::Idempotent);
-
-        let unclassified_get = MethodDescriptor::new(
-            MethodId::new(0),
-            "unclassified-get",
-            Idempotency::None,
-            Some(SpringCloudMethod::new(Method::GET, "/users", Vec::new()).unwrap()),
-        )
-        .unwrap();
-        assert_eq!(unclassified_get.idempotency(), Idempotency::None);
     }
 
     #[test]
@@ -1024,14 +1053,12 @@ mod tests {
         let first = MethodDescriptor::new(
             MethodId::new(0),
             "list",
-            Idempotency::Safe,
             Some(spring_get("/users", Vec::new())),
         )
         .unwrap();
         let second = MethodDescriptor::new(
             MethodId::new(1),
             "search",
-            Idempotency::Safe,
             Some(spring_get("/users", Vec::new())),
         )
         .unwrap();
@@ -1041,7 +1068,6 @@ mod tests {
         let by_id = MethodDescriptor::new(
             MethodId::new(0),
             "by-id",
-            Idempotency::Safe,
             Some(spring_get(
                 "/users/{id}",
                 vec![
@@ -1058,7 +1084,6 @@ mod tests {
         let by_name = MethodDescriptor::new(
             MethodId::new(1),
             "by-name",
-            Idempotency::Safe,
             Some(spring_get(
                 "/users/{name}",
                 vec![

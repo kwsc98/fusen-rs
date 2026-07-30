@@ -281,7 +281,7 @@ use fusen_rs::{RpcError, RpcResponse, interface};
 
 #[interface(name = "registry-consumer")]
 pub trait RegistryConsumerApi {
-    #[fusen_rs::method(idempotency = "safe")]
+    #[fusen_rs::method(method = "GET", path = "/ping")]
     async fn ping(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 RUST

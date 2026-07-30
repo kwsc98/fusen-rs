@@ -5,9 +5,10 @@ struct RpcResponse<T>(T);
 
 #[interface(name = "optional-query")]
 trait OptionalRepeatedQuery {
+    #[fusen_procedural_macro::method(method = "GET", path = "/call")]
     async fn call(
         &self,
-        #[rpc(query)] tags: Option<Vec<String>>,
+        #[param(query)] tags: Option<Vec<String>>,
     ) -> Result<RpcResponse<()>, RpcError>;
 }
 

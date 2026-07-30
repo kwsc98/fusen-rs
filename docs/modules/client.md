@@ -21,7 +21,7 @@ Fusen V1 在 HTTP endpoint 上使用 h2c，在 HTTPS endpoint 上要求 TLS 1.2/
 
 默认调用 deadline 为 10 秒，一个 absolute deadline 覆盖 admission/queue、Middleware、所有 attempts、退避、传输与 decode。调用方取消立即取消当前 attempt。
 
-只有 `Idempotency::Idempotent` 与 `Safe` 可重试。内置策略最多三次总 attempts，使用 10 ms 到 200 ms 的 full-jitter 指数退避，并由每服务容量 100、每秒补充 10 的 token bucket 限制 retry。`Retry-After` 支持 delta-seconds 与 HTTP-date，并作为最小等待；剩余 deadline 不足时直接结束。自定义 policy 不能放宽这些硬上限。
+重试资格由接口声明的 HTTP method 保守推导：GET、HEAD、OPTIONS、PUT、DELETE 可重试，POST、PATCH 永不自动重试。内置策略最多三次总 attempts，使用 10 ms 到 200 ms 的 full-jitter 指数退避，并由每服务容量 100、每秒补充 10 的 token bucket 限制 retry。`Retry-After` 支持 delta-seconds 与 HTTP-date，并作为最小等待；剩余 deadline 不足时直接结束。自定义 policy 不能放宽这些硬上限。
 
 Endpoint breaker 使用 10 秒窗口、最少 20 样本、50% 失败比例；service breaker 使用 30 秒窗口、最少 50 样本、60% 失败比例。Endpoint 记录每个真实 attempt，service 仅记录最终逻辑结果。Endpoint entry 上限 10,000，缺失或空闲 10 分钟后淘汰。
 

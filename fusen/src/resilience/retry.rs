@@ -1,7 +1,6 @@
 //! Bounded retry decisions, token budgets, and full-jitter backoff.
 
 use super::FailureClass;
-use fusen_contract::Idempotency;
 use rand::{Rng, RngExt};
 use std::{
     sync::{Arc, Mutex},
@@ -33,7 +32,7 @@ pub enum RetryDecision {
 pub struct RetryDecisionContext {
     completed_attempts: u8,
     max_attempts: u8,
-    idempotency: Idempotency,
+    method_allows_retries: bool,
     failure: FailureClass,
     remaining: Duration,
 }
@@ -42,14 +41,14 @@ impl RetryDecisionContext {
     pub(crate) fn new(
         completed_attempts: u8,
         configured_max_attempts: u8,
-        idempotency: Idempotency,
+        method_allows_retries: bool,
         failure: FailureClass,
         remaining: Duration,
     ) -> Self {
         Self {
             completed_attempts: completed_attempts.max(1),
             max_attempts: hard_attempt_limit(configured_max_attempts),
-            idempotency,
+            method_allows_retries,
             failure,
             remaining,
         }
@@ -65,9 +64,9 @@ impl RetryDecisionContext {
         self.max_attempts
     }
 
-    /// Returns the method's declared retry-safety semantics.
-    pub const fn idempotency(&self) -> Idempotency {
-        self.idempotency
+    /// Returns whether the method's standard HTTP mapping permits automatic replay.
+    pub const fn method_allows_retries(&self) -> bool {
+        self.method_allows_retries
     }
 
     /// Returns the stable failure classification for the completed attempt.
@@ -81,11 +80,11 @@ impl RetryDecisionContext {
     }
 }
 
-/// Extension point for deciding whether a failed idempotent invocation is eligible for retry.
+/// Extension point for deciding whether a failed replayable invocation is eligible for retry.
 ///
 /// Implementations should be fast and side-effect free. The runtime separately enforces method
-/// idempotency, its non-retryable failure matrix, the absolute deadline, the hard three-attempt
-/// cap, and the shared retry token budget.
+/// HTTP replay eligibility, its non-retryable failure matrix, the absolute deadline, the hard
+/// three-attempt cap, and the shared retry token budget.
 pub trait RetryPolicy: Send + Sync + 'static {
     /// Evaluates one failed physical attempt.
     fn decide(&self, context: &RetryDecisionContext) -> RetryDecision;
@@ -106,7 +105,7 @@ pub(crate) struct StandardRetryPolicy;
 
 impl RetryPolicy for StandardRetryPolicy {
     fn decide(&self, context: &RetryDecisionContext) -> RetryDecision {
-        if context.idempotency().is_idempotent() && context.failure().is_retryable() {
+        if context.method_allows_retries() && context.failure().is_retryable() {
             RetryDecision::Retry
         } else {
             RetryDecision::Stop
@@ -181,7 +180,7 @@ pub(crate) fn decide_with_guards(
 ) -> RetryDecision {
     if context.remaining().is_zero()
         || !has_next_attempt(context.completed_attempts(), context.max_attempts())
-        || !context.idempotency().is_idempotent()
+        || !context.method_allows_retries()
         || !context.failure().is_retryable()
         || policy.decide(context) != RetryDecision::Retry
         || !budget.try_acquire()
@@ -275,7 +274,7 @@ mod tests {
         let context = RetryDecisionContext::new(
             3,
             100,
-            Idempotency::Idempotent,
+            true,
             FailureClass::Transport,
             Duration::from_secs(1),
         );
@@ -287,12 +286,12 @@ mod tests {
     }
 
     #[test]
-    fn standard_policy_only_retries_idempotent_transient_failures() {
+    fn standard_policy_only_retries_replayable_transient_failures() {
         let budget = RetryBudget::new(2, 1);
         let context = RetryDecisionContext::new(
             1,
             3,
-            Idempotency::Idempotent,
+            true,
             FailureClass::Unavailable,
             Duration::from_secs(1),
         );
@@ -304,7 +303,7 @@ mod tests {
         let unsafe_context = RetryDecisionContext::new(
             1,
             3,
-            Idempotency::None,
+            false,
             FailureClass::Unavailable,
             Duration::from_secs(1),
         );
@@ -324,52 +323,32 @@ mod tests {
         }
 
         let budget = RetryBudget::new(1, 1);
-        let elapsed = RetryDecisionContext::new(
-            1,
-            3,
-            Idempotency::Idempotent,
-            FailureClass::Transport,
-            Duration::ZERO,
-        );
+        let elapsed =
+            RetryDecisionContext::new(1, 3, true, FailureClass::Transport, Duration::ZERO);
         assert_eq!(
             decide_with_guards(&AlwaysRetry, &elapsed, &budget),
             RetryDecision::Stop
         );
         assert_eq!(budget.available(), 1);
 
-        let unsafe_method = RetryDecisionContext::new(
-            1,
-            3,
-            Idempotency::None,
-            FailureClass::Transport,
-            Duration::from_secs(1),
-        );
+        let unsafe_method =
+            RetryDecisionContext::new(1, 3, false, FailureClass::Transport, Duration::from_secs(1));
         assert_eq!(
             decide_with_guards(&AlwaysRetry, &unsafe_method, &budget),
             RetryDecision::Stop
         );
         assert_eq!(budget.available(), 1);
 
-        let protocol_failure = RetryDecisionContext::new(
-            1,
-            3,
-            Idempotency::Safe,
-            FailureClass::Protocol,
-            Duration::from_secs(1),
-        );
+        let protocol_failure =
+            RetryDecisionContext::new(1, 3, true, FailureClass::Protocol, Duration::from_secs(1));
         assert_eq!(
             decide_with_guards(&AlwaysRetry, &protocol_failure, &budget),
             RetryDecision::Stop
         );
         assert_eq!(budget.available(), 1);
 
-        let eligible = RetryDecisionContext::new(
-            1,
-            3,
-            Idempotency::Idempotent,
-            FailureClass::Transport,
-            Duration::from_secs(1),
-        );
+        let eligible =
+            RetryDecisionContext::new(1, 3, true, FailureClass::Transport, Duration::from_secs(1));
         assert_eq!(
             decide_with_guards(&AlwaysRetry, &eligible, &budget),
             RetryDecision::Retry

@@ -7,9 +7,9 @@ pub use crate::{
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-/// Builds and validates one Spring Cloud method from generated parameter metadata.
+/// Builds and validates one HTTP mapping from generated parameter metadata.
 #[doc(hidden)]
-pub fn spring_method(
+pub fn http_method(
     method: http::Method,
     path: &str,
     fields: &[RpcField],
@@ -20,6 +20,7 @@ pub fn spring_method(
             let source = match field.source {
                 RpcFieldSource::Path => fusen_contract::SpringCloudParameterSource::Path,
                 RpcFieldSource::Query => fusen_contract::SpringCloudParameterSource::Query,
+                RpcFieldSource::BodyField => fusen_contract::SpringCloudParameterSource::BodyField,
                 RpcFieldSource::Body => fusen_contract::SpringCloudParameterSource::Body,
             };
             let cardinality = if field.repeated {
@@ -35,7 +36,7 @@ pub fn spring_method(
         .map_err(|error| error.to_string())
 }
 
-/// The Spring Cloud wire role of one interface parameter.
+/// The HTTP wire role of one interface parameter.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,6 +45,8 @@ pub enum RpcFieldSource {
     Path,
     /// A URL query parameter.
     Query,
+    /// A named field in the synthesized JSON request body object.
+    BodyField,
     /// The single JSON request body.
     Body,
 }

@@ -1,0 +1,5 @@
+error: method fields must use `name = value` syntax
+ --> tests/ui/fail/removed_spring_mapping.rs:8:38
+  |
+8 |     #[fusen_procedural_macro::method(spring(method = "GET", path = "/users"))]
+  |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

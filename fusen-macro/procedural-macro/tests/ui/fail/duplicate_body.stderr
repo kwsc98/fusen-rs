@@ -1,5 +1,5 @@
-error: an RPC method may declare at most one #[rpc(body)] parameter
-  --> tests/ui/fail/duplicate_body.rs:11:9
+error: an RPC method may declare at most one #[param(body)] parameter
+  --> tests/ui/fail/duplicate_body.rs:12:9
    |
-11 |         #[rpc(body)] second: String,
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+12 |         #[param(body)] second: String,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

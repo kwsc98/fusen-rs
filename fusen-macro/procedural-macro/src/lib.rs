@@ -19,7 +19,7 @@ pub fn interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     service_macro::expand(args, item)
 }
 
-/// Carries method metadata consumed by the surrounding [`interface`] macro.
+/// Declares the HTTP method and path required by the surrounding [`interface`] macro.
 #[proc_macro_attribute]
 pub fn method(attr: TokenStream, item: TokenStream) -> TokenStream {
     match MethodArgs::parse_tokens(attr.into()) {

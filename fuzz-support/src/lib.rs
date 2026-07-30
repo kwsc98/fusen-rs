@@ -274,9 +274,8 @@ fn descriptor() -> (
     &'static fusen_contract::MethodDescriptor,
 ) {
     use fusen_contract::{
-        Idempotency, MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector,
-        SpringCloudMethod, SpringCloudParameter, SpringCloudParameterCardinality,
-        SpringCloudParameterSource,
+        MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector, SpringCloudMethod,
+        SpringCloudParameter, SpringCloudParameterCardinality, SpringCloudParameterSource,
     };
 
     static SERVICE: LazyLock<ServiceDescriptor> = LazyLock::new(|| {
@@ -302,9 +301,7 @@ fn descriptor() -> (
         ];
         let spring =
             SpringCloudMethod::new(http::Method::POST, "/fuzz/{path}", parameters).unwrap();
-        let method =
-            MethodDescriptor::new(MethodId::new(0), "fuzz", Idempotency::None, Some(spring))
-                .unwrap();
+        let method = MethodDescriptor::new(MethodId::new(0), "fuzz", Some(spring)).unwrap();
         ServiceDescriptor::new(
             ServiceSelector::new("fuzz", None, None).unwrap(),
             vec![method],

@@ -426,7 +426,7 @@ impl InvocationTerminal<'_> {
             let decision = RetryDecisionContext::new(
                 attempt,
                 self.client.runtime.config.retry().max_attempts(),
-                context.method().idempotency(),
+                context.method().allows_retries(),
                 failure,
                 remaining,
             );
@@ -929,8 +929,7 @@ mod tests {
     };
     use bytes::Bytes;
     use fusen_contract::{
-        Idempotency, MethodDescriptor, MethodId, ServiceInstance, ServiceSelector,
-        SpringCloudMethod,
+        MethodDescriptor, MethodId, ServiceInstance, ServiceSelector, SpringCloudMethod,
     };
     use fusen_observability::MetricsRecorder;
     use fusen_register::directory::{DirectoryPublisher, directory};
@@ -1080,8 +1079,12 @@ mod tests {
             ServiceDescriptor::new(
                 ServiceSelector::new("replay", None, None).unwrap(),
                 vec![
-                    MethodDescriptor::new(MethodId::new(0), "call", Idempotency::Idempotent, None)
-                        .unwrap(),
+                    MethodDescriptor::new(
+                        MethodId::new(0),
+                        "call",
+                        Some(SpringCloudMethod::new(Method::PUT, "/call", Vec::new()).unwrap()),
+                    )
+                    .unwrap(),
                 ],
             )
             .unwrap(),
@@ -1097,7 +1100,6 @@ mod tests {
                     MethodDescriptor::new(
                         MethodId::new(0),
                         "call",
-                        Idempotency::Safe,
                         Some(SpringCloudMethod::new(Method::GET, "/call", Vec::new()).unwrap()),
                     )
                     .unwrap(),

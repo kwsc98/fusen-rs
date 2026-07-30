@@ -1,0 +1,5 @@
+error: each RPC method must declare #[method(method = "...", path = "/...")]
+ --> tests/ui/fail/missing_method.rs:8:14
+  |
+8 |     async fn call(&self, id: String) -> Result<RpcResponse<()>, RpcError>;
+  |              ^^^^

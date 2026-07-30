@@ -25,7 +25,7 @@ use tokio::{
 
 #[interface(name = "startup-lifecycle-e2e")]
 trait StartupLifecycleService {
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/startup"))]
+    #[fusen_rs::method(method = "GET", path = "/startup")]
     async fn check(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 

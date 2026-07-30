@@ -20,14 +20,11 @@ use tokio::{
 
 #[interface(name = "middleware-contract")]
 trait MiddlewareContract {
-    #[fusen_rs::method(
-        idempotency = "idempotent",
-        spring(method = "POST", path = "/middleware")
-    )]
+    #[fusen_rs::method(method = "PUT", path = "/middleware")]
     async fn execute(
         &self,
-        #[rpc(call)] call: RpcCall,
-        #[rpc(body)] value: String,
+        #[param(context)] call: RpcCall,
+        #[param(body)] value: String,
     ) -> Result<RpcResponse<String>, RpcError>;
 }
 
@@ -430,7 +427,7 @@ async fn server_head_rejection_does_not_poll_the_request_body() {
 
     let mut stream = TcpStream::connect(server.local_addr()).await.unwrap();
     let head = concat!(
-        "POST /middleware HTTP/1.1\r\n",
+        "PUT /middleware HTTP/1.1\r\n",
         "Host: localhost\r\n",
         "Content-Type: application/json\r\n",
         "Content-Length: 1048576\r\n",

@@ -5,7 +5,6 @@ use fusen_rs::{
     RpcContext, RpcError, RpcOrigin, RpcResponse, Server, ServerConfig, ServerErrorKind,
     ServerState, WireProtocol, contract::ProtocolSet, interface,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     sync::{
         Arc,
@@ -15,30 +14,22 @@ use std::{
 };
 use tokio::sync::{Barrier, Notify, Semaphore};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct CreateRequest {
-    name: String,
-}
-
 #[interface(name = "wire-e2e")]
 trait WireService {
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/users/{id}"))]
+    #[fusen_rs::method(method = "GET", path = "/users/{id}")]
     async fn lookup(
         &self,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expanded: Option<bool>,
+        id: String,
+        #[param(query)] expanded: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError>;
 
-    #[fusen_rs::method(idempotency = "none", spring(method = "POST", path = "/users"))]
-    async fn create(
-        &self,
-        #[rpc(body)] request: CreateRequest,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    #[fusen_rs::method(method = "POST", path = "/users")]
+    async fn create(&self, name: String, audit: bool) -> Result<RpcResponse<String>, RpcError>;
 
-    #[fusen_rs::method(idempotency = "safe", spring(method = "GET", path = "/tags"))]
+    #[fusen_rs::method(method = "GET", path = "/tags")]
     async fn tags(
         &self,
-        #[rpc(query)] tags: Vec<String>,
+        #[param(query)] tags: Vec<String>,
     ) -> Result<RpcResponse<Vec<String>>, RpcError>;
 }
 
@@ -57,8 +48,8 @@ impl WireService for WireServiceImpl {
         )))
     }
 
-    async fn create(&self, request: CreateRequest) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(request.name))
+    async fn create(&self, name: String, audit: bool) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(format!("{name}:{audit}")))
     }
 
     async fn tags(&self, tags: Vec<String>) -> Result<RpcResponse<Vec<String>>, RpcError> {
@@ -68,8 +59,8 @@ impl WireService for WireServiceImpl {
 
 #[interface(name = "blocking-e2e")]
 trait BlockingService {
-    #[fusen_rs::method(idempotency = "safe")]
-    async fn wait(&self, #[rpc(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
+    #[fusen_rs::method(method = "PUT", path = "/blocking/wait")]
+    async fn wait(&self, #[param(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct BlockingServiceImpl {
@@ -101,10 +92,10 @@ impl BlockingService for BlockingServiceImpl {
 
 #[interface(name = "panic-e2e")]
 trait PanicService {
-    #[fusen_rs::method(idempotency = "safe")]
+    #[fusen_rs::method(method = "PUT", path = "/panic/execute")]
     async fn execute(
         &self,
-        #[rpc(body)] should_panic: bool,
+        #[param(body)] should_panic: bool,
     ) -> Result<RpcResponse<String>, RpcError>;
 }
 
@@ -119,10 +110,7 @@ impl PanicService for PanicServiceImpl {
 
 #[interface(name = "logical-middleware-e2e")]
 trait LogicalMiddlewareService {
-    #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/logical-middleware")
-    )]
+    #[fusen_rs::method(method = "GET", path = "/logical-middleware")]
     async fn execute(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 
@@ -228,14 +216,20 @@ async fn real_h2c_and_http1_slices_round_trip() {
         assert_eq!(spring.tags(tags.clone()).await.unwrap().into_body(), tags);
     }
     assert_eq!(
-        spring
-            .create(CreateRequest {
-                name: "created".into(),
-            })
+        fusen
+            .create("fusen-created".into(), true)
             .await
             .unwrap()
             .into_body(),
-        "created"
+        "fusen-created:true"
+    );
+    assert_eq!(
+        spring
+            .create("created".into(), false)
+            .await
+            .unwrap()
+            .into_body(),
+        "created:false"
     );
 
     drop((fusen, spring));

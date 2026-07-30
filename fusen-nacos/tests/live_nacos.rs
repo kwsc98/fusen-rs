@@ -2,8 +2,8 @@
 
 use fusen_config::{ConfigHandle, ConfigKey, ConfigSource};
 use fusen_contract::{
-    Idempotency, InstanceId, MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor,
-    ServiceRegistration, ServiceSelector, ServiceWeight, WireProtocol,
+    InstanceId, MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor, ServiceRegistration,
+    ServiceSelector, ServiceWeight, WireProtocol,
 };
 use fusen_nacos::{NacosConfig, NacosConfigSource, NacosRegistry};
 use fusen_register::{RegistrationRequest, Registry, SubscriptionRequest, directory::Directory};
@@ -63,12 +63,7 @@ async fn live_registry_case(
     let selector = ServiceSelector::new(resource, Some(GROUP.into()), Some("1".into()))?;
     let descriptor = Box::leak(Box::new(ServiceDescriptor::new(
         selector.clone(),
-        vec![MethodDescriptor::new(
-            MethodId::new(0),
-            "ping",
-            Idempotency::Safe,
-            None,
-        )?],
+        vec![MethodDescriptor::new(MethodId::new(0), "ping", None)?],
     )?));
     let instance_id = InstanceId::new(format!("{resource}-instance"))?;
     let registration = Arc::new(ServiceRegistration::new(

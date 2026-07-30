@@ -31,27 +31,28 @@ pub struct CreateUser {
 #[interface(name = "user", group = "prod", version = "1")]
 pub trait UserApi {
     #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}")
+        method = "GET", path = "/users/{id}"
     )]
     async fn get(
         &self,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expand: Option<bool>,
+        id: String,
+        #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
     #[fusen_rs::method(
-        idempotency = "none",
-        spring(method = "POST", path = "/users")
+        method = "POST", path = "/users"
     )]
     async fn create(
         &self,
-        #[rpc(body)] user: CreateUser,
+        user: CreateUser,
+        audit: bool,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-The macro generates `UserApiClient` and `UserApiServer<T>`. The generated client and user handler both implement `UserApi`; all clients use the generic `ClientBuilder<UserApiClient>`. Each business parameter declares its Spring role with `#[rpc(path)]`, `#[rpc(query)]`, or `#[rpc(body)]`, and may override its wire name with `name = "..."`. A method may have at most one body parameter; repeated query values use `Vec<T>`. Path and query values must serialize as JSON scalars, while the body may be any JSON value. Methods that need request headers, extensions, or framework call information may additionally declare one `#[rpc(call)] call: RpcCall` parameter. Zero-argument methods require no placeholder parameter. Fusen V1 always encodes every business parameter by name in its `arguments` object. Invalid parameter mappings fail during macro expansion, and invalid serialized values fail locally before network I/O.
+The macro generates `UserApiClient` and `UserApiServer<T>`. The generated client and user handler both implement `UserApi`; all clients use the generic `ClientBuilder<UserApiClient>`. Every interface method requires `#[method(method = "...", path = "...")]`; the generated client uses it to build requests, the generated server uses it to route requests, and retry eligibility follows the standard HTTP method.
+
+Parameter locations are inferred deterministically. A parameter whose wire name matches a `{placeholder}` is a path parameter. Other GET, HEAD, OPTIONS, and DELETE parameters are query parameters. Other POST, PUT, and PATCH parameters become fields in one synthesized JSON body object, so `create(user, audit)` sends `{"user": ..., "audit": ...}` even when only one body field exists. Use `#[param(query)]` to override the default, `#[param(body)]` for one complete raw JSON body, `#[param(context)]` for a non-wire `RpcCall`, and `#[param(name = "...")]` to rename a wire parameter. A raw body cannot coexist with inferred body fields; repeated query values use `Vec<T>`. Fusen V1 always encodes every business parameter by name in its `arguments` object. Invalid mappings fail during macro expansion, and invalid serialized values fail locally before network I/O.
 
 ## Client
 
@@ -82,7 +83,7 @@ self-signed endpoints are outside the 0.9 contract.
 
 Use `.discover()` instead of `.direct(...)` after installing one `Registry` on the runtime builder. Discovery is shared per `(ServiceSelector, WireProtocol)` and exposes latest-wins snapshots with `Initializing`, `Ready`, `Stale`, `Unavailable`, and `Closed` states.
 
-One absolute deadline covers admission, middleware, every attempt, backoff, transport, and decode. Only methods declared `idempotent` or `safe` can retry. The built-in policy permits at most three total attempts and is constrained by a per-service retry budget. Endpoint and service circuit breakers, endpoint bulkheads, and fresh discovery snapshots are applied on each physical attempt.
+One absolute deadline covers admission, middleware, every attempt, backoff, transport, and decode. Retry eligibility is derived conservatively from the declared HTTP method: GET, HEAD, OPTIONS, PUT, and DELETE may retry; POST and PATCH never retry automatically. The built-in policy permits at most three total attempts and is constrained by a per-service retry budget. Endpoint and service circuit breakers, endpoint bulkheads, and fresh discovery snapshots are applied on each physical attempt.
 
 If a successful HTTP/wire response cannot decode its `result` into the generated method's Rust type, the call terminates without retry as `DataLoss` with code `invalid_result`. That selected endpoint attempt and the final service outcome are both recorded as protocol failures by their circuit breakers.
 

@@ -52,7 +52,7 @@ impl RetryPolicy for ExternalRetryPolicy {
         let _ = (
             context.completed_attempts(),
             context.max_attempts(),
-            context.idempotency(),
+            context.method_allows_retries(),
             context.failure(),
             context.remaining(),
         );

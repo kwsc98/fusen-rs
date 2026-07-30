@@ -1,5 +1,5 @@
 error: RPC methods must use RpcError as their error type
- --> tests/ui/lookalike_rpc_error.rs:9:57
-  |
-9 |     async fn get(&self) -> Result<rpc::RpcResponse<()>, lookalike::RpcError>;
-  |                                                         ^^^^^^^^^^^^^^^^^^^
+  --> tests/ui/lookalike_rpc_error.rs:10:57
+   |
+10 |     async fn get(&self) -> Result<rpc::RpcResponse<()>, lookalike::RpcError>;
+   |                                                         ^^^^^^^^^^^^^^^^^^^

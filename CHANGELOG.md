@@ -11,7 +11,7 @@
 ### Public Contract
 
 - Workspace 统一为 Rust 1.97、Edition 2024、resolver 3、禁止 unsafe，并集中 lint policy。
-- 接口声明统一为 `#[interface]` trait 宏和 `#[method]` 元数据；Client 与 Handler 实现同一个 trait，方法直接接收零到多个参数并返回 `Result<RpcResponse<T>, RpcError>`。业务参数用 `#[rpc(path/query/body)]` 声明 wire 角色，可选 `#[rpc(call)] RpcCall` 传递调用元数据。
+- 接口声明统一为 `#[interface]` trait 宏；Client 与 Handler 实现同一个 trait，方法直接接收零到多个参数并返回 `Result<RpcResponse<T>, RpcError>`。每个方法必须用 `#[method(method = "...", path = "...")]` 声明请求语义；path/query/body field 按 method、path placeholder 与参数名确定性推断，`#[param(query/body/context/name)]` 只处理显式覆盖和调用上下文。
 - 调用错误拆分为 `RpcError`、`ClientError`、`ServerError`、`RegistryError` 与 `ConfigError`，字段私有并提供稳定分类/getter。
 - 公开扩展面收敛为 Middleware、Registry、InstanceRouter、LoadBalancer、RetryPolicy、ConfigSource 与 MetricsRecorder；transport/codec/acceptor/pool/lifecycle internals 全部私有。
 - 所有配置采用私有字段、`Default`、builder/setter 与 getter；可扩展 enum/error 标记为 non-exhaustive。
@@ -26,6 +26,7 @@
 - Client 支持 canonical `http://`/`https://` endpoint；HTTPS 使用 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots、严格证书/hostname 验证与 Fusen ALPN `h2`，不提供明文降级、自定义 CA 或 mTLS。
 - Server listener 保持明文 HTTP/1.1/h2c；HTTPS advertised endpoint 只表示由 ingress、sidecar、反向代理或 service mesh 提供的外部 TLS 终止地址。
 - Client 使用 logical invocation/attempt 分层，一个 deadline 覆盖 admission、Middleware、retries、backoff、transport 与 decode。
+- 自动重试资格由标准 HTTP method 保守推导：GET、HEAD、OPTIONS、PUT、DELETE 允许重放，POST、PATCH 和没有 HTTP mapping 的方法禁止自动重试；不接受用户自报的幂等标记。
 - 增加 retry token budget、endpoint/service circuit breaker、endpoint bulkhead、有界可选 queue 与全局 request/response byte budgets。
 - Retry-After 同时支持 delta-seconds 与 HTTP-date；可重放请求模板和分段响应从序列化前到 Hyper transport 消费/取消 payload 全程持有 byte permit，framing/codec/socket buffer 作为独立有界 transport overhead。
 - Typed result 解码失败以非重试 `DataLoss`/`invalid_result` 终止，并作为 endpoint attempt 与 service final outcome 的 protocol breaker failure 记账。

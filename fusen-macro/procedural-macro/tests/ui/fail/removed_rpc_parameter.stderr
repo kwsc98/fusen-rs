@@ -1,0 +1,5 @@
+error: `#[rpc(...)]` was removed; use `#[param(...)]`
+  --> tests/ui/fail/removed_rpc_parameter.rs:11:9
+   |
+11 |         #[rpc(path)] id: String,
+   |         ^^^^^^^^^^^^

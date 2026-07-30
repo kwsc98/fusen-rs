@@ -22,7 +22,7 @@ x-fusen-service-version: ...     # optional
 
 ## Spring Cloud V1
 
-Spring Cloud V1 在 `http://` 与 `https://` endpoint 上都使用 HTTP/1.1。Method、path、query 与唯一可选 JSON body 完全来自 `method` 属性；成功响应是 raw JSON，Content-Type 为 `application/json`。HEAD 映射仅允许 unit 成功类型，客户端不读取其响应 body；失败时因 HTTP 不传输 Problem Details body，客户端以 HTTP status 生成 `remote_head_error`。Path placeholder 与 query 值使用结构化 URI 编码，query 支持重复 key；本协议不声明完整 Spring MVC 兼容。
+Spring Cloud V1 在 `http://` 与 `https://` endpoint 上都使用 HTTP/1.1。Method 与 path 来自必需的 `method` 属性；参数按接口规则推断为 path、query 或 JSON body object field，也可显式声明 query 或唯一 raw JSON body。成功响应是 raw JSON，Content-Type 为 `application/json`。HEAD 映射仅允许 unit 成功类型，客户端不读取其响应 body；失败时因 HTTP 不传输 Problem Details body，客户端以 HTTP status 生成 `remote_head_error`。Path placeholder 与 query 值使用结构化 URI 编码，query 支持重复 key；本协议不声明完整 Spring MVC 兼容。
 
 ## 控制 Header
 

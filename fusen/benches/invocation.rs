@@ -22,11 +22,8 @@ const CONCURRENCIES: [usize; 2] = [1, 100];
 
 #[interface(name = "benchmark")]
 trait BenchmarkService {
-    #[method(
-        idempotency = "none",
-        spring(method = "POST", path = "/benchmark/echo")
-    )]
-    async fn echo(&self, #[rpc(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
+    #[method(method = "POST", path = "/benchmark/echo")]
+    async fn echo(&self, #[param(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
 }
 
 struct BenchmarkServiceImpl;

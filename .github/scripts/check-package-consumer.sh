@@ -74,7 +74,7 @@ use fusen_rs::{ClientBuilder, ClientRuntime, RpcError, RpcResponse, interface};
 
 #[interface(name = "package-consumer")]
 pub trait PackageConsumerApi {
-    #[fusen_rs::method(idempotency = "safe")]
+    #[fusen_rs::method(method = "GET", path = "/ping")]
     async fn ping(&self) -> Result<RpcResponse<String>, RpcError>;
 }
 

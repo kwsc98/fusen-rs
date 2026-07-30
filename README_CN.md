@@ -31,27 +31,28 @@ pub struct CreateUser {
 #[interface(name = "user", group = "prod", version = "1")]
 pub trait UserApi {
     #[fusen_rs::method(
-        idempotency = "safe",
-        spring(method = "GET", path = "/users/{id}")
+        method = "GET", path = "/users/{id}"
     )]
     async fn get(
         &self,
-        #[rpc(path)] id: String,
-        #[rpc(query)] expand: Option<bool>,
+        id: String,
+        #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
     #[fusen_rs::method(
-        idempotency = "none",
-        spring(method = "POST", path = "/users")
+        method = "POST", path = "/users"
     )]
     async fn create(
         &self,
-        #[rpc(body)] user: CreateUser,
+        user: CreateUser,
+        audit: bool,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 ```
 
-宏生成 `UserApiClient` 与 `UserApiServer<T>`。生成 Client 和用户 Handler 都实现 `UserApi`，所有 Client 统一使用 `ClientBuilder<UserApiClient>`。每个业务参数通过 `#[rpc(path)]`、`#[rpc(query)]` 或 `#[rpc(body)]` 声明 Spring wire 角色，并可用 `name = "..."` 覆盖 wire name；每个方法最多一个 body，重复 query 使用 `Vec<T>`。Path/query 必须序列化为 JSON 标量，body 可为任意 JSON 值。需要请求 headers、extensions 或框架调用信息的方法可以额外声明一个 `#[rpc(call)] call: RpcCall` 参数。无业务入参的方法无需占位参数。Fusen V1 始终按名称把全部业务参数编码到 `arguments` object；非法参数映射在宏展开阶段失败，非法序列化值在网络 I/O 前于本地失败。
+宏生成 `UserApiClient` 与 `UserApiServer<T>`。生成 Client 和用户 Handler 都实现 `UserApi`，所有 Client 统一使用 `ClientBuilder<UserApiClient>`。每个接口方法都必须声明 `#[method(method = "...", path = "...")]`；生成的 Client 用它构造请求，生成的 Server 用它匹配路由，自动重试资格也由标准 HTTP method 推导。
+
+参数位置采用确定性推断：wire name 与 `{placeholder}` 同名时为 path；其余 GET、HEAD、OPTIONS、DELETE 参数默认为 query；其余 POST、PUT、PATCH 参数成为同一个 JSON body object 的字段，因此 `create(user, audit)` 固定发送 `{"user": ..., "audit": ...}`，即使只有一个字段也不会退化成 raw body。`#[param(query)]` 用于覆盖默认位置，`#[param(body)]` 表示唯一的完整 JSON body，`#[param(context)]` 注入不进入 wire 的 `RpcCall`，`#[param(name = "...")]` 修改 wire name。Raw body 不能与推断 body field 混用；重复 query 使用 `Vec<T>`。Fusen V1 始终按名称把全部业务参数编码到 `arguments` object；非法映射在宏展开阶段失败，非法序列化值在网络 I/O 前于本地失败。
 
 ## 客户端
 
@@ -81,7 +82,7 @@ TLS。Runtime 不读取系统 trust store，也不提供自定义 CA、mTLS 或�
 
 在 runtime builder 安装一个 `Registry` 后，用 `.discover()` 替代 `.direct(...)` 即可启用发现。每个 `(ServiceSelector, WireProtocol)` 共享唯一订阅，latest-wins 快照状态为 `Initializing`、`Ready`、`Stale`、`Unavailable` 或 `Closed`。
 
-一个绝对 deadline 覆盖 admission、Middleware、全部 attempts、退避、传输与 decode。只有声明为 `idempotent` 或 `safe` 的方法可重试；内置策略最多执行三次总 attempts，并受每服务 token budget 的硬约束。每次物理 attempt 都重新读取发现快照，并应用 endpoint/service 熔断器和 endpoint bulkhead。
+一个绝对 deadline 覆盖 admission、Middleware、全部 attempts、退避、传输与 decode。重试资格由声明的 HTTP method 保守推导：GET、HEAD、OPTIONS、PUT、DELETE 可重试，POST、PATCH 永不自动重试。内置策略最多执行三次总 attempts，并受每服务 token budget 的硬约束。每次物理 attempt 都重新读取发现快照，并应用 endpoint/service 熔断器和 endpoint bulkhead。
 
 如果 HTTP/wire 成功响应中的 `result` 无法反序列化为生成方法声明的 Rust 类型，调用会以 `DataLoss`/`invalid_result` 非重试终止；该 selected endpoint attempt 与 service 最终结果都会按 protocol failure 计入对应熔断器。
 

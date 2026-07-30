@@ -1,0 +1,5 @@
+error: unknown method field `idempotency`; expected `method` or `path`
+ --> tests/ui/fail/removed_idempotency.rs:8:38
+  |
+8 |     #[fusen_procedural_macro::method(idempotency = "safe")]
+  |                                      ^^^^^^^^^^^^^^^^^^^^

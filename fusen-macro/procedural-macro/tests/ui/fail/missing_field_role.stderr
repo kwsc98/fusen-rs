@@ -1,5 +1,0 @@
-error: each RPC parameter must declare #[rpc(call)], #[rpc(path)], #[rpc(query)], or #[rpc(body)]
- --> tests/ui/fail/missing_field_role.rs:8:26
-  |
-8 |     async fn call(&self, id: String) -> Result<RpcResponse<()>, RpcError>;
-  |                          ^^^^^^^^^^

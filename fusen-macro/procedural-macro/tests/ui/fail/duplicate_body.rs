@@ -5,10 +5,11 @@ struct RpcResponse<T>(T);
 
 #[interface(name = "duplicate-body")]
 trait DuplicateBody {
+    #[fusen_procedural_macro::method(method = "POST", path = "/duplicate")]
     async fn call(
         &self,
-        #[rpc(body)] first: String,
-        #[rpc(body)] second: String,
+        #[param(body)] first: String,
+        #[param(body)] second: String,
     ) -> Result<RpcResponse<()>, RpcError>;
 }
 

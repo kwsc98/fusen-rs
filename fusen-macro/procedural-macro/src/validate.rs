@@ -1,4 +1,4 @@
-use crate::args::{MethodArgs, ServiceArgs, SpringArgs};
+use crate::args::{MethodArgs, ServiceArgs};
 use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::visit::Visit;
@@ -9,40 +9,17 @@ use syn::{
 
 const MAX_IDENTITY_BYTES: usize = 128;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Idempotency {
-    None,
-    Idempotent,
-    Safe,
-}
-
-impl Idempotency {
-    fn parse(value: Option<&syn::LitStr>) -> syn::Result<Self> {
-        let Some(value) = value else {
-            return Ok(Self::None);
-        };
-        match value.value().as_str() {
-            "none" => Ok(Self::None),
-            "idempotent" => Ok(Self::Idempotent),
-            "safe" => Ok(Self::Safe),
-            _ => Err(syn::Error::new_spanned(
-                value,
-                "idempotency must be one of `none`, `idempotent`, or `safe`",
-            )),
-        }
-    }
-}
-
-pub(crate) struct SpringMapping {
+pub(crate) struct HttpMapping {
     pub(crate) method: String,
     pub(crate) path: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParameterSource {
-    Call,
+    Context,
     Path,
     Query,
+    BodyField,
     Body,
 }
 
@@ -60,8 +37,7 @@ pub(crate) struct Method {
     pub(crate) ident: Ident,
     pub(crate) parameters: Vec<Parameter>,
     pub(crate) response: Type,
-    pub(crate) idempotency: Idempotency,
-    pub(crate) spring: Option<SpringMapping>,
+    pub(crate) http: HttpMapping,
 }
 
 pub(crate) struct Service {
@@ -108,7 +84,7 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
     }
 
     let mut methods = Vec::with_capacity(item.items.len());
-    let mut spring_routes = BTreeMap::<(String, String), Ident>::new();
+    let mut http_routes = BTreeMap::<(String, String), Ident>::new();
     for trait_item in &item.items {
         let TraitItem::Fn(method) = trait_item else {
             return Err(syn::Error::new_spanned(
@@ -124,47 +100,38 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
             ));
         }
         validate_signature(&method.sig)?;
-        let parameters = parameters(&method.sig)?;
-        let response = response_type(&method.sig.output)?;
         validate_identity(
             method.sig.ident.to_string().trim_start_matches("r#"),
             "method name",
             method.sig.ident.span(),
         )?;
-        let method_args = method_args(&method.attrs)?;
-        let idempotency = Idempotency::parse(method_args.idempotency.as_ref())?;
-        let spring = method_args
-            .spring
-            .map(|spring| validate_spring(spring, idempotency, &parameters, &method.sig.ident))
-            .transpose()?;
-        if spring
-            .as_ref()
-            .is_some_and(|mapping| mapping.method == "HEAD")
+        let method_args = method_args(&method.attrs, &method.sig.ident)?;
+        let http = validate_http(method_args, &method.sig.ident)?;
+        let parameters = parameters(&method.sig, &http)?;
+        let response = response_type(&method.sig.output)?;
+        if http.method == "HEAD"
             && !matches!(&response, Type::Tuple(tuple) if tuple.elems.is_empty())
         {
             return Err(syn::Error::new_spanned(
                 &method.sig.output,
-                "Spring HEAD mappings must return Result<RpcResponse<()>, RpcError>",
+                "HTTP HEAD mappings must return Result<RpcResponse<()>, RpcError>",
             ));
         }
-        if let Some(spring) = &spring {
-            let key = (spring.method.clone(), route_shape(&spring.path));
-            if let Some(first) = spring_routes.insert(key, method.sig.ident.clone()) {
-                return Err(syn::Error::new(
-                    method.sig.ident.span(),
-                    format!(
-                        "duplicate Spring route {} {}; it conflicts with method `{first}`",
-                        spring.method, spring.path
-                    ),
-                ));
-            }
+        let key = (http.method.clone(), route_shape(&http.path));
+        if let Some(first) = http_routes.insert(key, method.sig.ident.clone()) {
+            return Err(syn::Error::new(
+                method.sig.ident.span(),
+                format!(
+                    "duplicate HTTP route {} {}; it conflicts with method `{first}`",
+                    http.method, http.path
+                ),
+            ));
         }
         methods.push(Method {
             ident: method.sig.ident.clone(),
             parameters,
             response,
-            idempotency,
-            spring,
+            http,
         });
     }
 
@@ -184,7 +151,7 @@ pub(crate) fn is_method_attr(attribute: &Attribute) -> bool {
         .is_some_and(|segment| segment.ident == "method")
 }
 
-fn method_args(attributes: &[Attribute]) -> syn::Result<MethodArgs> {
+fn method_args(attributes: &[Attribute], method_ident: &Ident) -> syn::Result<MethodArgs> {
     let mut parsed = None;
     for attribute in attributes
         .iter()
@@ -208,7 +175,12 @@ fn method_args(attributes: &[Attribute]) -> syn::Result<MethodArgs> {
         };
         parsed = Some(args);
     }
-    Ok(parsed.unwrap_or_default())
+    parsed.ok_or_else(|| {
+        syn::Error::new(
+            method_ident.span(),
+            "each RPC method must declare #[method(method = \"...\", path = \"/...\")]",
+        )
+    })
 }
 
 fn validate_trait_generics(generics: &Generics) -> syn::Result<()> {
@@ -297,11 +269,14 @@ fn validate_signature(signature: &Signature) -> syn::Result<()> {
     Ok(())
 }
 
-fn parameters(signature: &Signature) -> syn::Result<Vec<Parameter>> {
+fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Parameter>> {
     let mut parameters = Vec::with_capacity(signature.inputs.len().saturating_sub(1));
     let mut names = BTreeSet::new();
-    let mut body = None;
-    let mut call = None;
+    let placeholders = validate_route(&http.path, signature.ident.span())?;
+    let body_fields_by_default = matches!(http.method.as_str(), "POST" | "PUT" | "PATCH");
+    let mut raw_body = None;
+    let mut first_body_field = None;
+    let mut context = None;
 
     for input in signature.inputs.iter().skip(1) {
         let FnArg::Typed(input) = input else {
@@ -320,28 +295,31 @@ fn parameters(signature: &Signature) -> syn::Result<Vec<Parameter>> {
             ));
         }
 
-        let mut source = None;
+        if let Some(attribute) = input.attrs.iter().find(|attribute| is_rpc_attr(attribute)) {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                "`#[rpc(...)]` was removed; use `#[param(...)]`",
+            ));
+        }
+
+        let mut explicit_source = None;
         let mut wire_name = None;
         for attribute in input
             .attrs
             .iter()
-            .filter(|attribute| is_rpc_attr(attribute))
+            .filter(|attribute| is_param_attr(attribute))
         {
             attribute.parse_nested_meta(|meta| {
-                if meta.path.is_ident("call")
-                    || meta.path.is_ident("path")
+                if meta.path.is_ident("context")
                     || meta.path.is_ident("query")
                     || meta.path.is_ident("body")
                 {
-                    if source.is_some() {
-                        return Err(meta.error(
-                            "each RPC parameter must declare exactly one of call, path, query, or body",
-                        ));
+                    if explicit_source.is_some() {
+                        return Err(meta
+                            .error("a parameter may declare only one of context, query, or body"));
                     }
-                    source = Some(if meta.path.is_ident("call") {
-                        ParameterSource::Call
-                    } else if meta.path.is_ident("path") {
-                        ParameterSource::Path
+                    explicit_source = Some(if meta.path.is_ident("context") {
+                        ParameterSource::Context
                     } else if meta.path.is_ident("query") {
                         ParameterSource::Query
                     } else {
@@ -350,57 +328,52 @@ fn parameters(signature: &Signature) -> syn::Result<Vec<Parameter>> {
                     Ok(())
                 } else if meta.path.is_ident("name") {
                     if wire_name.is_some() {
-                        return Err(meta.error("duplicate rpc name"));
+                        return Err(meta.error("duplicate parameter name"));
                     }
                     wire_name = Some(meta.value()?.parse::<syn::LitStr>()?);
                     Ok(())
                 } else {
-                    Err(meta.error("unknown rpc parameter field; expected call, path, query, body, or name"))
+                    Err(meta
+                        .error("unknown parameter field; expected context, query, body, or name"))
                 }
             })?;
         }
-        let source = source.ok_or_else(|| {
-            syn::Error::new_spanned(
-                input,
-                "each RPC parameter must declare #[rpc(call)], #[rpc(path)], #[rpc(query)], or #[rpc(body)]",
-            )
-        })?;
         let rust_name = pattern
             .ident
             .to_string()
             .trim_start_matches("r#")
             .to_owned();
 
-        if source == ParameterSource::Call {
+        if explicit_source == Some(ParameterSource::Context) {
             if wire_name.is_some() {
                 return Err(syn::Error::new_spanned(
                     input,
-                    "#[rpc(call)] parameters must not declare a wire name",
+                    "#[param(context)] parameters must not declare a wire name",
                 ));
             }
-            if call.replace(pattern.ident.span()).is_some() {
+            if context.replace(pattern.ident.span()).is_some() {
                 return Err(syn::Error::new_spanned(
                     input,
-                    "an RPC method may declare at most one #[rpc(call)] parameter",
+                    "an RPC method may declare at most one #[param(context)] parameter",
                 ));
             }
             let Type::Path(kind) = input.ty.as_ref() else {
                 return Err(syn::Error::new_spanned(
                     &input.ty,
-                    "#[rpc(call)] parameters must use the RpcCall type",
+                    "#[param(context)] parameters must use the RpcCall type",
                 ));
             };
             if !is_runtime_type_path(&kind.path, "RpcCall") {
                 return Err(syn::Error::new_spanned(
                     &input.ty,
-                    "#[rpc(call)] parameters must use the RpcCall type",
+                    "#[param(context)] parameters must use the RpcCall type",
                 ));
             }
             parameters.push(Parameter {
                 ident: pattern.ident.clone(),
                 kind: input.ty.as_ref().clone(),
                 wire_name: String::new(),
-                source,
+                source: ParameterSource::Context,
                 repeated: false,
                 parse_spring_json_primitive: false,
             });
@@ -415,11 +388,32 @@ fn parameters(signature: &Signature) -> syn::Result<Vec<Parameter>> {
                 format!("duplicate RPC wire parameter name `{wire_name}`"),
             ));
         }
-        if source == ParameterSource::Body && body.replace(pattern.ident.span()).is_some() {
+
+        let source = explicit_source.unwrap_or_else(|| {
+            if placeholders.contains(&wire_name) {
+                ParameterSource::Path
+            } else if body_fields_by_default {
+                ParameterSource::BodyField
+            } else {
+                ParameterSource::Query
+            }
+        });
+        if source == ParameterSource::Body
+            && matches!(http.method.as_str(), "GET" | "HEAD" | "OPTIONS")
+        {
             return Err(syn::Error::new_spanned(
                 input,
-                "an RPC method may declare at most one #[rpc(body)] parameter",
+                format!("{} methods do not accept a JSON request body", http.method),
             ));
+        }
+        if source == ParameterSource::Body && raw_body.replace(pattern.ident.span()).is_some() {
+            return Err(syn::Error::new_spanned(
+                input,
+                "an RPC method may declare at most one #[param(body)] parameter",
+            ));
+        }
+        if source == ParameterSource::BodyField && first_body_field.is_none() {
+            first_body_field = Some(pattern.ident.span());
         }
         let repeated = if source == ParameterSource::Query {
             if direct_generic_type(&input.ty, "Option")
@@ -452,9 +446,32 @@ fn parameters(signature: &Signature) -> syn::Result<Vec<Parameter>> {
             wire_name,
             source,
             repeated,
-            parse_spring_json_primitive: source != ParameterSource::Body
-                && is_json_primitive_type(scalar_type),
+            parse_spring_json_primitive: matches!(
+                source,
+                ParameterSource::Path | ParameterSource::Query
+            ) && is_json_primitive_type(scalar_type),
         });
+    }
+
+    for placeholder in &placeholders {
+        if !parameters.iter().any(|parameter| {
+            parameter.source == ParameterSource::Path && parameter.wire_name == *placeholder
+        }) {
+            return Err(syn::Error::new(
+                signature.ident.span(),
+                format!(
+                    "HTTP path parameter `{placeholder}` requires a method parameter with the same wire name"
+                ),
+            ));
+        }
+    }
+    if raw_body.is_some()
+        && let Some(span) = first_body_field
+    {
+        return Err(syn::Error::new(
+            span,
+            "default body fields cannot be combined with a #[param(body)] raw body; mark the other parameters #[param(query)]",
+        ));
     }
 
     Ok(parameters)
@@ -577,22 +594,17 @@ fn wrapper_inner(kind: &Type, wrapper: &str, position: &str) -> syn::Result<Type
     }
 }
 
-fn validate_spring(
-    args: SpringArgs,
-    idempotency: Idempotency,
-    parameters: &[Parameter],
-    method_ident: &Ident,
-) -> syn::Result<SpringMapping> {
+fn validate_http(args: MethodArgs, method_ident: &Ident) -> syn::Result<HttpMapping> {
     let method = args.method.ok_or_else(|| {
         syn::Error::new(
             method_ident.span(),
-            "Spring mapping requires method = \"...\"",
+            "method attribute requires method = \"...\"",
         )
     })?;
     let path = args.path.ok_or_else(|| {
         syn::Error::new(
             method_ident.span(),
-            "Spring mapping requires path = \"/...\"",
+            "method attribute requires path = \"/...\"",
         )
     })?;
     let method_value = method.value().to_ascii_uppercase();
@@ -602,59 +614,12 @@ fn validate_spring(
     ) {
         return Err(syn::Error::new_spanned(
             method,
-            format!("unsupported Spring HTTP method {method_value}"),
+            format!("unsupported HTTP method {method_value}"),
         ));
-    }
-    match idempotency {
-        Idempotency::Safe if !matches!(method_value.as_str(), "GET" | "HEAD") => {
-            return Err(syn::Error::new_spanned(
-                method,
-                "safe methods may use only GET or HEAD Spring mappings",
-            ));
-        }
-        Idempotency::Idempotent
-            if !matches!(
-                method_value.as_str(),
-                "GET" | "HEAD" | "PUT" | "DELETE" | "POST"
-            ) =>
-        {
-            return Err(syn::Error::new_spanned(
-                method,
-                "idempotent Spring mappings may use GET, HEAD, PUT, DELETE, or an explicitly declared POST",
-            ));
-        }
-        _ => {}
     }
     let path_value = path.value();
-    let placeholders = validate_route(&path_value, path.span())?;
-    let wire_parameters = parameters
-        .iter()
-        .filter(|parameter| parameter.source != ParameterSource::Call)
-        .collect::<Vec<_>>();
-    for placeholder in &placeholders {
-        if !wire_parameters.iter().any(|parameter| {
-            parameter.source == ParameterSource::Path && parameter.wire_name == *placeholder
-        }) {
-            return Err(syn::Error::new_spanned(
-                &path,
-                format!(
-                    "Spring path parameter `{placeholder}` requires a matching #[rpc(path)] method parameter"
-                ),
-            ));
-        }
-    }
-    if let Some(parameter) = wire_parameters.iter().find(|parameter| {
-        parameter.source == ParameterSource::Path && !placeholders.contains(&parameter.wire_name)
-    }) {
-        return Err(syn::Error::new(
-            parameter.ident.span(),
-            format!(
-                "#[rpc(path)] parameter `{}` is absent from the Spring path template",
-                parameter.wire_name
-            ),
-        ));
-    }
-    Ok(SpringMapping {
+    validate_route(&path_value, path.span())?;
+    Ok(HttpMapping {
         method: method_value,
         path: path_value,
     })
@@ -668,7 +633,7 @@ fn validate_route(path: &str, span: proc_macro2::Span) -> syn::Result<BTreeSet<S
     {
         return Err(syn::Error::new(
             span,
-            "Spring paths must be absolute canonical route templates without query or fragment",
+            "HTTP paths must be absolute canonical route templates without query or fragment",
         ));
     }
     let mut names = BTreeSet::new();
@@ -681,25 +646,26 @@ fn validate_route(path: &str, span: proc_macro2::Span) -> syn::Result<BTreeSet<S
             .strip_prefix('{')
             .and_then(|value| value.strip_suffix('}'))
         {
-            validate_identity(name, "Spring path parameter", span)?;
+            validate_identity(name, "HTTP path parameter", span)?;
             if !names.insert(name.to_owned()) {
-                return Err(syn::Error::new(
-                    span,
-                    "Spring path parameters must be unique",
-                ));
+                return Err(syn::Error::new(span, "HTTP path parameters must be unique"));
             }
         } else if segment.contains(['{', '}']) {
             return Err(syn::Error::new(
                 span,
-                "Spring path parameters must occupy a complete path segment",
+                "HTTP path parameters must occupy a complete path segment",
             ));
         }
     }
     Ok(names)
 }
 
-pub(crate) fn is_rpc_attr(attribute: &Attribute) -> bool {
+fn is_rpc_attr(attribute: &Attribute) -> bool {
     attribute.path().is_ident("rpc")
+}
+
+pub(crate) fn is_param_attr(attribute: &Attribute) -> bool {
+    attribute.path().is_ident("param")
 }
 
 fn direct_generic_type<'a>(kind: &'a Type, expected: &str) -> Option<&'a Type> {

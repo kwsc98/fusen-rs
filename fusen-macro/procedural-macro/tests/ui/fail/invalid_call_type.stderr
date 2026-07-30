@@ -1,5 +1,5 @@
-error: #[rpc(call)] parameters must use the RpcCall type
-  --> tests/ui/fail/invalid_call_type.rs:10:28
+error: #[param(context)] parameters must use the RpcCall type
+  --> tests/ui/fail/invalid_call_type.rs:11:33
    |
-10 |         #[rpc(call)] call: String,
-   |                            ^^^^^^
+11 |         #[param(context)] call: String,
+   |                                 ^^^^^^

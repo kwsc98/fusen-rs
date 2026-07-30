@@ -132,14 +132,14 @@ pub enum RetryHint {
     /// The runtime must not retry based on this error.
     #[default]
     Never,
-    /// An idempotent invocation may be retried according to its retry policy.
+    /// A replayable invocation may be retried according to its retry policy.
     Retryable,
-    /// An idempotent invocation may be retried after at least this duration.
+    /// A replayable invocation may be retried after at least this duration.
     After(Duration),
 }
 
 impl RetryHint {
-    /// Returns whether this hint permits retrying an idempotent invocation.
+    /// Returns whether this hint permits retrying a replayable invocation.
     pub const fn is_retryable(self) -> bool {
         !matches!(self, Self::Never)
     }
@@ -511,8 +511,8 @@ impl RpcError {
 
     /// Sets the retry recommendation.
     ///
-    /// Application errors remain non-retryable; retry safety is owned by the runtime and the
-    /// method's idempotency declaration.
+    /// Application errors remain non-retryable; replay eligibility is owned by the runtime and
+    /// derived from the method's standard HTTP mapping.
     pub fn with_retry_hint(mut self, retry_hint: RetryHint) -> Self {
         if self.inner.origin != RpcOrigin::Application {
             self.inner.retry_hint = retry_hint;

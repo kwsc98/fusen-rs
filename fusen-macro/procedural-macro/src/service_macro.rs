@@ -145,7 +145,7 @@ fn generated_trait(
             };
             input
                 .attrs
-                .retain(|attribute| !validate::is_rpc_attr(attribute));
+                .retain(|attribute| !validate::is_param_attr(attribute));
         }
         let response = &contract.response;
         method.sig.asyncness = None;
@@ -174,53 +174,44 @@ fn descriptor(
     let methods = interface.methods.iter().enumerate().map(|(index, method)| {
         let identity = method.ident.to_string();
         let identity = identity.trim_start_matches("r#");
-        let idempotency = match method.idempotency {
-            validate::Idempotency::None => quote!(None),
-            validate::Idempotency::Idempotent => quote!(Idempotent),
-            validate::Idempotency::Safe => quote!(Safe),
+        let mapping = &method.http;
+        let http_method = format_ident!("{}", mapping.method);
+        let path = &mapping.path;
+        let fields = method.parameters.iter().filter_map(|parameter| {
+            if parameter.source == validate::ParameterSource::Context {
+                return None;
+            }
+            let name = &parameter.wire_name;
+            let source = match parameter.source {
+                validate::ParameterSource::Path => quote!(Path),
+                validate::ParameterSource::Query => quote!(Query),
+                validate::ParameterSource::BodyField => quote!(BodyField),
+                validate::ParameterSource::Body => quote!(Body),
+                validate::ParameterSource::Context => unreachable!(),
+            };
+            let repeated = parameter.repeated;
+            let parse_primitive = parameter.parse_spring_json_primitive;
+            Some(quote! {
+                #abi::RpcField::new(
+                    #name,
+                    #abi::RpcFieldSource::#source,
+                    #repeated,
+                    #parse_primitive,
+                )
+            })
+        });
+        let http = quote! {
+            Some(#abi::http_method(
+                #abi::http::Method::#http_method,
+                #path,
+                &[#(#fields),*],
+            )?)
         };
-        let spring = method.spring.as_ref().map_or_else(
-            || quote!(None),
-            |spring| {
-                let http_method = format_ident!("{}", spring.method);
-                let path = &spring.path;
-                let fields = method.parameters.iter().filter_map(|parameter| {
-                    if parameter.source == validate::ParameterSource::Call {
-                        return None;
-                    }
-                    let name = &parameter.wire_name;
-                    let source = match parameter.source {
-                        validate::ParameterSource::Path => quote!(Path),
-                        validate::ParameterSource::Query => quote!(Query),
-                        validate::ParameterSource::Body => quote!(Body),
-                        validate::ParameterSource::Call => unreachable!(),
-                    };
-                    let repeated = parameter.repeated;
-                    let parse_primitive = parameter.parse_spring_json_primitive;
-                    Some(quote! {
-                        #abi::RpcField::new(
-                            #name,
-                            #abi::RpcFieldSource::#source,
-                            #repeated,
-                            #parse_primitive,
-                        )
-                    })
-                });
-                quote! {
-                    Some(#abi::spring_method(
-                        #abi::http::Method::#http_method,
-                        #path,
-                        &[#(#fields),*],
-                    )?)
-                }
-            },
-        );
         quote! {
             #abi::MethodDescriptor::new(
                 #abi::MethodId::new(#index as u16),
                 #identity,
-                #abi::Idempotency::#idempotency,
-                #spring,
+                #http,
             ).map_err(|error| error.to_string())?
         }
     });
@@ -259,7 +250,7 @@ fn client_methods(
             let call = method
                 .parameters
                 .iter()
-                .find(|parameter| parameter.source == validate::ParameterSource::Call)
+                .find(|parameter| parameter.source == validate::ParameterSource::Context)
                 .map_or_else(
                     || quote!(#abi::RpcCall::new()),
                     |parameter| {
@@ -268,7 +259,7 @@ fn client_methods(
                     },
                 );
             let arguments = method.parameters.iter().filter_map(|parameter| {
-                if parameter.source == validate::ParameterSource::Call {
+                if parameter.source == validate::ParameterSource::Context {
                     return None;
                 }
                 let ident = &parameter.ident;
@@ -317,7 +308,7 @@ fn dispatch_arms(
             let declarations = method.parameters.iter().map(|parameter| {
                 let ident = &parameter.ident;
                 let kind = &parameter.kind;
-                if parameter.source == validate::ParameterSource::Call {
+                if parameter.source == validate::ParameterSource::Context {
                     quote! {
                         let #ident: #kind = invocation.rpc_call();
                     }
@@ -359,13 +350,13 @@ mod tests {
         let item = syn::parse2(quote! {
             pub trait UserApi {
                 #[method(
-                    idempotency = "safe",
-                    spring(method = "GET", path = "/users/{id}")
+                    method = "GET",
+                    path = "/users/{id}"
                 )]
                 async fn get(
                     &self,
-                    #[rpc(path)] id: String,
-                    #[rpc(query)] expand: Option<bool>,
+                    id: String,
+                    expand: Option<bool>,
                 ) -> Result<RpcResponse<User>, RpcError>;
             }
         })

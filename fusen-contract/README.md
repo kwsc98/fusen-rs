@@ -6,8 +6,7 @@ network I/O and has no runtime lifecycle.
 
 The public contract includes:
 
-- `WireProtocol::{FusenV1, SpringCloudV1}`, `ProtocolSet`, and explicit
-  `Idempotency` semantics.
+- `WireProtocol::{FusenV1, SpringCloudV1}` and `ProtocolSet`.
 - `ServiceDescriptor`, `MethodDescriptor`, `ServiceSelector`, and Spring Cloud
   method/parameter metadata.
 - `ServiceRegistration`, `ServiceInstance`, stable `InstanceId`, and bounded

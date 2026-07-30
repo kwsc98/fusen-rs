@@ -1,0 +1,5 @@
+error: default body fields cannot be combined with a #[param(body)] raw body; mark the other parameters #[param(query)]
+  --> tests/ui/fail/mixed_body_modes.rs:12:9
+   |
+12 |         audit: bool,
+   |         ^^^^^
