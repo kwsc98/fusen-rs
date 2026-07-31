@@ -12,6 +12,22 @@ pub trait RenamedRuntimeApi {
         id: String,
         #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError>;
+
+    #[rpc::method(method = "POST", path = "/renamed/bindings")]
+    /// Exercises generated bindings whose source names overlap with framework internals.
+    async fn bindings(
+        &self,
+        arguments: String,
+        handler: String,
+        invocation: String,
+        method_id: String,
+        response: String,
+    ) -> Result<RpcResponse<String>, RpcError>;
+
+    #[rpc::method(method = "GET", path = "/renamed/raw/{type}")]
+    /// Exercises raw method and parameter identifiers through the real runtime ABI.
+    async fn r#match(&self, #[param(path)] r#type: String)
+    -> Result<RpcResponse<String>, RpcError>;
 }
 
 /// Minimal direct implementation used by the renamed-runtime consumer test.
@@ -24,6 +40,23 @@ impl RenamedRuntimeApi for Handler {
         _expand: Option<bool>,
     ) -> Result<RpcResponse<String>, RpcError> {
         Ok(RpcResponse::new(id))
+    }
+
+    async fn bindings(
+        &self,
+        arguments: String,
+        handler: String,
+        invocation: String,
+        method_id: String,
+        response: String,
+    ) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(format!(
+            "{arguments}:{handler}:{invocation}:{method_id}:{response}"
+        )))
+    }
+
+    async fn r#match(&self, r#type: String) -> Result<RpcResponse<String>, RpcError> {
+        Ok(RpcResponse::new(r#type))
     }
 }
 
@@ -45,6 +78,11 @@ mod tests {
         let spring = descriptor.methods()[0].spring_cloud().unwrap();
         assert_eq!(spring.method().as_str(), "GET");
         assert_eq!(spring.path(), "/renamed/{id}");
+        assert_eq!(descriptor.methods()[2].fusen_identity(), "match");
+        assert_eq!(
+            descriptor.methods()[2].spring_cloud().unwrap().path(),
+            "/renamed/raw/{type}"
+        );
 
         let _server = RenamedRuntimeApiServer::new(Handler);
     }

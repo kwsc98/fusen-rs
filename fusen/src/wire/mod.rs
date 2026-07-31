@@ -370,7 +370,10 @@ fn append_query(
     match cardinality {
         SpringCloudParameterCardinality::Scalar => match value {
             Value::Null => Ok(()),
-            Value::Array(_) => Err(invalid_query_cardinality(name, "a scalar or null")),
+            Value::Array(_) => Err(invalid_query_cardinality(
+                name,
+                "is an array but is declared scalar; add `#[param(query, repeated)]`",
+            )),
             value => {
                 let value = scalar_text(value, name)?;
                 query.push(format!(
@@ -383,7 +386,10 @@ fn append_query(
         },
         SpringCloudParameterCardinality::Repeated => {
             let Value::Array(values) = value else {
-                return Err(invalid_query_cardinality(name, "an array"));
+                return Err(invalid_query_cardinality(
+                    name,
+                    "is declared repeated but did not serialize as an array; serialize it as an array or remove `repeated`",
+                ));
             };
             for value in values {
                 let value = scalar_text(value, name)?;
@@ -399,11 +405,11 @@ fn append_query(
     }
 }
 
-fn invalid_query_cardinality(name: &str, expected: &str) -> RpcError {
+fn invalid_query_cardinality(name: &str, detail: &str) -> RpcError {
     RpcError::framework(
         RpcCategory::InvalidArgument,
         "invalid_spring_parameter",
-        format!("Spring query argument {name} must be {expected}"),
+        format!("Spring query argument {name} {detail}"),
     )
 }
 
@@ -1120,6 +1126,8 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(scalar_array.code().as_str(), "invalid_spring_parameter");
+        assert!(scalar_array.message().contains("enabled"));
+        assert!(scalar_array.message().contains("#[param(query, repeated)]"));
 
         let repeated_scalar = append_query(
             &mut Vec::new(),
@@ -1129,6 +1137,8 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(repeated_scalar.code().as_str(), "invalid_spring_parameter");
+        assert!(repeated_scalar.message().contains("tag"));
+        assert!(repeated_scalar.message().contains("remove `repeated`"));
     }
 
     #[test]

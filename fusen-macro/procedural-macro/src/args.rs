@@ -33,16 +33,19 @@ impl Parse for ServiceArgs {
                     &mut args.name,
                     parse_string(field.value.clone(), "name")?,
                     &field,
+                    "name",
                 )?,
                 "group" => set_once(
                     &mut args.group,
                     parse_string(field.value.clone(), "group")?,
                     &field,
+                    "group",
                 )?,
                 "version" => set_once(
                     &mut args.version,
                     parse_string(field.value.clone(), "version")?,
                     &field,
+                    "version",
                 )?,
                 unknown => {
                     return Err(syn::Error::new_spanned(
@@ -91,11 +94,13 @@ impl MethodArgs {
                     &mut args.method,
                     parse_string(field.value.clone(), "method")?,
                     &field,
+                    "method",
                 )?,
                 "path" => set_once(
                     &mut args.path,
                     parse_string(field.value.clone(), "path")?,
                     &field,
+                    "path",
                 )?,
                 unknown => {
                     return Err(syn::Error::new_spanned(
@@ -129,9 +134,17 @@ fn parse_string(value: Expr, field: &str) -> syn::Result<LitStr> {
     Ok(value)
 }
 
-fn set_once<T>(slot: &mut Option<T>, value: T, field: &impl quote::ToTokens) -> syn::Result<()> {
+fn set_once<T>(
+    slot: &mut Option<T>,
+    value: T,
+    field: &impl quote::ToTokens,
+    field_name: &str,
+) -> syn::Result<()> {
     if slot.is_some() {
-        return Err(syn::Error::new_spanned(field, "duplicate attribute field"));
+        return Err(syn::Error::new_spanned(
+            field,
+            format!("duplicate attribute field `{field_name}`"),
+        ));
     }
     *slot = Some(value);
     Ok(())
@@ -161,7 +174,10 @@ mod tests {
     #[test]
     fn rejects_unstructured_values_and_duplicates() {
         assert!(syn::parse2::<ServiceArgs>(quote!(name = concat!("u", "ser"))).is_err());
-        assert!(MethodArgs::parse_tokens(quote!(method = "GET", method = "POST")).is_err());
+        let duplicate = MethodArgs::parse_tokens(quote!(method = "GET", method = "POST"))
+            .err()
+            .expect("duplicate method fields must fail");
+        assert_eq!(duplicate.to_string(), "duplicate attribute field `method`");
         assert!(MethodArgs::parse_tokens(quote!(query = ["id"])).is_err());
     }
 }

@@ -11,7 +11,7 @@ use hyper::{body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{convert::Infallible, net::SocketAddr};
+use std::{convert::Infallible, net::SocketAddr, time::Duration};
 use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
 
 const FUSEN_CONTENT_TYPE: &str = "application/fusen+json;version=1";
@@ -35,6 +35,13 @@ struct WireProblemDetails {
 struct CreateUser {
     name: String,
 }
+
+type EnabledAlias = bool;
+type LabelsAlias = Vec<String>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SensitiveFields)]
+#[serde(transparent)]
+struct CountAlias(u64);
 
 #[interface(name = "wire-contract", group = "prod", version = "1")]
 trait WireContract {
@@ -64,8 +71,38 @@ trait WireContract {
     #[fusen_rs::method(method = "GET", path = "/labels")]
     async fn labels(
         &self,
-        #[param(query)] label: Vec<String>,
+        #[param(query, repeated)] label: Vec<String>,
     ) -> Result<RpcResponse<Vec<String>>, RpcError>;
+
+    #[fusen_rs::method(method = "GET", path = "/aliases/count/{count}")]
+    async fn alias_count(
+        &self,
+        #[param(path)] count: CountAlias,
+    ) -> Result<RpcResponse<CountAlias>, RpcError>;
+
+    #[fusen_rs::method(method = "GET", path = "/aliases/filter")]
+    async fn alias_filter(
+        &self,
+        #[param(query)] enabled: EnabledAlias,
+    ) -> Result<RpcResponse<EnabledAlias>, RpcError>;
+
+    #[fusen_rs::method(method = "GET", path = "/aliases/labels")]
+    async fn alias_labels(
+        &self,
+        #[param(query, repeated)] label: LabelsAlias,
+    ) -> Result<RpcResponse<LabelsAlias>, RpcError>;
+
+    #[fusen_rs::method(method = "GET", path = "/aliases/scalar-labels")]
+    async fn alias_labels_declared_scalar(
+        &self,
+        #[param(query)] label: LabelsAlias,
+    ) -> Result<RpcResponse<LabelsAlias>, RpcError>;
+
+    #[fusen_rs::method(method = "GET", path = "/aliases/repeated-filter")]
+    async fn alias_filter_declared_repeated(
+        &self,
+        #[param(query, repeated)] enabled: EnabledAlias,
+    ) -> Result<RpcResponse<EnabledAlias>, RpcError>;
 }
 
 struct FailingWireContract;
@@ -114,6 +151,35 @@ impl WireContract for FailingWireContract {
 
     async fn labels(&self, label: Vec<String>) -> Result<RpcResponse<Vec<String>>, RpcError> {
         Ok(RpcResponse::new(label))
+    }
+
+    async fn alias_count(&self, count: CountAlias) -> Result<RpcResponse<CountAlias>, RpcError> {
+        Ok(RpcResponse::new(count))
+    }
+
+    async fn alias_filter(
+        &self,
+        enabled: EnabledAlias,
+    ) -> Result<RpcResponse<EnabledAlias>, RpcError> {
+        Ok(RpcResponse::new(enabled))
+    }
+
+    async fn alias_labels(&self, label: LabelsAlias) -> Result<RpcResponse<LabelsAlias>, RpcError> {
+        Ok(RpcResponse::new(label))
+    }
+
+    async fn alias_labels_declared_scalar(
+        &self,
+        label: LabelsAlias,
+    ) -> Result<RpcResponse<LabelsAlias>, RpcError> {
+        Ok(RpcResponse::new(label))
+    }
+
+    async fn alias_filter_declared_repeated(
+        &self,
+        enabled: EnabledAlias,
+    ) -> Result<RpcResponse<EnabledAlias>, RpcError> {
+        Ok(RpcResponse::new(enabled))
     }
 }
 
@@ -265,6 +331,34 @@ async fn spring_cloud_v1_repeated_query_uses_one_key_per_value() {
     assert_eq!(request.uri.path(), "/labels");
     assert_eq!(request.uri.query(), Some("label=one&label=two%20words"));
     assert!(request.body.is_empty());
+
+    fixture.await.unwrap();
+    drop(client);
+    runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spring_cloud_v1_single_repeated_query_keeps_the_array_contract() {
+    let (addr, mut captured, fixture) = spawn_h1_fixture(JSON_CONTENT_TYPE, br#"["one"]"#).await;
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = WireContractClient::builder(&runtime)
+        .direct(format!("http://{addr}"))
+        .protocol(WireProtocol::SpringCloudV1)
+        .connect()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        client
+            .labels(vec!["one".to_owned()])
+            .await
+            .unwrap()
+            .into_body(),
+        ["one"]
+    );
+    let request = captured.recv().await.expect("fixture captured one request");
+    assert_eq!(request.uri.path(), "/labels");
+    assert_eq!(request.uri.query(), Some("label=one"));
 
     fixture.await.unwrap();
     drop(client);
@@ -429,7 +523,74 @@ async fn spring_cloud_v1_decodes_scalars_using_the_declared_dto_type() {
         json!(true)
     );
 
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = WireContractClient::builder(&runtime)
+        .direct(format!("http://{}", server.local_addr()))
+        .protocol(WireProtocol::SpringCloudV1)
+        .connect()
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .alias_count(CountAlias(42))
+            .await
+            .unwrap()
+            .into_body(),
+        CountAlias(42)
+    );
+    assert!(client.alias_filter(true).await.unwrap().into_body());
+    assert_eq!(
+        client
+            .alias_labels(vec!["one".to_owned(), "two".to_owned()])
+            .await
+            .unwrap()
+            .into_body(),
+        ["one", "two"]
+    );
+
+    drop(client);
+    runtime.shutdown().await.unwrap();
     server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spring_cloud_v1_rejects_descriptor_shape_mismatches_before_network_io() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = WireContractClient::builder(&runtime)
+        .direct(format!("http://{}", listener.local_addr().unwrap()))
+        .protocol(WireProtocol::SpringCloudV1)
+        .connect()
+        .await
+        .unwrap();
+
+    let scalar_array = client
+        .alias_labels_declared_scalar(vec!["one".to_owned()])
+        .await
+        .unwrap_err();
+    assert_eq!(scalar_array.category(), RpcCategory::InvalidArgument);
+    assert_eq!(scalar_array.code().as_str(), "invalid_spring_parameter");
+    assert!(scalar_array.message().contains("label"));
+    assert!(scalar_array.message().contains("#[param(query, repeated)]"));
+
+    let repeated_scalar = client
+        .alias_filter_declared_repeated(true)
+        .await
+        .unwrap_err();
+    assert_eq!(repeated_scalar.category(), RpcCategory::InvalidArgument);
+    assert_eq!(repeated_scalar.code().as_str(), "invalid_spring_parameter");
+    assert!(repeated_scalar.message().contains("enabled"));
+    assert!(repeated_scalar.message().contains("remove `repeated`"));
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "invalid Spring parameter shapes must fail before opening a connection"
+    );
+
+    drop(client);
+    runtime.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

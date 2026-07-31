@@ -35,7 +35,6 @@ pub mod __macro {
                 _name: &'static str,
                 _source: RpcFieldSource,
                 _repeated: bool,
-                _parse_spring_json_primitive: bool,
             ) -> Self {
                 Self
             }
@@ -138,10 +137,7 @@ pub mod __macro {
         pub struct SensitiveArgument;
 
         impl SensitiveArgument {
-            pub const fn new(
-                _name: &'static str,
-                _resolver: fn() -> SensitiveShape,
-            ) -> Self {
+            pub const fn new(_name: &'static str, _resolver: fn() -> SensitiveShape) -> Self {
                 Self
             }
         }
@@ -247,8 +243,7 @@ pub mod __macro {
         pub trait Middleware: Send + Sync + 'static {}
 
         pub type MiddlewareResult = Result<RpcResponse<Vec<u8>>, RpcError>;
-        pub type MiddlewareFuture<'a> =
-            Pin<Box<dyn Future<Output = MiddlewareResult> + Send + 'a>>;
+        pub type MiddlewareFuture<'a> = Pin<Box<dyn Future<Output = MiddlewareResult> + Send + 'a>>;
 
         pub struct ServerInvocation;
 
@@ -264,7 +259,7 @@ pub mod __macro {
             pub fn decode_argument<T>(
                 &mut self,
                 _name: &str,
-                _parse_primitive: bool,
+                _spring_text: bool,
             ) -> Result<T, RpcError> {
                 unimplemented!()
             }
@@ -282,8 +277,7 @@ pub mod __macro {
             RpcError
         }
 
-        type Dispatch<T> =
-            for<'a> fn(&'a T, ServerInvocation) -> MiddlewareFuture<'a>;
+        type Dispatch<T> = for<'a> fn(&'a T, ServerInvocation) -> MiddlewareFuture<'a>;
 
         pub struct ServerService<T>(T);
 
@@ -329,25 +323,43 @@ impl __macro::v1::SensitiveFields for User {
 
 #[interface(name = "user", group = "prod", version = "1")]
 trait UserApi {
-    #[fusen_procedural_macro::method(
-        method = "GET", path = "/users/{user_id}"
-    )]
+    #[fusen_procedural_macro::method(method = "GET", path = "/users/{user_id}")]
     async fn get(
         &self,
         #[param(context)] call: RpcCall,
         #[sensitive(kind = "identifier")]
-        #[param(path, name = "user_id")] id: String,
+        #[param(path, name = "user_id")]
+        id: String,
         #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
-    #[fusen_procedural_macro::method(
-        method = "POST", path = "/users/batch"
-    )]
+    #[fusen_procedural_macro::method(method = "POST", path = "/users/batch")]
     async fn batch(
         &self,
-        #[sensitive(opaque)]
-        names: Vec<String>,
+        #[sensitive(opaque)] names: Vec<String>,
         notify: bool,
+    ) -> Result<RpcResponse<User>, RpcError>;
+
+    #[fusen_procedural_macro::method(method = "POST", path = "/users/bindings")]
+    async fn bindings(
+        &self,
+        arguments: String,
+        handler: String,
+        invocation: String,
+        method_id: String,
+        response: String,
+    ) -> Result<RpcResponse<User>, RpcError>;
+
+    #[fusen_procedural_macro::method(method = "GET", path = "/users/labels")]
+    async fn labels(
+        &self,
+        #[param(query, repeated)] labels: Vec<String>,
+    ) -> Result<RpcResponse<User>, RpcError>;
+
+    #[fusen_procedural_macro::method(method = "GET", path = "/users/raw/{type}")]
+    async fn r#match(
+        &self,
+        #[param(path)] r#type: String,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
 
@@ -363,15 +375,32 @@ impl UserApi for Handler {
         Ok(RpcResponse::new(User(id)))
     }
 
-    async fn batch(
-        &self,
-        names: Vec<String>,
-        notify: bool,
-    ) -> Result<RpcResponse<User>, RpcError> {
+    async fn batch(&self, names: Vec<String>, notify: bool) -> Result<RpcResponse<User>, RpcError> {
         Ok(RpcResponse::new(User(format!(
             "{}:{notify}",
             names.join(",")
         ))))
+    }
+
+    async fn bindings(
+        &self,
+        arguments: String,
+        handler: String,
+        invocation: String,
+        method_id: String,
+        response: String,
+    ) -> Result<RpcResponse<User>, RpcError> {
+        Ok(RpcResponse::new(User(format!(
+            "{arguments}:{handler}:{invocation}:{method_id}:{response}"
+        ))))
+    }
+
+    async fn labels(&self, labels: Vec<String>) -> Result<RpcResponse<User>, RpcError> {
+        Ok(RpcResponse::new(User(labels.join(","))))
+    }
+
+    async fn r#match(&self, r#type: String) -> Result<RpcResponse<User>, RpcError> {
+        Ok(RpcResponse::new(User(r#type)))
     }
 }
 

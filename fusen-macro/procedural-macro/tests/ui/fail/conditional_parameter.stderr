@@ -1,0 +1,5 @@
+error: RPC method parameters must not use conditional compilation attributes
+ --> tests/ui/fail/conditional_parameter.rs:9:26
+  |
+9 |     async fn call(&self, #[cfg(any())] hidden: String) -> Result<RpcResponse<()>, RpcError>;
+  |                          ^^^^^^^^^^^^^

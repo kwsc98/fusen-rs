@@ -1,5 +1,5 @@
-error: HTTP path parameter `id` requires a method parameter with the same wire name
-  --> tests/ui/fail/path_schema_mismatch.rs:11:14
+error: HTTP path placeholder `{id}` requires this parameter to use `#[param(path)]`
+  --> tests/ui/fail/path_schema_mismatch.rs:13:17
    |
-11 |     async fn get(
-   |              ^^^
+13 |         #[param(query)] id: String,
+   |                 ^^^^^

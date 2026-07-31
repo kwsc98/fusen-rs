@@ -1,0 +1,5 @@
+error: RPC success type must be the fusen-rs RpcResponse<T>
+  --> tests/ui/lookalike_rpc_response.rs:10:36
+   |
+10 |     async fn call(&self) -> Result<lookalike::RpcResponse<String>, rpc::RpcError>;
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

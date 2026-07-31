@@ -1,6 +1,6 @@
 //! Shared clean-slate interface contracts and DTOs used by every example binary.
 
-use fusen_rs::{SensitiveFields, interface};
+use fusen_rs::{RpcResponse, SensitiveFields, interface};
 use serde::{Deserialize, Serialize};
 /// Reusable middleware and extension examples.
 pub mod middleware;

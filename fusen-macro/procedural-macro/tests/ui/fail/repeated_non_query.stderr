@@ -1,0 +1,5 @@
+error: repeated query parameters must use `#[param(query, repeated)]`
+  --> tests/ui/fail/repeated_non_query.rs:11:23
+   |
+11 |         #[param(body, repeated)] tags: Vec<String>,
+   |                       ^^^^^^^^

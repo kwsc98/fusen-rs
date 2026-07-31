@@ -1,0 +1,5 @@
+error: Vec query parameters must declare #[param(query, repeated)]
+ --> tests/ui/fail/missing_repeated_query.rs:9:48
+  |
+9 |     async fn tags(&self, #[param(query)] tags: Vec<String>) -> Result<RpcResponse<()>, RpcError>;
+  |                                                ^^^^^^^^^^^

@@ -1,5 +1,11 @@
-error: a parameter may declare only one of context, path, query, or body
+error: conflicting parameter sources `path` and `query`
   --> tests/ui/fail/conflicting_parameter_sources.rs:11:23
    |
 11 |         #[param(path, query)] user_id: String,
    |                       ^^^^^
+
+error: first source declared here
+  --> tests/ui/fail/conflicting_parameter_sources.rs:11:17
+   |
+11 |         #[param(path, query)] user_id: String,
+   |                 ^^^^

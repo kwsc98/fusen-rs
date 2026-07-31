@@ -1,5 +1,11 @@
 error: duplicate RPC wire parameter name `user_id`
-  --> tests/ui/fail/duplicate_wire_name_across_sources.rs:12:9
+  --> tests/ui/fail/duplicate_wire_name_across_sources.rs:12:31
    |
 12 |         #[param(query, name = "user_id")] query_user_id: String,
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                               ^^^^^^^^^
+
+error: first wire name declared here
+  --> tests/ui/fail/duplicate_wire_name_across_sources.rs:11:30
+   |
+11 |         #[param(path, name = "user_id")] path_user_id: String,
+   |                              ^^^^^^^^^

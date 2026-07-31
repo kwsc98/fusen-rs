@@ -29,7 +29,7 @@ trait WireService {
     #[fusen_rs::method(method = "GET", path = "/tags")]
     async fn tags(
         &self,
-        #[param(query)] tags: Vec<String>,
+        #[param(query, repeated)] tags: Vec<String>,
     ) -> Result<RpcResponse<Vec<String>>, RpcError>;
 }
 

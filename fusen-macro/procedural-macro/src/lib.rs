@@ -75,6 +75,14 @@ fn runtime_crate_name() -> String {
     }
 }
 
+fn procedural_macro_crate_name() -> String {
+    match crate_name("fusen-procedural-macro") {
+        Ok(FoundCrate::Itself) => "fusen_procedural_macro".to_owned(),
+        Ok(FoundCrate::Name(name)) => name.replace('-', "_"),
+        Err(_) => "fusen_procedural_macro".to_owned(),
+    }
+}
+
 fn sensitivity_contract_path() -> proc_macro2::TokenStream {
     match crate_name("fusen-contract") {
         Ok(FoundCrate::Itself) => quote!(crate),

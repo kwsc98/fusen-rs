@@ -1,0 +1,11 @@
+error: duplicate parameter flag `repeated`
+  --> tests/ui/fail/duplicate_parameter_flag.rs:11:34
+   |
+11 |         #[param(query, repeated, repeated)] tags: Vec<String>,
+   |                                  ^^^^^^^^
+
+error: first `repeated` declared here
+  --> tests/ui/fail/duplicate_parameter_flag.rs:11:24
+   |
+11 |         #[param(query, repeated, repeated)] tags: Vec<String>,
+   |                        ^^^^^^^^

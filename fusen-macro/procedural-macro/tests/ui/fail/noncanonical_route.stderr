@@ -1,0 +1,5 @@
+error: HTTP route literals must use ASCII RFC 3986 path characters; encode non-ASCII text as uppercase UTF-8 percent escapes
+ --> tests/ui/fail/noncanonical_route.rs:8:61
+  |
+8 |     #[fusen_procedural_macro::method(method = "GET", path = "/用户")]
+  |                                                             ^^^^^^^

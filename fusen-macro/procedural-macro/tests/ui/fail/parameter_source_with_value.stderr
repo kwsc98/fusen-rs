@@ -1,0 +1,5 @@
+error: `query` does not accept a value
+  --> tests/ui/fail/parameter_source_with_value.rs:11:17
+   |
+11 |         #[param(query = true)] filter: String,
+   |                 ^^^^^

@@ -1,0 +1,50 @@
+error[E0271]: expected `impl Future<Output = Result<RpcResponse<String>, RpcError>>` to be a future that resolves to `Result<RpcResponse<String>, RpcError>`, but it resolves to `Result<RpcResponse<String>, RpcError>`
+ --> tests/ui/bare_lookalike_rpc_response.rs:5:1
+  |
+5 | #[interface(name = "bare-lookalike-response")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RpcResponse<String>`, found `fusen_rs::RpcResponse<String>`
+  |
+  = note: `fusen_rs::RpcResponse<String>` and `RpcResponse<String>` have similar names, but are actually distinct types
+note: `fusen_rs::RpcResponse<String>` is defined in crate `fusen_rs`
+ --> $WORKSPACE/fusen/src/context.rs
+  |
+  | pub struct RpcResponse<T> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `RpcResponse<String>` is defined in the current crate
+ --> tests/ui/bare_lookalike_rpc_response.rs:3:1
+  |
+3 | struct RpcResponse<T>(T);
+  | ^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `BareLookalikeResponse::call::{anon_assoc#0}`
+ --> tests/ui/bare_lookalike_rpc_response.rs:5:1
+  |
+5 | #[interface(name = "bare-lookalike-response")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `BareLookalikeResponse::call::{anon_assoc#0}`
+  = note: this error originates in the attribute macro `interface` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+ --> tests/ui/bare_lookalike_rpc_response.rs:5:1
+  |
+5 | #[interface(name = "bare-lookalike-response")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  | |
+  | expected `RpcResponse<_>`, found `RpcResponse<String>`
+  | arguments to this method are incorrect
+  |
+  = note: `RpcResponse<String>` and `fusen_rs::RpcResponse<_>` have similar names, but are actually distinct types
+note: `RpcResponse<String>` is defined in the current crate
+ --> tests/ui/bare_lookalike_rpc_response.rs:3:1
+  |
+3 | struct RpcResponse<T>(T);
+  | ^^^^^^^^^^^^^^^^^^^^^
+note: `fusen_rs::RpcResponse<_>` is defined in crate `fusen_rs`
+ --> $WORKSPACE/fusen/src/context.rs
+  |
+  | pub struct RpcResponse<T> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: method defined here
+ --> $WORKSPACE/fusen/src/service.rs
+  |
+  |     pub fn encode_response<T: Serialize>(self, response: RpcResponse<T>) -> MiddlewareResult {
+  |            ^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `interface` (in Nightly builds, run with -Z macro-backtrace for more info)

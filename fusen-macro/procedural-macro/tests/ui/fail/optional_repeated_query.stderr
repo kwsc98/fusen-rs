@@ -1,4 +1,4 @@
-error: query parameters may not use Option<Vec<T>>; use Vec<T> so omission has one unambiguous empty-list meaning
+error: query parameters may not use Option<Vec<T>>; use #[param(query, repeated)] Vec<T> so omission has one unambiguous empty-list meaning
   --> tests/ui/fail/optional_repeated_query.rs:11:31
    |
 11 |         #[param(query)] tags: Option<Vec<String>>,

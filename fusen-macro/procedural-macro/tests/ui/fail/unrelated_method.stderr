@@ -1,0 +1,5 @@
+error: each RPC method must declare #[method(method = "...", path = "/...")]
+ --> tests/ui/fail/unrelated_method.rs:9:14
+  |
+9 |     async fn call(&self) -> Result<RpcResponse<()>, RpcError>;
+  |              ^^^^

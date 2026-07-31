@@ -1,0 +1,5 @@
+error: invalid RPC parameter name: expected 1-128 ASCII letters, digits, '.', '_' or '-'
+  --> tests/ui/fail/invalid_wire_name.rs:11:31
+   |
+11 |         #[param(query, name = "")] value: String,
+   |                               ^^

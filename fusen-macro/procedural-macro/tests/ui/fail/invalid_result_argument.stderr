@@ -1,0 +1,37 @@
+error: RPC Result success argument must be a response type
+ --> tests/ui/fail/invalid_result_argument.rs:8:36
+  |
+8 |     async fn call(&self) -> Result<'static, RpcError>;
+  |                                    ^^^^^^^
+
+error: RPC Result success argument must be a response type
+  --> tests/ui/fail/invalid_result_argument.rs:14:36
+   |
+14 |     async fn call(&self) -> Result<{ 1 }, RpcError>;
+   |                                    ^^^^^
+
+error: RPC Result success argument must be a response type
+  --> tests/ui/fail/invalid_result_argument.rs:20:36
+   |
+20 |     async fn call(&self) -> Result<Item = String, RpcError>;
+   |                                    ^^^^^^^^^^^^^
+
+error: RPC Result success argument must be a response type
+  --> tests/ui/fail/invalid_result_argument.rs:26:36
+   |
+26 |     async fn call(&self) -> Result<COUNT = 1, RpcError>;
+   |                                    ^^^^^^^^^
+
+error: RPC Result success argument must be a response type
+  --> tests/ui/fail/invalid_result_argument.rs:32:36
+   |
+32 |     async fn call(&self) -> Result<Item: Send, RpcError>;
+   |                                    ^^^^^^^^^^
+
+error[E0658]: associated const equality is incomplete
+  --> tests/ui/fail/invalid_result_argument.rs:26:36
+   |
+26 |     async fn call(&self) -> Result<COUNT = 1, RpcError>;
+   |                                    ^^^^^^^^^
+   |
+   = note: see issue #132980 <https://github.com/rust-lang/rust/issues/132980> for more information
