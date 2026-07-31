@@ -713,37 +713,7 @@ fn validate_spring_cloud_method(
             "unsupported Spring Cloud HTTP method {method}"
         )));
     }
-    if !path.starts_with('/')
-        || path.contains(['?', '#'])
-        || path.contains("//")
-        || (path.len() > 1 && path.ends_with('/'))
-    {
-        return Err(ContractError::InvalidMethod(format!(
-            "invalid Spring Cloud route {path:?}"
-        )));
-    }
-
-    let mut placeholders = BTreeSet::new();
-    for segment in path
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-    {
-        if let Some(name) = segment
-            .strip_prefix('{')
-            .and_then(|value| value.strip_suffix('}'))
-        {
-            if !is_identity_component(name) || !placeholders.insert(name) {
-                return Err(ContractError::InvalidMethod(
-                    "Spring Cloud path parameters must be unique full token segments".into(),
-                ));
-            }
-        } else if segment.contains(['{', '}']) {
-            return Err(ContractError::InvalidMethod(
-                "Spring Cloud path parameters must occupy full segments".into(),
-            ));
-        }
-    }
+    let placeholders = validate_spring_route(path)?;
 
     let mut names = BTreeSet::new();
     let mut path_parameters = BTreeSet::new();
@@ -763,7 +733,7 @@ fn validate_spring_cloud_method(
                         "Spring Cloud repeated parameters may use only the Query source".into(),
                     ));
                 }
-                path_parameters.insert(parameter.name());
+                path_parameters.insert(parameter.name().to_owned());
             }
             SpringCloudParameterSource::Body => {
                 if parameter.cardinality() == SpringCloudParameterCardinality::Repeated {
@@ -807,6 +777,123 @@ fn validate_spring_cloud_method(
         ));
     }
     Ok(())
+}
+
+fn validate_spring_route(path: &str) -> Result<BTreeSet<String>, ContractError> {
+    let invalid = |reason: &str| {
+        ContractError::InvalidMethod(format!("invalid Spring Cloud route {path:?}: {reason}"))
+    };
+    if !path.starts_with('/') {
+        return Err(invalid("routes must be absolute"));
+    }
+    if path.contains(['?', '#']) {
+        return Err(invalid("query strings and fragments are not allowed"));
+    }
+    if path.contains("//") {
+        return Err(invalid("empty path segments are not canonical"));
+    }
+    if path.len() > 1 && path.ends_with('/') {
+        return Err(invalid("a trailing slash is not canonical"));
+    }
+
+    let mut placeholders = BTreeSet::new();
+    for segment in path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+    {
+        if let Some(name) = segment
+            .strip_prefix('{')
+            .and_then(|value| value.strip_suffix('}'))
+        {
+            if !is_identity_component(name) || !placeholders.insert(name.to_owned()) {
+                return Err(invalid(
+                    "path parameters must be unique full ASCII token segments",
+                ));
+            }
+        } else {
+            if segment.contains(['{', '}']) {
+                return Err(invalid("path parameters must occupy complete segments"));
+            }
+            decode_route_literal(segment).map_err(invalid)?;
+        }
+    }
+    Ok(placeholders)
+}
+
+fn decode_route_literal(segment: &str) -> Result<String, &'static str> {
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'%' {
+            let Some((&high, rest)) = bytes.get(index + 1).zip(bytes.get(index + 2..)) else {
+                return Err("percent escapes must contain two uppercase hexadecimal digits");
+            };
+            let Some(&low) = rest.first() else {
+                return Err("percent escapes must contain two uppercase hexadecimal digits");
+            };
+            let Some(high) = uppercase_hex_value(high) else {
+                return Err("percent escapes must contain two uppercase hexadecimal digits");
+            };
+            let Some(low) = uppercase_hex_value(low) else {
+                return Err("percent escapes must contain two uppercase hexadecimal digits");
+            };
+            let value = high * 16 + low;
+            if value.is_ascii() {
+                return Err("ASCII route characters must not be percent encoded");
+            }
+            decoded.push(value);
+            index += 3;
+        } else {
+            if !is_route_pchar(byte) {
+                return Err("literal segments must use ASCII RFC3986 path characters");
+            }
+            decoded.push(byte);
+            index += 1;
+        }
+    }
+    let decoded =
+        String::from_utf8(decoded).map_err(|_| "percent-encoded route text must be valid UTF-8")?;
+    if decoded == "." || decoded == ".." {
+        return Err("dot path segments are not allowed");
+    }
+    if decoded.chars().any(char::is_whitespace) || decoded.chars().any(char::is_control) {
+        return Err("route literals must not contain whitespace or control characters");
+    }
+    Ok(decoded)
+}
+
+fn uppercase_hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn is_route_pchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b':'
+                | b'@'
+        )
 }
 
 fn validate_methods(methods: &[MethodDescriptor]) -> Result<(), ContractError> {
@@ -1046,6 +1133,54 @@ mod tests {
                 "/items"
             };
             assert!(SpringCloudMethod::new(Method::POST, path, vec![parameter]).is_err());
+        }
+    }
+
+    #[test]
+    fn spring_routes_require_canonical_rfc3986_literals() {
+        for path in [
+            "/",
+            "/users/a-._~!$&'()*+,;=:@",
+            "/%E7%94%A8",
+            "/users/{id}",
+        ] {
+            let parameters = if path.contains("{id}") {
+                vec![
+                    SpringCloudParameter::new(
+                        "id",
+                        SpringCloudParameterSource::Path,
+                        SpringCloudParameterCardinality::Scalar,
+                    )
+                    .unwrap(),
+                ]
+            } else {
+                Vec::new()
+            };
+            assert!(
+                SpringCloudMethod::new(Method::GET, path, parameters).is_ok(),
+                "{path}"
+            );
+        }
+
+        for path in [
+            "relative",
+            "/raw-用户",
+            "/has space",
+            "/has\\backslash",
+            "/control\u{7f}",
+            "/%ZZ",
+            "/%e7%94%a8",
+            "/%41",
+            "/%C3",
+            "/%C2%A0",
+            "/%C2%85",
+            "/.",
+            "/..",
+        ] {
+            assert!(
+                SpringCloudMethod::new(Method::GET, path, Vec::new()).is_err(),
+                "{path}"
+            );
         }
     }
 

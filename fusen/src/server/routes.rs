@@ -87,7 +87,7 @@ impl RouteTable {
                                 .into(),
                         );
                     }
-                    let segments = parse_template(mapping.path());
+                    let segments = parse_template(mapping.path())?;
                     let method = mapping.method().clone();
                     let path = mapping.path().to_owned();
                     if !spring
@@ -320,7 +320,7 @@ pub(crate) fn validate_query_pairs(
     }
 }
 
-fn parse_template(path: &str) -> Vec<Segment> {
+fn parse_template(path: &str) -> Result<Vec<Segment>, String> {
     path.trim_matches('/')
         .split('/')
         .filter(|segment| !segment.is_empty())
@@ -329,8 +329,15 @@ fn parse_template(path: &str) -> Vec<Segment> {
                 .strip_prefix('{')
                 .and_then(|value| value.strip_suffix('}'))
                 .map_or_else(
-                    || Segment::Literal(segment.to_owned()),
-                    |name| Segment::Parameter(name.to_owned()),
+                    || {
+                        urlencoding::decode(segment)
+                            .map(|value| Segment::Literal(value.into_owned()))
+                            .map_err(|_| {
+                                "validated SpringCloudV1 route contains invalid percent encoding"
+                                    .to_owned()
+                            })
+                    },
+                    |name| Ok(Segment::Parameter(name.to_owned())),
                 )
         })
         .collect()
@@ -407,6 +414,7 @@ mod tests {
 
     fn spring_route(service_id: &str, method: Method, path: &str) -> Route {
         let parameters = parse_template(path)
+            .expect("test route is valid")
             .into_iter()
             .filter_map(|segment| match segment {
                 Segment::Literal(_) => None,
@@ -510,6 +518,7 @@ mod tests {
     fn spring_routes_match_decoded_literal_and_parameter_segments() {
         let table = RouteTable::build(vec![
             spring_route("encoded-literal", Method::GET, "/encoded/special"),
+            spring_route("unicode-literal", Method::GET, "/encoded/%E7%94%A8"),
             spring_route("encoded-parameter", Method::GET, "/encoded/{value}"),
         ])
         .unwrap();
@@ -518,6 +527,11 @@ mod tests {
             .match_spring(&Method::GET, "/encoded/%73pecial")
             .unwrap();
         assert_eq!(literal.route.method.fusen_identity(), "encoded-literal");
+
+        let unicode = table
+            .match_spring(&Method::GET, "/encoded/%E7%94%A8")
+            .unwrap();
+        assert_eq!(unicode.route.method.fusen_identity(), "unicode-literal");
 
         let parameter = table.match_spring(&Method::GET, "/encoded/a%2Fb").unwrap();
         assert_eq!(
