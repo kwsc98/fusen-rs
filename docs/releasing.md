@@ -31,7 +31,7 @@ CI 还必须通过 Linux/macOS/Windows、feature matrix、renamed-runtime macro 
 
 发布负责人必须确认：
 
-- `check-public-api-denylist.sh` 从干净 rustdoc 输出确认旧入口为零，只有 `service`/`method` 宏和约定的六个扩展 SPI；
+- `check-public-api-denylist.sh` 从干净 rustdoc 输出确认旧入口为零，只有 `service`/`method` 宏和约定的八个扩展 SPI；
 - `check-security.sh` 对 root、fuzz-support 和 fuzz 的独立 manifest/lockfile 分别运行 `cargo deny` 的四类检查与 `cargo audit`，前项失败后仍执行并汇总其余结果；三者的解析后 dependency graph 只包含批准的 Rustls Ring/bundled WebPKI client TLS 栈，不含 `hyper-tls`、`native-tls`、OpenSSL TLS backend、AWS-LC、native/system root loader、platform verifier 或 PEM loader；
 - Core 不依赖 Nacos、subscriber 或 OTel backend；
 - Fusen V1/Spring Cloud V1 golden fixtures、真实明文 H1/h2c sockets、HTTPS H1/ALPN h2 sockets、证书/hostname 拒绝、Problem Details 和 macro trybuild 全部通过；

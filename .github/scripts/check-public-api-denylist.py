@@ -110,6 +110,7 @@ REMOVED_CRATE_ITEMS = {
 }
 ALLOWED_PUBLIC_TRAITS = {
     "fusen_config": {"ConfigSource"},
+    "fusen_contract": {"SensitiveFields"},
     "fusen_observability": {"MetricsRecorder"},
     "fusen_register": {"Registry"},
     "fusen_rs": {
@@ -119,6 +120,8 @@ ALLOWED_PUBLIC_TRAITS = {
         "Middleware",
         "Registry",
         "RetryPolicy",
+        "Sanitizer",
+        "SensitiveFields",
     },
 }
 
