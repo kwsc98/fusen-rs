@@ -31,7 +31,10 @@ impl SensitiveField {
 pub enum SensitiveShape {
     Opaque,
     Kind(SensitivityKind),
-    Fields(&'static [SensitiveField]),
+    Fields {
+        serialize: &'static [SensitiveField],
+        deserialize: &'static [SensitiveField],
+    },
 }
 
 pub trait SensitiveFields {

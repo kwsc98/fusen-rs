@@ -1,4 +1,4 @@
-error: tuple and unit structs require a type-level sensitivity kind, `opaque`, or a single-field `#[serde(transparent)]` representation
+error: tuple and unit structs require a type-level sensitivity kind, `opaque`, or a `#[serde(transparent)]` representation
   --> tests/ui/fail/unsupported_sensitive_shape.rs:10:13
    |
 10 | struct Tuple(String);
@@ -17,9 +17,14 @@ error: a flattened serde field cannot be mapped safely; classify the complete ty
 21 | |     values: Nested,
    | |__________________^
 
-error: a field with a custom serde serializer requires `#[sensitive(kind = "...")]` or `#[sensitive(opaque)]`
-  --> tests/ui/fail/unsupported_sensitive_shape.rs:26:5
+error: a field using serde `serialize_with` requires `#[sensitive(kind = "...")]` or `#[sensitive(opaque)]` because its serialized representation may differ from the Rust field type
+  --> tests/ui/fail/unsupported_sensitive_shape.rs:26:13
    |
-26 | /     #[serde(serialize_with = "serialize_value")]
-27 | |     value: Nested,
-   | |_________________^
+26 |     #[serde(serialize_with = "serialize_value")]
+   |             ^^^^^^^^^^^^^^
+
+error: `#[serde(tag = "...")]` changes the complete serialized representation; classify the type with `#[sensitive(kind = "...")]` or `#[sensitive(opaque)]`
+  --> tests/ui/fail/unsupported_sensitive_shape.rs:31:9
+   |
+31 | #[serde(tag = "kind")]
+   |         ^^^

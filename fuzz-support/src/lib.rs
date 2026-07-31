@@ -181,7 +181,7 @@ impl RpcResponse<RpcBody> {
         self.body.hold_budget(permit);
     }
 
-    pub(crate) fn mark_declared_schema_origin(
+    pub(crate) fn mark_declared_deserialize_schema_origin(
         &mut self,
         _method: &'static fusen_contract::MethodDescriptor,
     ) {

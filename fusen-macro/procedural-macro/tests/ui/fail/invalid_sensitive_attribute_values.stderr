@@ -1,0 +1,29 @@
+error: `opaque` does not accept a value
+  --> tests/ui/fail/invalid_sensitive_attribute_values.rs:10:13
+   |
+10 | #[sensitive(opaque = true)]
+   |             ^^^^^^
+
+error: expected string literal
+  --> tests/ui/fail/invalid_sensitive_attribute_values.rs:14:20
+   |
+14 | #[sensitive(kind = 7)]
+   |                    ^
+
+error: expected string literal
+  --> tests/ui/fail/invalid_sensitive_attribute_values.rs:18:21
+   |
+18 | #[sensitive(bound = 7)]
+   |                     ^
+
+error: invalid sensitivity bound; expected comma-separated where predicates: expected `:`
+  --> tests/ui/fail/invalid_sensitive_attribute_values.rs:22:21
+   |
+22 | #[sensitive(bound = "T SensitiveFields")]
+   |                     ^^^^^^^^^^^^^^^^^^^
+
+error: `bound` is supported only on a type deriving `SensitiveFields`
+  --> tests/ui/fail/invalid_sensitive_attribute_values.rs:27:17
+   |
+27 |     #[sensitive(bound = "String: contract::SensitiveFields")]
+   |                 ^^^^^

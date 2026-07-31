@@ -27,6 +27,12 @@ struct CustomSerialized {
     value: Nested,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, SensitiveFields)]
+#[serde(tag = "kind")]
+struct Tagged {
+    value: String,
+}
+
 #[derive(serde::Serialize)]
 struct Nested;
 

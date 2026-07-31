@@ -14,14 +14,34 @@ use std::{
 
 const REDACTED: &str = "<redacted>";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectionDirection {
+    Serialize,
+    Deserialize,
+}
+
+impl ProjectionDirection {
+    const fn fields<'a>(
+        self,
+        serialize: &'a [fusen_contract::SensitiveField],
+        deserialize: &'a [fusen_contract::SensitiveField],
+    ) -> &'a [fusen_contract::SensitiveField] {
+        match self {
+            Self::Serialize => serialize,
+            Self::Deserialize => deserialize,
+        }
+    }
+}
+
 pub(crate) fn sanitize_arguments(
     method: &MethodDescriptor,
     arguments: &RpcArguments,
+    direction: ProjectionDirection,
     sanitizer: &dyn Sanitizer,
 ) -> SanitizedValue {
     fail_closed(|| {
         let sensitivity = method.sensitivity().ok_or(ProjectionFailure)?;
-        let mut projector = Projector::new(sanitizer, SanitizationTarget::Arguments);
+        let mut projector = Projector::new(sanitizer, SanitizationTarget::Arguments, direction);
         let mut projected = Map::new();
         let mut declared = BTreeSet::new();
 
@@ -52,12 +72,12 @@ pub(crate) fn sanitize_arguments(
 pub(crate) fn sanitize_response(
     method: &MethodDescriptor,
     bytes: &[u8],
-    has_declared_schema_origin: bool,
+    direction: Option<ProjectionDirection>,
     sanitizer: &dyn Sanitizer,
 ) -> SanitizedValue {
-    if !has_declared_schema_origin {
+    let Some(direction) = direction else {
         return SanitizedValue::omitted();
-    }
+    };
     fail_closed(|| {
         let shape = method
             .sensitivity()
@@ -66,7 +86,7 @@ pub(crate) fn sanitize_response(
         if matches!(shape, SensitiveShape::Opaque) {
             return Ok(SanitizedValue::omitted());
         }
-        let mut projector = Projector::new(sanitizer, SanitizationTarget::Response);
+        let mut projector = Projector::new(sanitizer, SanitizationTarget::Response, direction);
         if bytes.len() > projector.limits.max_input_bytes() {
             return Err(ProjectionFailure);
         }
@@ -88,15 +108,21 @@ fn fail_closed(
 struct Projector<'a> {
     sanitizer: &'a dyn Sanitizer,
     target: SanitizationTarget,
+    direction: ProjectionDirection,
     limits: ProjectionLimits,
     visited_nodes: usize,
 }
 
 impl<'a> Projector<'a> {
-    fn new(sanitizer: &'a dyn Sanitizer, target: SanitizationTarget) -> Self {
+    fn new(
+        sanitizer: &'a dyn Sanitizer,
+        target: SanitizationTarget,
+        direction: ProjectionDirection,
+    ) -> Self {
         Self {
             sanitizer,
             target,
+            direction,
             limits: sanitizer.limits(),
             visited_nodes: 0,
         }
@@ -140,7 +166,11 @@ impl<'a> Projector<'a> {
                 self.validate_descendants(value, depth)?;
                 self.sanitize_classified(value, kind, depth, path)
             }
-            SensitiveShape::Fields(fields) => {
+            SensitiveShape::Fields {
+                serialize,
+                deserialize,
+            } => {
+                let fields = self.direction.fields(serialize, deserialize);
                 let Value::Object(values) = value else {
                     return Err(ProjectionFailure);
                 };
@@ -268,7 +298,7 @@ impl<'a> Projector<'a> {
         match shape {
             SensitiveShape::Opaque => Ok(Some(InheritedClassification::Opaque)),
             SensitiveShape::Kind(kind) => Ok(Some(InheritedClassification::Kind(kind))),
-            SensitiveShape::Fields(_) => Ok(None),
+            SensitiveShape::Fields { .. } => Ok(None),
             SensitiveShape::Optional(resolver) | SensitiveShape::Sequence(resolver) => {
                 self.inherited_classification(resolver(), schema_depth + 1)
             }
@@ -290,7 +320,11 @@ impl<'a> Projector<'a> {
         match shape {
             SensitiveShape::Opaque => Ok(false),
             SensitiveShape::Kind(_) => Ok(true),
-            SensitiveShape::Fields(fields) => {
+            SensitiveShape::Fields {
+                serialize,
+                deserialize,
+            } => {
+                let fields = self.direction.fields(serialize, deserialize);
                 for field in fields {
                     if self.has_classified_value(field.shape(), schema_depth + 1)? {
                         return Ok(true);
@@ -337,7 +371,7 @@ impl<'a> Projector<'a> {
             SensitiveShape::FixedSequence { element, length } => {
                 self.validate_sequence(value, element, Some(length), depth)
             }
-            SensitiveShape::Fields(_) => {
+            SensitiveShape::Fields { .. } => {
                 if value.is_object() {
                     Ok(())
                 } else {
@@ -480,8 +514,15 @@ mod tests {
         panic!("schema resolver panic must not escape")
     }
 
+    fn symmetric_fields(fields: &'static [SensitiveField]) -> SensitiveShape {
+        SensitiveShape::Fields {
+            serialize: fields,
+            deserialize: fields,
+        }
+    }
+
     fn child() -> SensitiveShape {
-        SensitiveShape::Fields(&[
+        symmetric_fields(&[
             const { SensitiveField::new("name", public) },
             const { SensitiveField::new("secret", secret) },
         ])
@@ -514,7 +555,7 @@ mod tests {
     }
 
     fn all_opaque() -> SensitiveShape {
-        SensitiveShape::Fields(&[const { SensitiveField::new("value", opaque) }])
+        symmetric_fields(&[const { SensitiveField::new("value", opaque) }])
     }
 
     fn all_opaque_sequence() -> SensitiveShape {
@@ -522,7 +563,7 @@ mod tests {
     }
 
     fn request() -> SensitiveShape {
-        SensitiveShape::Fields(&[
+        symmetric_fields(&[
             const { SensitiveField::new("id", public) },
             const { SensitiveField::new("password", secret) },
             const { SensitiveField::new("children", children) },
@@ -533,6 +574,19 @@ mod tests {
 
     fn response_shape() -> SensitiveShape {
         child()
+    }
+
+    fn directional_payload() -> SensitiveShape {
+        SensitiveShape::Fields {
+            serialize: &[
+                const { SensitiveField::new("display", public) },
+                const { SensitiveField::new("password", secret) },
+            ],
+            deserialize: &[
+                const { SensitiveField::new("public_input", public) },
+                const { SensitiveField::new("display", secret) },
+            ],
+        }
     }
 
     fn method(with_response: bool) -> MethodDescriptor {
@@ -553,6 +607,14 @@ mod tests {
         arguments
     }
 
+    fn sanitize_serialized_arguments(
+        method: &MethodDescriptor,
+        arguments: &RpcArguments,
+        sanitizer: &dyn Sanitizer,
+    ) -> SanitizedValue {
+        sanitize_arguments(method, arguments, ProjectionDirection::Serialize, sanitizer)
+    }
+
     #[test]
     fn recursive_projection_whitelists_fields_and_arrays() {
         let arguments = rpc_arguments(json!({
@@ -569,7 +631,8 @@ mod tests {
             },
             "undeclared": "hidden"
         }));
-        let projected = sanitize_arguments(&method(false), &arguments, &PolicySanitizer::default());
+        let projected =
+            sanitize_serialized_arguments(&method(false), &arguments, &PolicySanitizer::default());
 
         assert_eq!(
             projected.as_value(),
@@ -586,6 +649,70 @@ mod tests {
         );
         assert!(!projected.to_string().contains("do-not-log"));
         assert!(!projected.to_string().contains("unknown"));
+    }
+
+    #[test]
+    fn field_tables_are_selected_by_representation_direction() {
+        let descriptor = MethodDescriptor::new(MethodId::new(0), "directional", None)
+            .unwrap()
+            .with_sensitivity(MethodSensitivity::new(
+                vec![SensitiveArgument::new("request", directional_payload)],
+                Some(directional_payload),
+            ));
+        let policy = PolicySanitizer::default();
+
+        let serialized = rpc_arguments(json!({
+            "request": {"display": "safe", "password": "outbound-secret"}
+        }));
+        assert_eq!(
+            sanitize_arguments(
+                &descriptor,
+                &serialized,
+                ProjectionDirection::Serialize,
+                &policy,
+            )
+            .as_value(),
+            Some(&json!({
+                "request": {"display": "safe", "password": "<redacted>"}
+            }))
+        );
+
+        let deserialized = rpc_arguments(json!({
+            "request": {"public_input": "safe", "display": "inbound-secret"}
+        }));
+        assert_eq!(
+            sanitize_arguments(
+                &descriptor,
+                &deserialized,
+                ProjectionDirection::Deserialize,
+                &policy,
+            )
+            .as_value(),
+            Some(&json!({
+                "request": {"public_input": "safe", "display": "<redacted>"}
+            }))
+        );
+
+        assert_eq!(
+            sanitize_response(
+                &descriptor,
+                br#"{"display":"safe","password":"response-secret"}"#,
+                Some(ProjectionDirection::Serialize),
+                &policy,
+            )
+            .as_value(),
+            Some(&json!({"display": "safe", "password": "<redacted>"}))
+        );
+        assert_eq!(
+            sanitize_response(
+                &descriptor,
+                br#"{"public_input":"safe","display":"response-secret"}"#,
+                Some(ProjectionDirection::Deserialize),
+                &policy,
+            )
+            .as_value(),
+            Some(&json!({"public_input": "safe", "display": "<redacted>"}))
+        );
     }
 
     #[test]
@@ -607,9 +734,15 @@ mod tests {
         }));
         let policy = PolicySanitizer::default();
 
-        assert!(sanitize_arguments(&descriptor, &arguments, &policy).is_omitted());
+        assert!(sanitize_serialized_arguments(&descriptor, &arguments, &policy).is_omitted());
         assert!(
-            sanitize_response(&descriptor, br#"{"value":"hidden"}"#, true, &policy).is_omitted()
+            sanitize_response(
+                &descriptor,
+                br#"{"value":"hidden"}"#,
+                Some(ProjectionDirection::Serialize),
+                &policy,
+            )
+            .is_omitted()
         );
     }
 
@@ -635,7 +768,7 @@ mod tests {
     }
 
     fn escaped_child() -> SensitiveShape {
-        SensitiveShape::Fields(&[const { SensitiveField::new("~token", secret) }])
+        symmetric_fields(&[const { SensitiveField::new("~token", secret) }])
     }
 
     fn escaped_children() -> SensitiveShape {
@@ -643,7 +776,7 @@ mod tests {
     }
 
     fn escaped_request() -> SensitiveShape {
-        SensitiveShape::Fields(&[const { SensitiveField::new("a/b", escaped_children) }])
+        symmetric_fields(&[const { SensitiveField::new("a/b", escaped_children) }])
     }
 
     #[test]
@@ -659,7 +792,7 @@ mod tests {
         }));
         let sanitizer = RecordingSanitizer::default();
 
-        let projected = sanitize_arguments(&method, &arguments, &sanitizer);
+        let projected = sanitize_serialized_arguments(&method, &arguments, &sanitizer);
 
         assert!(!projected.is_omitted());
         assert_eq!(
@@ -685,7 +818,7 @@ mod tests {
         }));
         let sanitizer = RecordingSanitizer::default();
 
-        let projected = sanitize_arguments(&method, &arguments, &sanitizer);
+        let projected = sanitize_serialized_arguments(&method, &arguments, &sanitizer);
 
         assert_eq!(
             projected.as_value(),
@@ -703,7 +836,9 @@ mod tests {
         let object_expected = rpc_arguments(json!({
             "request": [{"id": 7, "children": []}]
         }));
-        assert!(sanitize_arguments(&method(false), &object_expected, &policy).is_omitted());
+        assert!(
+            sanitize_serialized_arguments(&method(false), &object_expected, &policy).is_omitted()
+        );
 
         let sequence_expected = MethodDescriptor::new(MethodId::new(0), "sequence", None)
             .unwrap()
@@ -712,7 +847,10 @@ mod tests {
                 None,
             ));
         let wrong_sequence = rpc_arguments(json!({"tokens": "not-an-array"}));
-        assert!(sanitize_arguments(&sequence_expected, &wrong_sequence, &policy).is_omitted());
+        assert!(
+            sanitize_serialized_arguments(&sequence_expected, &wrong_sequence, &policy)
+                .is_omitted()
+        );
     }
 
     #[test]
@@ -732,7 +870,7 @@ mod tests {
             "children": [{"name": "two", "secret": "hidden"}]
         }));
         assert_eq!(
-            sanitize_arguments(&descriptor, &present, &policy).as_value(),
+            sanitize_serialized_arguments(&descriptor, &present, &policy).as_value(),
             Some(&json!({
                 "child": {"name": "one", "secret": "<redacted>"},
                 "children": [{"name": "two", "secret": "<redacted>"}]
@@ -740,7 +878,7 @@ mod tests {
         );
 
         let absent = rpc_arguments(json!({"child": null, "children": null}));
-        assert!(sanitize_arguments(&descriptor, &absent, &policy).is_omitted());
+        assert!(sanitize_serialized_arguments(&descriptor, &absent, &policy).is_omitted());
     }
 
     #[test]
@@ -754,11 +892,11 @@ mod tests {
         let policy = PolicySanitizer::default();
         let valid = rpc_arguments(json!({"tokens": ["one", "two"]}));
         assert_eq!(
-            sanitize_arguments(&descriptor, &valid, &policy).as_value(),
+            sanitize_serialized_arguments(&descriptor, &valid, &policy).as_value(),
             Some(&json!({"tokens": "<redacted>"}))
         );
         let wrong_length = rpc_arguments(json!({"tokens": ["one"]}));
-        assert!(sanitize_arguments(&descriptor, &wrong_length, &policy).is_omitted());
+        assert!(sanitize_serialized_arguments(&descriptor, &wrong_length, &policy).is_omitted());
 
         let oversized = MethodDescriptor::new(MethodId::new(0), "oversized-fixed", None)
             .unwrap()
@@ -767,7 +905,7 @@ mod tests {
                 None,
             ));
         let oversized_values = rpc_arguments(json!({"tokens": vec!["x"; 33]}));
-        assert!(sanitize_arguments(&oversized, &oversized_values, &policy).is_omitted());
+        assert!(sanitize_serialized_arguments(&oversized, &oversized_values, &policy).is_omitted());
     }
 
     struct PanicSanitizer;
@@ -793,10 +931,15 @@ mod tests {
     #[test]
     fn policy_panics_and_missing_schemas_fail_closed() {
         let arguments = rpc_arguments(json!({"request": {"id": 7}}));
-        assert!(sanitize_arguments(&method(false), &arguments, &PanicSanitizer).is_omitted());
+        assert!(
+            sanitize_serialized_arguments(&method(false), &arguments, &PanicSanitizer).is_omitted()
+        );
 
         let missing = MethodDescriptor::new(MethodId::new(0), "missing", None).unwrap();
-        assert!(sanitize_arguments(&missing, &arguments, &PolicySanitizer::default()).is_omitted());
+        assert!(
+            sanitize_serialized_arguments(&missing, &arguments, &PolicySanitizer::default())
+                .is_omitted()
+        );
 
         let panicking = MethodDescriptor::new(MethodId::new(0), "panicking", None)
             .unwrap()
@@ -805,9 +948,12 @@ mod tests {
                 None,
             ));
         assert!(
-            sanitize_arguments(&panicking, &arguments, &PolicySanitizer::default()).is_omitted()
+            sanitize_serialized_arguments(&panicking, &arguments, &PolicySanitizer::default())
+                .is_omitted()
         );
-        assert!(sanitize_arguments(&method(false), &arguments, &PanicLimits).is_omitted());
+        assert!(
+            sanitize_serialized_arguments(&method(false), &arguments, &PanicLimits).is_omitted()
+        );
     }
 
     #[test]
@@ -832,7 +978,9 @@ mod tests {
 
         for limits in test_cases {
             let policy = PolicySanitizer::default().with_limits(limits);
-            assert!(sanitize_arguments(&method(false), &arguments, &policy).is_omitted());
+            assert!(
+                sanitize_serialized_arguments(&method(false), &arguments, &policy).is_omitted()
+            );
         }
     }
 
@@ -844,7 +992,15 @@ mod tests {
         };
         let bytes = br#"                    {"name":"ok","secret":"x"}"#;
 
-        assert!(sanitize_response(&method(true), bytes, true, &sanitizer).is_omitted());
+        assert!(
+            sanitize_response(
+                &method(true),
+                bytes,
+                Some(ProjectionDirection::Serialize),
+                &sanitizer,
+            )
+            .is_omitted()
+        );
         assert!(sanitizer.paths.lock().unwrap().is_empty());
     }
 
@@ -854,15 +1010,44 @@ mod tests {
         let descriptor = method(true);
         let bytes = br#"{"name":"visible","secret":"hidden","unknown":1}"#;
 
-        let projected = sanitize_response(&descriptor, bytes, true, &policy);
+        let projected = sanitize_response(
+            &descriptor,
+            bytes,
+            Some(ProjectionDirection::Serialize),
+            &policy,
+        );
         assert_eq!(
             projected.as_value(),
             Some(&json!({"name": "visible", "secret": "<redacted>"}))
         );
-        assert!(sanitize_response(&descriptor, bytes, false, &policy).is_omitted());
-        assert!(sanitize_response(&descriptor, b"not-json", true, &policy).is_omitted());
-        assert!(sanitize_response(&descriptor, br#""not-an-object""#, true, &policy).is_omitted());
-        assert!(sanitize_response(&method(false), bytes, true, &policy).is_omitted());
+        assert!(sanitize_response(&descriptor, bytes, None, &policy).is_omitted());
+        assert!(
+            sanitize_response(
+                &descriptor,
+                b"not-json",
+                Some(ProjectionDirection::Serialize),
+                &policy,
+            )
+            .is_omitted()
+        );
+        assert!(
+            sanitize_response(
+                &descriptor,
+                br#""not-an-object""#,
+                Some(ProjectionDirection::Serialize),
+                &policy,
+            )
+            .is_omitted()
+        );
+        assert!(
+            sanitize_response(
+                &method(false),
+                bytes,
+                Some(ProjectionDirection::Serialize),
+                &policy,
+            )
+            .is_omitted()
+        );
     }
 
     #[test]
@@ -874,7 +1059,7 @@ mod tests {
         let arguments = rpc_arguments(json!({
             "request": {"id": 1, "password": "x", "children": []}
         }));
-        let projected = sanitize_arguments(&method(false), &arguments, &replacement);
+        let projected = sanitize_serialized_arguments(&method(false), &arguments, &replacement);
         assert_eq!(
             projected.as_value(),
             Some(&json!({
@@ -888,7 +1073,7 @@ mod tests {
                 SensitivityKind::SECRET,
                 Sanitization::Replace(json!({"s": "too-long"})),
             );
-        assert!(sanitize_arguments(&method(false), &arguments, &oversized).is_omitted());
+        assert!(sanitize_serialized_arguments(&method(false), &arguments, &oversized).is_omitted());
     }
 
     #[test]
@@ -905,6 +1090,6 @@ mod tests {
         let policy =
             PolicySanitizer::default().with_limits(ProjectionLimits::default().with_max_depth(1));
 
-        assert!(sanitize_arguments(&descriptor, &arguments, &policy).is_omitted());
+        assert!(sanitize_serialized_arguments(&descriptor, &arguments, &policy).is_omitted());
     }
 }

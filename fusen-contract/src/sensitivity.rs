@@ -61,8 +61,13 @@ pub enum SensitiveShape {
     Opaque,
     /// The complete value has one classification.
     Kind(SensitivityKind),
-    /// An object whose named fields have independently resolved shapes.
-    Fields(&'static [SensitiveField]),
+    /// An object whose named fields have independently resolved shapes in each Serde direction.
+    Fields {
+        /// Field names emitted when the value is serialized.
+        serialize: &'static [SensitiveField],
+        /// Field names accepted when the value is deserialized.
+        deserialize: &'static [SensitiveField],
+    },
     /// A nullable value that otherwise has the lazily resolved inner shape.
     Optional(SensitiveShapeResolver),
     /// A variable-length JSON array whose elements share one lazily resolved shape.
@@ -92,7 +97,7 @@ impl SensitiveField {
         Self { name, resolver }
     }
 
-    /// Returns the serialized field name.
+    /// Returns this field's name in the associated JSON representation direction.
     pub const fn name(&self) -> &'static str {
         self.name
     }
@@ -112,7 +117,7 @@ impl std::fmt::Debug for SensitiveField {
     }
 }
 
-/// Supplies process-local sensitivity metadata for a serializable Rust type.
+/// Supplies process-local sensitivity metadata for a Rust type's JSON representations.
 ///
 /// Implementations should return [`SensitiveShape::Opaque`] when they cannot describe a value
 /// safely. Container implementations preserve nullable and sequence structure while lazily
@@ -306,7 +311,7 @@ mod tests {
 
     impl SensitiveFields for RecursiveDto {
         fn sensitive_shape() -> SensitiveShape {
-            SensitiveShape::Fields(&[
+            const FIELDS: &[SensitiveField] = &[
                 const { SensitiveField::new("id", SensitivityKind::identifier_shape) },
                 const {
                     SensitiveField::new(
@@ -314,7 +319,11 @@ mod tests {
                         <Vec<Box<RecursiveDto>> as SensitiveFields>::sensitive_shape,
                     )
                 },
-            ])
+            ];
+            SensitiveShape::Fields {
+                serialize: FIELDS,
+                deserialize: FIELDS,
+            }
         }
     }
 
@@ -347,19 +356,40 @@ mod tests {
 
     #[test]
     fn container_shapes_delegate_without_eager_recursive_construction() {
-        let SensitiveShape::Fields(fields) = RecursiveDto::sensitive_shape() else {
+        let SensitiveShape::Fields {
+            serialize,
+            deserialize,
+        } = RecursiveDto::sensitive_shape()
+        else {
             panic!("recursive DTO should expose named fields");
         };
-        assert_eq!(fields[0].name(), "id");
+        assert_eq!(
+            serialize
+                .iter()
+                .map(SensitiveField::name)
+                .collect::<Vec<_>>(),
+            ["id", "children"]
+        );
+        assert_eq!(
+            deserialize
+                .iter()
+                .map(SensitiveField::name)
+                .collect::<Vec<_>>(),
+            ["id", "children"]
+        );
         assert!(matches!(
-            fields[0].shape(),
+            serialize[0].shape(),
             SensitiveShape::Kind(SensitivityKind::IDENTIFIER)
         ));
 
-        let SensitiveShape::Sequence(child) = fields[1].shape() else {
+        let SensitiveShape::Sequence(child) = serialize[1].shape() else {
             panic!("container resolver should lazily resolve its recursive element");
         };
-        let SensitiveShape::Fields(children) = child() else {
+        let SensitiveShape::Fields {
+            serialize: children,
+            ..
+        } = child()
+        else {
             panic!("recursive element should expose named fields");
         };
         assert_eq!(children[1].name(), "children");
@@ -417,12 +447,17 @@ mod tests {
             token: String::new(),
         };
         assert!(dto.token.is_empty());
-        let SensitiveShape::Fields(fields) = DerivedDto::sensitive_shape() else {
+        let SensitiveShape::Fields {
+            serialize,
+            deserialize,
+        } = DerivedDto::sensitive_shape()
+        else {
             panic!("derived DTO should expose named fields");
         };
-        assert_eq!(fields[0].name(), "token");
+        assert_eq!(serialize[0].name(), "token");
+        assert_eq!(deserialize[0].name(), "token");
         assert!(matches!(
-            fields[0].shape(),
+            serialize[0].shape(),
             SensitiveShape::Kind(SensitivityKind::TOKEN)
         ));
     }

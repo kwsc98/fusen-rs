@@ -1,0 +1,5 @@
+error: unsupported serde rename rule; expected `lowercase`, `UPPERCASE`, `PascalCase`, `camelCase`, `snake_case`, `SCREAMING_SNAKE_CASE`, `kebab-case`, or `SCREAMING-KEBAB-CASE`
+  --> tests/ui/fail/invalid_serde_rename_rule.rs:10:22
+   |
+10 | #[serde(rename_all = "titleCase")]
+   |                      ^^^^^^^^^^^

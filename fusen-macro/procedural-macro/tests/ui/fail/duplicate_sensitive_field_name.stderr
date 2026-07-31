@@ -1,0 +1,11 @@
+error: duplicate deserialized field name `shared` after applying serde renames and aliases
+  --> tests/ui/fail/duplicate_sensitive_field_name.rs:13:21
+   |
+13 |     #[serde(alias = "shared")]
+   |                     ^^^^^^^^
+
+error: first field name declared here
+  --> tests/ui/fail/duplicate_sensitive_field_name.rs:11:34
+   |
+11 |     #[serde(rename(deserialize = "shared"))]
+   |                                  ^^^^^^^^

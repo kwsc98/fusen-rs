@@ -47,14 +47,14 @@ impl ServerInvocation {
     pub fn decode_argument<T: serde::de::DeserializeOwned>(
         &mut self,
         name: &str,
-        parse_spring_json_primitive: bool,
+        spring_text: bool,
     ) -> Result<T, RpcError> {
         let protocol = self.context.protocol();
         let value = self
             .arguments
             .remove(name)
             .unwrap_or(serde_json::Value::Null);
-        crate::interface::decode_argument(value, protocol, parse_spring_json_primitive)
+        crate::interface::decode_argument(value, protocol, spring_text)
     }
 
     /// Rejects arguments that are absent from the generated method schema.
@@ -89,7 +89,7 @@ impl ServerInvocation {
             envelope_bytes,
             &self.response_budget,
         )?;
-        encoded.mark_declared_schema_origin(self.context.method());
+        encoded.mark_declared_serialize_schema_origin(self.context.method());
         encoded.set_status(status)?;
         *encoded.headers_mut() = headers;
         *encoded.extensions_mut() = extensions;

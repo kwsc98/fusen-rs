@@ -39,7 +39,10 @@ pub mod contract {
     pub enum SensitiveShape {
         Opaque,
         Kind(SensitivityKind),
-        Fields(&'static [SensitiveField]),
+        Fields {
+            serialize: &'static [SensitiveField],
+            deserialize: &'static [SensitiveField],
+        },
     }
 
     pub trait SensitiveFields {
@@ -120,8 +123,61 @@ struct Recursive {
 }
 
 #[derive(serde::Serialize, SensitiveFields)]
+struct RecursiveGeneric<T> {
+    next: Option<Box<RecursiveGeneric<T>>>,
+    #[serde(skip)]
+    marker: std::marker::PhantomData<T>,
+}
+
+type RecursiveAlias<T> = Option<Box<AliasedRecursive<T>>>;
+
+#[derive(serde::Serialize, SensitiveFields)]
+#[sensitive(bound = "")]
+struct AliasedRecursive<T> {
+    next: RecursiveAlias<T>,
+    #[serde(skip)]
+    marker: std::marker::PhantomData<T>,
+}
+
+mod qualified {
+    pub mod external {
+        #[derive(serde::Serialize)]
+        pub struct QualifiedRecursive<T>(pub std::marker::PhantomData<T>);
+
+        impl<T: crate::contract::SensitiveFields> crate::contract::SensitiveFields
+            for QualifiedRecursive<T>
+        {
+            fn sensitive_shape() -> crate::contract::SensitiveShape {
+                T::sensitive_shape()
+            }
+        }
+    }
+
+    #[derive(serde::Serialize, fusen_procedural_macro::SensitiveFields)]
+    pub struct QualifiedRecursive<T, U> {
+        crate_next: Option<Box<crate::qualified::QualifiedRecursive<T, U>>>,
+        self_next: Option<Box<self::QualifiedRecursive<T, U>>>,
+        super_next: Option<Box<super::qualified::QualifiedRecursive<T, U>>>,
+        external: external::QualifiedRecursive<U>,
+        #[serde(skip)]
+        marker: std::marker::PhantomData<T>,
+    }
+}
+
+#[derive(serde::Serialize, SensitiveFields)]
 #[serde(transparent)]
 struct Transparent<T>(T);
+
+#[derive(serde::Serialize, serde::Deserialize, SensitiveFields)]
+#[serde(transparent)]
+struct TransparentWithMarkers<T> {
+    value: T,
+    #[serde(skip)]
+    skipped: bool,
+    #[serde(skip_serializing, default)]
+    defaulted: bool,
+    marker: std::marker::PhantomData<T>,
+}
 
 #[derive(serde::Serialize, SensitiveFields)]
 #[sensitive(kind = "identifier")]
@@ -186,10 +242,14 @@ fn main() {
 
     let _ = Request::<String>::sensitive_shape();
     let _ = Transparent::<String>::sensitive_shape();
+    let _ = TransparentWithMarkers::<String>::sensitive_shape();
     let _ = Identifier::sensitive_shape();
     let _ = OpaqueChoice::sensitive_shape();
     let _ = SerializeSpecificRename::sensitive_shape();
     let _ = Recursive::sensitive_shape();
+    let _ = RecursiveGeneric::<NotSensitive>::sensitive_shape();
+    let _ = AliasedRecursive::<NotSensitive>::sensitive_shape();
+    let _ = qualified::QualifiedRecursive::<NotSensitive, String>::sensitive_shape();
     let _ = OpaqueFlatten::sensitive_shape();
     let _ = WrapperRequest::<NotSensitive>::sensitive_shape();
     let _ = AssociatedRequest::<ValueProvider>::sensitive_shape();

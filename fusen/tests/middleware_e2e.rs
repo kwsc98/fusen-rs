@@ -612,3 +612,149 @@ async fn declared_response_origins_are_projectable_but_context_responses_are_not
     runtime.shutdown().await.unwrap();
     server.shutdown().await.unwrap();
 }
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, fusen_rs::SensitiveFields,
+)]
+struct DirectionalPayload {
+    #[serde(default, rename(serialize = "display", deserialize = "public_input"))]
+    #[sensitive(kind = "public")]
+    public_value: String,
+    #[serde(rename(serialize = "password", deserialize = "display"))]
+    #[sensitive(kind = "secret")]
+    secret_value: String,
+}
+
+#[interface(name = "directional-projection-contract")]
+trait DirectionalProjectionContract {
+    #[fusen_rs::method(method = "PUT", path = "/middleware/directional")]
+    async fn directional(
+        &self,
+        #[param(body)] value: DirectionalPayload,
+    ) -> Result<RpcResponse<DirectionalPayload>, RpcError>;
+}
+
+struct DirectionalHandler;
+
+impl DirectionalProjectionContract for DirectionalHandler {
+    async fn directional(
+        &self,
+        value: DirectionalPayload,
+    ) -> Result<RpcResponse<DirectionalPayload>, RpcError> {
+        assert!(value.public_value.is_empty());
+        assert_eq!(value.secret_value, "client-visible");
+        Ok(RpcResponse::new(DirectionalPayload {
+            public_value: value.secret_value,
+            secret_value: "server-secret".to_owned(),
+        }))
+    }
+}
+
+#[derive(Default)]
+struct DirectionalObservations {
+    client_arguments: Vec<Option<Value>>,
+    server_arguments: Vec<Option<Value>>,
+    server_responses: Vec<Option<Value>>,
+    client_responses: Vec<Option<Value>>,
+}
+
+#[derive(Clone)]
+struct DirectionalProjectionCapture(Arc<Mutex<DirectionalObservations>>);
+
+impl Middleware for DirectionalProjectionCapture {
+    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+        let side = context.side();
+        let method = context.method();
+        let arguments = observed_value(context.sanitized_arguments(&PolicySanitizer::default()));
+        let observations = self.0.clone();
+        Box::pin(async move {
+            let response = next.run(context).await?;
+            let body = observed_value(response.sanitized_body(method, &PolicySanitizer::default()));
+            let mut observed = observations.lock().unwrap();
+            match side {
+                RpcSide::Client => {
+                    observed.client_arguments.push(arguments);
+                    observed.client_responses.push(body);
+                }
+                RpcSide::Server => {
+                    observed.server_arguments.push(arguments);
+                    observed.server_responses.push(body);
+                }
+                _ => panic!("unexpected RPC side"),
+            }
+            Ok(response)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directional_schemas_protect_all_four_projection_paths() {
+    for protocol in [WireProtocol::FusenV1, WireProtocol::SpringCloudV1] {
+        let observations = Arc::new(Mutex::new(DirectionalObservations::default()));
+        let server = Server::builder("127.0.0.1:0")
+            .config(
+                ServerConfig::builder()
+                    .protocols(ProtocolSet::ALL)
+                    .build()
+                    .unwrap(),
+            )
+            .middleware(DirectionalProjectionCapture(observations.clone()))
+            .interface(DirectionalProjectionContractServer::new(DirectionalHandler))
+            .build()
+            .unwrap()
+            .start()
+            .await
+            .unwrap();
+        let runtime = ClientRuntime::builder().build().unwrap();
+        let client = DirectionalProjectionContractClient::builder(&runtime)
+            .direct(format!("http://{}", server.local_addr()))
+            .protocol(protocol)
+            .middleware(DirectionalProjectionCapture(observations.clone()))
+            .connect()
+            .await
+            .unwrap();
+
+        let response = client
+            .directional(DirectionalPayload {
+                public_value: "client-visible".to_owned(),
+                secret_value: "client-secret".to_owned(),
+            })
+            .await
+            .unwrap()
+            .into_body();
+        assert!(response.public_value.is_empty());
+        assert_eq!(response.secret_value, "client-visible");
+
+        {
+            let observed = observations.lock().unwrap();
+            assert_eq!(
+                observed.client_arguments,
+                [Some(json!({
+                    "value": {
+                        "display": "client-visible",
+                        "password": "<redacted>"
+                    }
+                }))]
+            );
+            assert_eq!(
+                observed.server_arguments,
+                [Some(json!({"value": {"display": "<redacted>"}}))]
+            );
+            assert_eq!(
+                observed.server_responses,
+                [Some(json!({
+                    "display": "client-visible",
+                    "password": "<redacted>"
+                }))]
+            );
+            assert_eq!(
+                observed.client_responses,
+                [Some(json!({"display": "<redacted>"}))]
+            );
+        }
+
+        drop(client);
+        runtime.shutdown().await.unwrap();
+        server.shutdown().await.unwrap();
+    }
+}

@@ -1,0 +1,5 @@
+error: `#[serde(transparent)]` must use the same field for serialization and deserialization when deriving `SensitiveFields`
+  --> tests/ui/fail/transparent_direction_mismatch.rs:10:9
+   |
+10 | #[serde(transparent)]
+   |         ^^^^^^^^^^^

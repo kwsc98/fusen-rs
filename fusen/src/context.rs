@@ -169,7 +169,10 @@ impl RpcCall {
 #[derive(Clone, Copy)]
 enum ResponseSchemaOrigin {
     Unclassified,
-    Declared(&'static MethodDescriptor),
+    Declared {
+        method: &'static MethodDescriptor,
+        direction: crate::projection::ProjectionDirection,
+    },
 }
 
 /// Budget-aware encoded JSON body carried through middleware and transport.
@@ -368,7 +371,7 @@ impl RpcResponse<RpcBody> {
         crate::projection::sanitize_response(
             method,
             self.body.as_bytes(),
-            self.has_declared_schema_origin(method),
+            self.declared_schema_direction(method),
             sanitizer,
         )
     }
@@ -411,15 +414,42 @@ impl RpcResponse<RpcBody> {
         self.body.hold_budget(permit);
     }
 
-    pub(crate) fn mark_declared_schema_origin(&mut self, method: &'static MethodDescriptor) {
-        self.body.schema_origin = ResponseSchemaOrigin::Declared(method);
+    pub(crate) fn mark_declared_serialize_schema_origin(
+        &mut self,
+        method: &'static MethodDescriptor,
+    ) {
+        self.mark_declared_schema_origin(method, crate::projection::ProjectionDirection::Serialize);
     }
 
-    pub(crate) fn has_declared_schema_origin(&self, method: &MethodDescriptor) -> bool {
-        matches!(
-            self.body.schema_origin,
-            ResponseSchemaOrigin::Declared(origin) if std::ptr::eq(origin, method)
-        )
+    pub(crate) fn mark_declared_deserialize_schema_origin(
+        &mut self,
+        method: &'static MethodDescriptor,
+    ) {
+        self.mark_declared_schema_origin(
+            method,
+            crate::projection::ProjectionDirection::Deserialize,
+        );
+    }
+
+    fn mark_declared_schema_origin(
+        &mut self,
+        method: &'static MethodDescriptor,
+        direction: crate::projection::ProjectionDirection,
+    ) {
+        self.body.schema_origin = ResponseSchemaOrigin::Declared { method, direction };
+    }
+
+    fn declared_schema_direction(
+        &self,
+        method: &MethodDescriptor,
+    ) -> Option<crate::projection::ProjectionDirection> {
+        match self.body.schema_origin {
+            ResponseSchemaOrigin::Declared {
+                method: origin,
+                direction,
+            } if std::ptr::eq(origin, method) => Some(direction),
+            ResponseSchemaOrigin::Unclassified | ResponseSchemaOrigin::Declared { .. } => None,
+        }
     }
 
     pub(crate) fn track_endpoint_breaker(&mut self) {
@@ -606,11 +636,16 @@ impl RpcContext {
         &self,
         sanitizer: &dyn crate::sensitive::Sanitizer,
     ) -> crate::sensitive::SanitizedValue {
-        self.arguments
-            .as_ref()
-            .map_or_else(crate::sensitive::SanitizedValue::omitted, |arguments| {
-                crate::projection::sanitize_arguments(self.method, arguments, sanitizer)
-            })
+        let direction = match self.side {
+            RpcSide::Client => crate::projection::ProjectionDirection::Serialize,
+            RpcSide::Server => crate::projection::ProjectionDirection::Deserialize,
+        };
+        self.arguments.as_ref().map_or_else(
+            crate::sensitive::SanitizedValue::omitted,
+            |arguments| {
+                crate::projection::sanitize_arguments(self.method, arguments, direction, sanitizer)
+            },
+        )
     }
 
     /// Returns the physical attempt number at attempt-scoped stages.
@@ -707,10 +742,16 @@ mod tests {
     }
 
     fn payload_shape() -> SensitiveShape {
-        SensitiveShape::Fields(&[
-            const { SensitiveField::new("visible", public_shape) },
-            const { SensitiveField::new("secret", secret_shape) },
-        ])
+        SensitiveShape::Fields {
+            serialize: &[
+                const { SensitiveField::new("visible_out", public_shape) },
+                const { SensitiveField::new("secret_out", secret_shape) },
+            ],
+            deserialize: &[
+                const { SensitiveField::new("visible_in", public_shape) },
+                const { SensitiveField::new("visible_out", secret_shape) },
+            ],
+        }
     }
 
     fn service() -> &'static ServiceDescriptor {
@@ -735,7 +776,7 @@ mod tests {
         let mut arguments = RpcArguments::new();
         arguments.insert(
             "request".to_owned(),
-            json!({"visible": "safe", "secret": "private-argument"}),
+            json!({"visible_in": "safe", "visible_out": "private-argument"}),
         );
         RpcContext::new(RpcContextParts {
             side: RpcSide::Server,
@@ -788,21 +829,30 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(context.sanitized_arguments(&policy)).unwrap(),
-            json!({"request": {"visible": "safe", "secret": "<redacted>"}})
+            json!({"request": {"visible_in": "safe", "visible_out": "<redacted>"}})
         );
 
         let short_circuit = context
-            .respond(json!({"visible": "safe", "secret": "private-response"}))
+            .respond(json!({"visible_out": "safe", "secret_out": "private-response"}))
             .unwrap();
         assert!(short_circuit.sanitized_body(method, &policy).is_omitted());
 
         let mut declared = RpcResponse::from_json_bytes(Bytes::from_static(
-            br#"{"visible":"safe","secret":"private-response"}"#,
+            br#"{"visible_out":"safe","secret_out":"private-response"}"#,
         ));
-        declared.mark_declared_schema_origin(method);
+        declared.mark_declared_serialize_schema_origin(method);
         assert_eq!(
             serde_json::to_value(declared.sanitized_body(method, &policy)).unwrap(),
-            json!({"visible": "safe", "secret": "<redacted>"})
+            json!({"visible_out": "safe", "secret_out": "<redacted>"})
+        );
+
+        let mut received = RpcResponse::from_json_bytes(Bytes::from_static(
+            br#"{"visible_in":"safe","visible_out":"private-response"}"#,
+        ));
+        received.mark_declared_deserialize_schema_origin(method);
+        assert_eq!(
+            serde_json::to_value(received.sanitized_body(method, &policy)).unwrap(),
+            json!({"visible_in": "safe", "visible_out": "<redacted>"})
         );
 
         let wrong_method = MethodDescriptor::new(MethodId::new(1), "other", None)
@@ -811,17 +861,17 @@ mod tests {
         assert!(declared.sanitized_body(&wrong_method, &policy).is_omitted());
 
         let replacement = context
-            .respond(json!({"visible": "private-replacement"}))
+            .respond(json!({"visible_out": "private-replacement"}))
             .unwrap()
             .into_body();
         *declared.body_mut() = replacement;
         assert!(declared.sanitized_body(method, &policy).is_omitted());
 
         let mut declared =
-            RpcResponse::from_json_bytes(Bytes::from_static(br#"{"visible":"safe"}"#));
-        declared.mark_declared_schema_origin(method);
+            RpcResponse::from_json_bytes(Bytes::from_static(br#"{"visible_out":"safe"}"#));
+        declared.mark_declared_serialize_schema_origin(method);
         let replacement = context
-            .respond(json!({"visible": "private-map-replacement"}))
+            .respond(json!({"visible_out": "private-map-replacement"}))
             .unwrap()
             .into_body();
         let mapped = declared.map(|_| replacement);
