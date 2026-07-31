@@ -1,0 +1,21 @@
+error[E0277]: the trait bound `Request: SensitiveFields` is not satisfied
+  --> tests/ui/missing_request_sensitive_fields.rs:13:33
+   |
+13 |         #[param(body)] request: Request,
+   |                                 ^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `SensitiveFields` is not implemented for `Request`
+  --> tests/ui/missing_request_sensitive_fields.rs:4:1
+   |
+ 4 | struct Request {
+   | ^^^^^^^^^^^^^^
+   = help: the following other types implement trait `SensitiveFields`:
+             &T
+             &mut T
+             ()
+             Arc<T>
+             Box<T>
+             String
+             Vec<T>
+             [T; LENGTH]
+           and $N others

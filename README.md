@@ -17,14 +17,18 @@
 One trait macro defines the shared client/server interface. Every RPC method accepts zero or more owned, named parameters and returns `Result<RpcResponse<T>, RpcError>`.
 
 ```rust,no_run
-use fusen_rs::{RpcError, RpcResponse, interface};
+use fusen_rs::{RpcError, RpcResponse, SensitiveFields, interface};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-pub struct User { pub id: String }
+#[derive(Serialize, Deserialize, SensitiveFields)]
+pub struct User {
+    #[sensitive(kind = "identifier")]
+    pub id: String,
+}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, SensitiveFields)]
 pub struct CreateUser {
+    #[sensitive(kind = "identifier")]
     pub id: String,
 }
 
@@ -35,7 +39,7 @@ pub trait UserApi {
     )]
     async fn get(
         &self,
-        id: String,
+        #[param(path)] id: String,
         #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
@@ -52,7 +56,9 @@ pub trait UserApi {
 
 The macro generates `UserApiClient` and `UserApiServer<T>`. The generated client and user handler both implement `UserApi`; all clients use the generic `ClientBuilder<UserApiClient>`. Every interface method requires `#[method(method = "...", path = "...")]`; the generated client uses it to build requests, the generated server uses it to route requests, and retry eligibility follows the standard HTTP method.
 
-Parameter locations are inferred deterministically. A parameter whose wire name matches a `{placeholder}` is a path parameter. Other GET, HEAD, OPTIONS, and DELETE parameters are query parameters. Other POST, PUT, and PATCH parameters become fields in one synthesized JSON body object, so `create(user, audit)` sends `{"user": ..., "audit": ...}` even when only one body field exists. Use `#[param(query)]` to override the default, `#[param(body)]` for one complete raw JSON body, `#[param(context)]` for a non-wire `RpcCall`, and `#[param(name = "...")]` to rename a wire parameter. A raw body cannot coexist with inferred body fields; repeated query values use `Vec<T>`. Fusen V1 always encodes every business parameter by name in its `arguments` object. Invalid mappings fail during macro expansion, and invalid serialized values fail locally before network I/O.
+Parameter locations are inferred deterministically. A parameter whose wire name matches a `{placeholder}` is a path parameter. Other GET, HEAD, OPTIONS, and DELETE parameters are query parameters. Other POST, PUT, and PATCH parameters become fields in one synthesized JSON body object, so `create(user, audit)` sends `{"user": ..., "audit": ...}` even when only one body field exists. Use `#[param(path)]` to explicitly confirm a path parameter; its wire name must match the corresponding placeholder. Use `#[param(query)]` to override the default, `#[param(body)]` for one complete raw JSON body, `#[param(context)]` for a non-wire `RpcCall`, and `#[param(name = "...")]` to rename a wire parameter. Every non-context wire name must remain unique, even across different sources. A raw body cannot coexist with inferred body fields; repeated query values use `Vec<T>`. Fusen V1 always encodes every business parameter by name in its `arguments` object. Invalid mappings fail during macro expansion, and invalid serialized values fail locally before network I/O.
+
+Custom request and response DTOs derive `SensitiveFields`. Fields use `#[sensitive(kind = "...")]` or `#[sensitive(opaque)]`; the interface macro discovers both request and `RpcResponse<T>` schemas without a response marker. Fusen does not log payloads automatically: third-party middleware explicitly calls `sanitized_arguments` and `sanitized_body`, which fail closed without changing DTO `Debug`, wire bytes, or registry/discovery metadata. See [Middleware and macro behavior](docs/modules/middleware-macros.md).
 
 ## Client
 

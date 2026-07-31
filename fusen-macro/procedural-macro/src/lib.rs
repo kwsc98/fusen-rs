@@ -7,6 +7,8 @@ use quote::{format_ident, quote};
 use syn::parse_macro_input;
 
 mod args;
+mod sensitive;
+mod sensitive_derive;
 mod service_macro;
 mod validate;
 
@@ -40,6 +42,20 @@ pub fn method(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+/// Derives a process-local schema used to construct policy-controlled safe projections.
+///
+/// Fields recurse through their own `SensitiveFields` implementation by default. Use
+/// `#[sensitive(kind = "...")]` to classify a complete serialized field or
+/// `#[sensitive(opaque)]` to omit it without requiring its type to implement the trait.
+#[proc_macro_derive(SensitiveFields, attributes(sensitive, serde))]
+pub fn derive_sensitive_fields(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as syn::DeriveInput);
+    match sensitive_derive::expand(input, &sensitivity_contract_path()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
 fn runtime_path() -> proc_macro2::TokenStream {
     match crate_name("fusen-rs") {
         Ok(FoundCrate::Itself) => quote!(::fusen_rs),
@@ -56,5 +72,23 @@ fn runtime_crate_name() -> String {
         Ok(FoundCrate::Itself) => "fusen_rs".to_owned(),
         Ok(FoundCrate::Name(name)) => name.replace('-', "_"),
         Err(_) => "fusen_rs".to_owned(),
+    }
+}
+
+fn sensitivity_contract_path() -> proc_macro2::TokenStream {
+    match crate_name("fusen-contract") {
+        Ok(FoundCrate::Itself) => quote!(crate),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = format_ident!("{}", name.replace('-', "_"));
+            quote!(::#ident)
+        }
+        Err(_) => match crate_name("fusen-rs") {
+            Ok(FoundCrate::Itself) => quote!(crate::contract),
+            Ok(FoundCrate::Name(name)) => {
+                let ident = format_ident!("{}", name.replace('-', "_"));
+                quote!(::#ident::contract)
+            }
+            Err(_) => quote!(::fusen_rs::contract),
+        },
     }
 }

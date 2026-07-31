@@ -370,7 +370,7 @@ fn append_query(
     match cardinality {
         SpringCloudParameterCardinality::Scalar => match value {
             Value::Null => Ok(()),
-            Value::Array(_) => Err(invalid_query_cardinality(name, "a scalar or null", value)),
+            Value::Array(_) => Err(invalid_query_cardinality(name, "a scalar or null")),
             value => {
                 let value = scalar_text(value, name)?;
                 query.push(format!(
@@ -383,7 +383,7 @@ fn append_query(
         },
         SpringCloudParameterCardinality::Repeated => {
             let Value::Array(values) = value else {
-                return Err(invalid_query_cardinality(name, "an array", value));
+                return Err(invalid_query_cardinality(name, "an array"));
             };
             for value in values {
                 let value = scalar_text(value, name)?;
@@ -399,11 +399,11 @@ fn append_query(
     }
 }
 
-fn invalid_query_cardinality(name: &str, expected: &str, value: &Value) -> RpcError {
+fn invalid_query_cardinality(name: &str, expected: &str) -> RpcError {
     RpcError::framework(
         RpcCategory::InvalidArgument,
         "invalid_spring_parameter",
-        format!("Spring query argument {name} must be {expected}; received {value}"),
+        format!("Spring query argument {name} must be {expected}"),
     )
 }
 
@@ -587,6 +587,7 @@ fn bounded_problem(problem: &ProblemDetails) -> Bytes {
 pub(crate) async fn decode_http_response(
     protocol: WireProtocol,
     spring_head: bool,
+    method: &'static MethodDescriptor,
     response: Response<Incoming>,
     max_body: usize,
     budget: &std::sync::Arc<ByteBudget>,
@@ -617,6 +618,7 @@ pub(crate) async fn decode_http_response(
             .try_reserve(0)
             .ok_or_else(response_budget_exhausted)?;
         let mut rpc = RpcResponse::from_json_bytes(Bytes::from_static(b"null"));
+        rpc.mark_declared_schema_origin(method);
         rpc.hold_budget(permit);
         *rpc.headers_mut() = response_headers_without_control(parts.headers);
         rpc.set_status(status)?;
@@ -662,6 +664,7 @@ pub(crate) async fn decode_http_response(
         _ => return Err(unsupported_wire_protocol()),
     };
     let mut rpc = RpcResponse::from_json_bytes(result);
+    rpc.mark_declared_schema_origin(method);
     rpc.hold_budget(permit);
     *rpc.headers_mut() = response_headers;
     rpc.set_status(status)?;

@@ -1,0 +1,7 @@
+error: a flattened serde field cannot be mapped safely; classify the complete type with a type-level sensitivity kind or `opaque`
+  --> tests/ui/fail/opaque_flatten_requires_type_classification.rs:13:5
+   |
+13 | /     #[serde(flatten)]
+14 | |     #[sensitive(opaque)]
+15 | |     extra: std::collections::BTreeMap<String, String>,
+   | |_____________________________________________________^

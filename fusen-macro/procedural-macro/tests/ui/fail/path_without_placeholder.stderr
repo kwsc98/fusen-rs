@@ -1,0 +1,5 @@
+error: #[param(path)] parameter `user_id` requires a matching `{user_id}` path placeholder
+  --> tests/ui/fail/path_without_placeholder.rs:11:9
+   |
+11 |         #[param(path)] user_id: String,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

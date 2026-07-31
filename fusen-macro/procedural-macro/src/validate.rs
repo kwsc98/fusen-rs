@@ -1,4 +1,7 @@
-use crate::args::{MethodArgs, ServiceArgs};
+use crate::{
+    args::{MethodArgs, ServiceArgs},
+    sensitive::{SensitiveOverride, parse_sensitive_attrs},
+};
 use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::visit::Visit;
@@ -31,6 +34,7 @@ pub(crate) struct Parameter {
     pub(crate) source: ParameterSource,
     pub(crate) repeated: bool,
     pub(crate) parse_spring_json_primitive: bool,
+    pub(crate) sensitivity: Option<SensitiveOverride>,
 }
 
 pub(crate) struct Method {
@@ -302,6 +306,8 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
             ));
         }
 
+        let sensitivity = parse_sensitive_attrs(&input.attrs)?;
+
         let mut explicit_source = None;
         let mut wire_name = None;
         for attribute in input
@@ -311,15 +317,19 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
         {
             attribute.parse_nested_meta(|meta| {
                 if meta.path.is_ident("context")
+                    || meta.path.is_ident("path")
                     || meta.path.is_ident("query")
                     || meta.path.is_ident("body")
                 {
                     if explicit_source.is_some() {
-                        return Err(meta
-                            .error("a parameter may declare only one of context, query, or body"));
+                        return Err(meta.error(
+                            "a parameter may declare only one of context, path, query, or body",
+                        ));
                     }
                     explicit_source = Some(if meta.path.is_ident("context") {
                         ParameterSource::Context
+                    } else if meta.path.is_ident("path") {
+                        ParameterSource::Path
                     } else if meta.path.is_ident("query") {
                         ParameterSource::Query
                     } else {
@@ -333,8 +343,9 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                     wire_name = Some(meta.value()?.parse::<syn::LitStr>()?);
                     Ok(())
                 } else {
-                    Err(meta
-                        .error("unknown parameter field; expected context, query, body, or name"))
+                    Err(meta.error(
+                        "unknown parameter field; expected context, path, query, body, or name",
+                    ))
                 }
             })?;
         }
@@ -345,6 +356,12 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
             .to_owned();
 
         if explicit_source == Some(ParameterSource::Context) {
+            if sensitivity.is_some() {
+                return Err(syn::Error::new_spanned(
+                    input,
+                    "#[param(context)] parameters cannot declare sensitivity metadata",
+                ));
+            }
             if wire_name.is_some() {
                 return Err(syn::Error::new_spanned(
                     input,
@@ -376,6 +393,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                 source: ParameterSource::Context,
                 repeated: false,
                 parse_spring_json_primitive: false,
+                sensitivity: None,
             });
             continue;
         }
@@ -398,6 +416,14 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                 ParameterSource::Query
             }
         });
+        if source == ParameterSource::Path && !placeholders.contains(&wire_name) {
+            return Err(syn::Error::new_spanned(
+                input,
+                format!(
+                    "#[param(path)] parameter `{wire_name}` requires a matching `{{{wire_name}}}` path placeholder"
+                ),
+            ));
+        }
         if source == ParameterSource::Body
             && matches!(http.method.as_str(), "GET" | "HEAD" | "OPTIONS")
         {
@@ -450,6 +476,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                 source,
                 ParameterSource::Path | ParameterSource::Query
             ) && is_json_primitive_type(scalar_type),
+            sensitivity,
         });
     }
 

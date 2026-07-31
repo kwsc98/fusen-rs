@@ -686,6 +686,7 @@ impl Terminal for AttemptTerminal<'_> {
                     decode_http_response(
                         self.client.protocol,
                         self.spring_head,
+                        context.method(),
                         response,
                         self.client
                             .runtime

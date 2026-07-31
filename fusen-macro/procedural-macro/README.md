@@ -14,7 +14,7 @@ pub trait UserApi {
     )]
     async fn get(
         &self,
-        id: String,
+        #[param(path)] id: String,
         #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
@@ -33,10 +33,12 @@ eligibility.
 
 A wire name matching a path placeholder is inferred as a path parameter. Other
 GET/HEAD/OPTIONS/DELETE parameters default to query values; other POST/PUT/PATCH
-parameters become fields in a synthesized JSON body object. `#[param(query)]`
-overrides the default, `#[param(body)]` declares one complete raw JSON body,
-`#[param(context)]` carries an unencoded `RpcCall`, and `#[param(name = "...")]`
-renames the wire parameter. A raw body cannot coexist with synthesized body
+parameters become fields in a synthesized JSON body object. `#[param(path)]`
+explicitly confirms a path parameter and requires a matching placeholder;
+`#[param(query)]` overrides the default, `#[param(body)]` declares one complete
+raw JSON body, `#[param(context)]` carries an unencoded `RpcCall`, and
+`#[param(name = "...")]` renames the wire parameter. Non-context wire names remain
+globally unique across sources. A raw body cannot coexist with synthesized body
 fields. Retry eligibility is inferred from the standard HTTP method. Fusen V1
 always encodes business parameters by name, independently of their HTTP roles.
 

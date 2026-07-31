@@ -109,8 +109,8 @@ pub fn decode_argument<T: DeserializeOwned>(
     if protocol == crate::WireProtocol::SpringCloudV1 && parse_spring_json_primitive {
         value = parse_spring_json_primitives(value);
     }
-    serde_json::from_value(value).map_err(|error| {
-        tracing::debug!(?error, "RPC message decoding failed");
+    serde_json::from_value(value).map_err(|_| {
+        tracing::debug!("RPC message decoding failed");
         RpcError::framework(
             RpcCategory::InvalidArgument,
             "invalid_argument",

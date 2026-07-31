@@ -21,6 +21,7 @@ proc-macro2.workspace = true
 proc-macro-crate.workspace = true
 
 [dev-dependencies]
+serde.workspace = true
 trybuild.workspace = true
 
 [lints]

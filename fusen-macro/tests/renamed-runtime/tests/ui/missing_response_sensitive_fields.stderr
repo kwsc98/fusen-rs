@@ -1,0 +1,21 @@
+error[E0277]: the trait bound `Response: SensitiveFields` is not satisfied
+  --> tests/ui/missing_response_sensitive_fields.rs:11:53
+   |
+11 |     async fn call(&self) -> Result<rpc::RpcResponse<Response>, rpc::RpcError>;
+   |                                                     ^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `SensitiveFields` is not implemented for `Response`
+  --> tests/ui/missing_response_sensitive_fields.rs:4:1
+   |
+ 4 | struct Response {
+   | ^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `SensitiveFields`:
+             &T
+             &mut T
+             ()
+             Arc<T>
+             Box<T>
+             String
+             Vec<T>
+             [T; LENGTH]
+           and $N others

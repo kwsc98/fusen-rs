@@ -218,7 +218,24 @@ wait_for_crates_io() {
 }
 ```
 
-第一层：
+第一层（不依赖其他 workspace 发布 crate）：
+
+```shell
+assert_release_candidate
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-procedural-macro
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-config
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-observability
+
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-procedural-macro
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-config
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-observability
+
+wait_for_crates_io fusen-procedural-macro
+wait_for_crates_io fusen-config
+wait_for_crates_io fusen-observability
+```
+
+第二层（`fusen-contract` 的可选 `derive` feature 依赖第一层的过程宏）：
 
 ```shell
 assert_release_candidate
@@ -227,41 +244,26 @@ cargo +1.97.0 publish --locked --registry crates-io -p fusen-contract
 wait_for_crates_io fusen-contract
 ```
 
-第二层：
-
-```shell
-assert_release_candidate
-cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-register
-cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-config
-cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-observability
-cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-procedural-macro
-
-cargo +1.97.0 publish --locked --registry crates-io -p fusen-register
-cargo +1.97.0 publish --locked --registry crates-io -p fusen-config
-cargo +1.97.0 publish --locked --registry crates-io -p fusen-observability
-cargo +1.97.0 publish --locked --registry crates-io -p fusen-procedural-macro
-
-wait_for_crates_io fusen-register
-wait_for_crates_io fusen-config
-wait_for_crates_io fusen-observability
-wait_for_crates_io fusen-procedural-macro
-```
-
 第三层：
 
 ```shell
 assert_release_candidate
-cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-nacos
-cargo +1.97.0 publish --locked --registry crates-io -p fusen-nacos
-wait_for_crates_io fusen-nacos
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-register
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-register
+wait_for_crates_io fusen-register
 ```
 
 第四层：
 
 ```shell
 assert_release_candidate
+cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-nacos
 cargo +1.97.0 publish --locked --registry crates-io --dry-run -p fusen-rs
+
+cargo +1.97.0 publish --locked --registry crates-io -p fusen-nacos
 cargo +1.97.0 publish --locked --registry crates-io -p fusen-rs
+
+wait_for_crates_io fusen-nacos
 wait_for_crates_io fusen-rs
 ```
 

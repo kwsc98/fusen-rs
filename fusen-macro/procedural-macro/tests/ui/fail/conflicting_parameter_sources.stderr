@@ -1,0 +1,5 @@
+error: a parameter may declare only one of context, path, query, or body
+  --> tests/ui/fail/conflicting_parameter_sources.rs:11:23
+   |
+11 |         #[param(path, query)] user_id: String,
+   |                       ^^^^^

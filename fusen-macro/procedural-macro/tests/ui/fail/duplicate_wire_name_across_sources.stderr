@@ -1,0 +1,5 @@
+error: duplicate RPC wire parameter name `user_id`
+  --> tests/ui/fail/duplicate_wire_name_across_sources.rs:12:9
+   |
+12 |         #[param(query, name = "user_id")] query_user_id: String,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

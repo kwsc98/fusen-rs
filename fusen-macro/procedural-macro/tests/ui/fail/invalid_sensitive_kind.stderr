@@ -1,0 +1,5 @@
+error: sensitivity kind must contain 1-64 ASCII letters, digits, '.', '_' or '-'
+  --> tests/ui/fail/invalid_sensitive_kind.rs:10:20
+   |
+10 | #[sensitive(kind = "contains spaces")]
+   |                    ^^^^^^^^^^^^^^^^^

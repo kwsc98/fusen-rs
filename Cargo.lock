@@ -321,7 +321,9 @@ dependencies = [
 name = "fusen-contract"
 version = "0.9.0"
 dependencies = [
+ "fusen-procedural-macro",
  "http",
+ "serde",
  "thiserror",
  "url",
 ]
@@ -364,6 +366,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
+ "serde",
  "syn 3.0.3",
  "trybuild",
 ]

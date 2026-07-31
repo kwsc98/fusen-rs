@@ -7,6 +7,7 @@ use fusen_contract::{MethodDescriptor, ServiceDescriptor, ServiceInstance, WireP
 use http::{Extensions, HeaderMap, StatusCode};
 use serde_json::{Map, Value};
 use std::{
+    fmt,
     num::NonZeroU8,
     ops::{Deref, DerefMut},
     sync::{Arc, Mutex},
@@ -14,9 +15,18 @@ use std::{
 };
 
 /// Named JSON values used by the versioned wire protocols.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct RpcArguments(Map<String, Value>);
+
+impl fmt::Debug for RpcArguments {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RpcArguments")
+            .field("field_count", &self.0.len())
+            .finish()
+    }
+}
 
 impl RpcArguments {
     /// Creates an empty argument object.
@@ -156,11 +166,27 @@ impl RpcCall {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ResponseSchemaOrigin {
+    Unclassified,
+    Declared(&'static MethodDescriptor),
+}
+
 /// Budget-aware encoded JSON body carried through middleware and transport.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RpcBody {
     bytes: Bytes,
     budget_permit: Option<Arc<BytePermit>>,
+    schema_origin: ResponseSchemaOrigin,
+}
+
+impl fmt::Debug for RpcBody {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RpcBody")
+            .field("length", &self.bytes.len())
+            .finish()
+    }
 }
 
 impl RpcBody {
@@ -183,6 +209,7 @@ impl RpcBody {
         Self {
             bytes,
             budget_permit: None,
+            schema_origin: ResponseSchemaOrigin::Unclassified,
         }
     }
 
@@ -202,7 +229,7 @@ struct ResponseRuntime {
 }
 
 /// A typed successful RPC response.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RpcResponse<T> {
     body: T,
     status: StatusCode,
@@ -210,6 +237,20 @@ pub struct RpcResponse<T> {
     extensions: Extensions,
     attempts: u8,
     runtime: ResponseRuntime,
+}
+
+impl<T> fmt::Debug for RpcResponse<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RpcResponse")
+            .field("body", &"<omitted>")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .field("extensions", &self.extensions)
+            .field("attempts", &self.attempts)
+            .field("runtime", &self.runtime)
+            .finish()
+    }
 }
 
 impl<T> RpcResponse<T> {
@@ -314,6 +355,24 @@ impl<T> RpcResponse<T> {
 }
 
 impl RpcResponse<RpcBody> {
+    /// Projects the encoded result through declared response sensitivity metadata.
+    ///
+    /// Responses that did not originate from the generated response schema, methods without
+    /// response metadata, invalid JSON, policy panics, and projection limit failures are omitted
+    /// in full.
+    pub fn sanitized_body(
+        &self,
+        method: &MethodDescriptor,
+        sanitizer: &dyn crate::sensitive::Sanitizer,
+    ) -> crate::sensitive::SanitizedValue {
+        crate::projection::sanitize_response(
+            method,
+            self.body.as_bytes(),
+            self.has_declared_schema_origin(method),
+            sanitizer,
+        )
+    }
+
     pub(crate) fn success_with_budget<T: serde::Serialize>(
         value: T,
         limit: usize,
@@ -331,6 +390,7 @@ impl RpcResponse<RpcBody> {
         Ok(Self::new(RpcBody {
             bytes,
             budget_permit: Some(permit),
+            schema_origin: ResponseSchemaOrigin::Unclassified,
         }))
     }
 
@@ -349,6 +409,17 @@ impl RpcResponse<RpcBody> {
 
     pub(crate) fn hold_budget(&mut self, permit: BytePermit) {
         self.body.hold_budget(permit);
+    }
+
+    pub(crate) fn mark_declared_schema_origin(&mut self, method: &'static MethodDescriptor) {
+        self.body.schema_origin = ResponseSchemaOrigin::Declared(method);
+    }
+
+    pub(crate) fn has_declared_schema_origin(&self, method: &MethodDescriptor) -> bool {
+        matches!(
+            self.body.schema_origin,
+            ResponseSchemaOrigin::Declared(origin) if std::ptr::eq(origin, method)
+        )
     }
 
     pub(crate) fn track_endpoint_breaker(&mut self) {
@@ -382,7 +453,7 @@ impl RpcResponse<RpcBody> {
 }
 
 /// Metadata and mutable state for one middleware position.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RpcContext {
     side: RpcSide,
     stage: MiddlewareStage,
@@ -399,6 +470,32 @@ pub struct RpcContext {
     response_limit: usize,
     response_wire_overhead: usize,
     response_budget: Arc<ByteBudget>,
+}
+
+impl fmt::Debug for RpcContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RpcContext")
+            .field("side", &self.side)
+            .field("stage", &self.stage)
+            .field("request_id", &self.request_id)
+            .field("protocol", &self.protocol)
+            .field("interface", &self.interface)
+            .field("method", &self.method)
+            .field("deadline", &self.deadline)
+            .field("attempt", &self.attempt)
+            .field("endpoint", &self.endpoint)
+            .field("headers", &self.headers)
+            .field("extensions", &self.extensions)
+            .field(
+                "argument_count",
+                &self.arguments.as_ref().map(|arguments| arguments.len()),
+            )
+            .field("response_limit", &self.response_limit)
+            .field("response_wire_overhead", &self.response_wire_overhead)
+            .field("response_budget", &self.response_budget)
+            .finish()
+    }
 }
 
 pub(crate) struct RpcContextParts {
@@ -500,6 +597,22 @@ impl RpcContext {
         self.arguments.as_ref()
     }
 
+    /// Projects available arguments through the method's declared sensitivity metadata.
+    ///
+    /// `ServerHead` contexts and other positions without arguments return an omitted value because
+    /// the request body has not been consumed. Metadata gaps, policy panics, and projection limit
+    /// failures also fail closed to the same representation.
+    pub fn sanitized_arguments(
+        &self,
+        sanitizer: &dyn crate::sensitive::Sanitizer,
+    ) -> crate::sensitive::SanitizedValue {
+        self.arguments
+            .as_ref()
+            .map_or_else(crate::sensitive::SanitizedValue::omitted, |arguments| {
+                crate::projection::sanitize_arguments(self.method, arguments, sanitizer)
+            })
+    }
+
     /// Returns the physical attempt number at attempt-scoped stages.
     pub const fn attempt(&self) -> Option<NonZeroU8> {
         self.attempt
@@ -572,4 +685,146 @@ fn response_budget_exhausted() -> crate::RpcError {
         "response_byte_budget_exhausted",
         "response byte budget is exhausted",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{PolicySanitizer, runtime::budget::ByteBudget};
+    use fusen_contract::{
+        MethodId, MethodSensitivity, SensitiveArgument, SensitiveField, SensitiveShape,
+        SensitivityKind, ServiceSelector,
+    };
+    use serde_json::json;
+    use std::{sync::OnceLock, time::Duration};
+
+    fn public_shape() -> SensitiveShape {
+        SensitiveShape::Kind(SensitivityKind::PUBLIC)
+    }
+
+    fn secret_shape() -> SensitiveShape {
+        SensitiveShape::Kind(SensitivityKind::SECRET)
+    }
+
+    fn payload_shape() -> SensitiveShape {
+        SensitiveShape::Fields(&[
+            const { SensitiveField::new("visible", public_shape) },
+            const { SensitiveField::new("secret", secret_shape) },
+        ])
+    }
+
+    fn service() -> &'static ServiceDescriptor {
+        static SERVICE: OnceLock<ServiceDescriptor> = OnceLock::new();
+        SERVICE.get_or_init(|| {
+            let method = MethodDescriptor::new(MethodId::new(0), "call", None)
+                .unwrap()
+                .with_sensitivity(MethodSensitivity::new(
+                    vec![SensitiveArgument::new("request", payload_shape)],
+                    Some(payload_shape),
+                ));
+            ServiceDescriptor::new(
+                ServiceSelector::new("sensitive-context-test", None, None).unwrap(),
+                vec![method],
+            )
+            .unwrap()
+        })
+    }
+
+    fn context() -> RpcContext {
+        let service = service();
+        let mut arguments = RpcArguments::new();
+        arguments.insert(
+            "request".to_owned(),
+            json!({"visible": "safe", "secret": "private-argument"}),
+        );
+        RpcContext::new(RpcContextParts {
+            side: RpcSide::Server,
+            stage: MiddlewareStage::ServerCall,
+            request_id: "request-1".to_owned(),
+            protocol: WireProtocol::FusenV1,
+            interface: service,
+            method: service.method(MethodId::new(0)).unwrap(),
+            deadline: Deadline::after(Duration::from_secs(1)),
+            attempt: None,
+            endpoint: None,
+            headers: HeaderMap::new(),
+            extensions: Extensions::new(),
+            arguments: Some(arguments),
+            response_limit: 4096,
+            response_wire_overhead: 0,
+            response_budget: ByteBudget::new(16 * 1024),
+        })
+    }
+
+    #[test]
+    fn payload_carrier_debug_never_expands_values() {
+        struct PrivateDebug;
+
+        impl fmt::Debug for PrivateDebug {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("private-typed-body")
+            }
+        }
+
+        let context = context();
+        let arguments_debug = format!("{:?}", context.arguments().unwrap());
+        let context_debug = format!("{context:?}");
+        let body_debug = format!(
+            "{:?}",
+            RpcBody::from_bytes(Bytes::from_static(b"private-encoded-body"))
+        );
+        let response_debug = format!("{:?}", RpcResponse::new(PrivateDebug));
+
+        for debug in [arguments_debug, context_debug, body_debug, response_debug] {
+            assert!(!debug.contains("private-"));
+        }
+    }
+
+    #[test]
+    fn declared_responses_project_but_context_short_circuits_do_not() {
+        let context = context();
+        let method = context.method();
+        let policy = PolicySanitizer::default();
+
+        assert_eq!(
+            serde_json::to_value(context.sanitized_arguments(&policy)).unwrap(),
+            json!({"request": {"visible": "safe", "secret": "<redacted>"}})
+        );
+
+        let short_circuit = context
+            .respond(json!({"visible": "safe", "secret": "private-response"}))
+            .unwrap();
+        assert!(short_circuit.sanitized_body(method, &policy).is_omitted());
+
+        let mut declared = RpcResponse::from_json_bytes(Bytes::from_static(
+            br#"{"visible":"safe","secret":"private-response"}"#,
+        ));
+        declared.mark_declared_schema_origin(method);
+        assert_eq!(
+            serde_json::to_value(declared.sanitized_body(method, &policy)).unwrap(),
+            json!({"visible": "safe", "secret": "<redacted>"})
+        );
+
+        let wrong_method = MethodDescriptor::new(MethodId::new(1), "other", None)
+            .unwrap()
+            .with_sensitivity(MethodSensitivity::new(vec![], Some(payload_shape)));
+        assert!(declared.sanitized_body(&wrong_method, &policy).is_omitted());
+
+        let replacement = context
+            .respond(json!({"visible": "private-replacement"}))
+            .unwrap()
+            .into_body();
+        *declared.body_mut() = replacement;
+        assert!(declared.sanitized_body(method, &policy).is_omitted());
+
+        let mut declared =
+            RpcResponse::from_json_bytes(Bytes::from_static(br#"{"visible":"safe"}"#));
+        declared.mark_declared_schema_origin(method);
+        let replacement = context
+            .respond(json!({"visible": "private-map-replacement"}))
+            .unwrap()
+            .into_body();
+        let mapped = declared.map(|_| replacement);
+        assert!(mapped.sanitized_body(method, &policy).is_omitted());
+    }
 }

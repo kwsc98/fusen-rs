@@ -1,6 +1,6 @@
 //! Shared clean-slate interface contracts and DTOs used by every example binary.
 
-use fusen_rs::interface;
+use fusen_rs::{SensitiveFields, interface};
 use serde::{Deserialize, Serialize};
 /// Reusable middleware and extension examples.
 pub mod middleware;
@@ -8,14 +8,14 @@ pub mod middleware;
 pub mod service;
 
 /// Demo request payload.
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, SensitiveFields)]
 pub struct RequestDto {
     /// Example application value.
     pub str: String,
 }
 
 /// Demo response payload.
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, SensitiveFields)]
 pub struct ResponseDto {
     /// Example application value.
     pub str: String,

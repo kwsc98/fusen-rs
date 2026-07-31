@@ -1,0 +1,11 @@
+error: a value may declare only one sensitivity kind or `opaque`
+  --> tests/ui/fail/conflicting_sensitive_declarations.rs:10:30
+   |
+10 | #[sensitive(kind = "secret", opaque)]
+   |                              ^^^^^^
+
+error: a value may declare only one sensitivity kind or `opaque`
+  --> tests/ui/fail/conflicting_sensitive_declarations.rs:15:33
+   |
+15 |     #[sensitive(kind = "phone", opaque)]
+   |                                 ^^^^^^

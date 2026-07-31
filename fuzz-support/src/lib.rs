@@ -180,6 +180,12 @@ impl RpcResponse<RpcBody> {
     pub(crate) fn hold_budget(&mut self, permit: runtime::budget::BytePermit) {
         self.body.hold_budget(permit);
     }
+
+    pub(crate) fn mark_declared_schema_origin(
+        &mut self,
+        _method: &'static fusen_contract::MethodDescriptor,
+    ) {
+    }
 }
 
 mod middleware {

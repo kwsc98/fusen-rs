@@ -13,9 +13,12 @@ pub mod interface;
 pub mod middleware;
 /// Client routing, load balancing, and retry policy APIs.
 pub mod policy;
+mod projection;
 mod resilience;
 mod rpc;
 mod runtime;
+/// Policy-driven safe projections for middleware and application diagnostics.
+pub mod sensitive;
 mod server;
 mod service;
 mod wire;
@@ -35,7 +38,10 @@ pub use error::{
     ServerErrorKind,
 };
 pub use fusen_contract as contract;
-pub use fusen_contract::WireProtocol;
+pub use fusen_contract::{
+    MethodSensitivity, SensitiveArgument, SensitiveField, SensitiveFields, SensitiveShape,
+    SensitiveShapeResolver, SensitivityKind, WireProtocol,
+};
 pub use fusen_observability::{MetricsRecorder, NoopMetricsRecorder};
 pub use fusen_procedural_macro::{interface, method};
 pub use fusen_register::{RegistrationHandle, Registry, SubscriptionHandle};
@@ -44,6 +50,10 @@ pub use policy::{InstanceRouter, InstanceSnapshot, LoadBalancer, RouteRequest, W
 pub use resilience::{FailureClass, RetryDecision, RetryDecisionContext, RetryPolicy};
 pub use rpc::{
     ErrorCode, InvalidErrorCode, RetryHint, RpcCategory, RpcError, RpcErrorDetails, RpcOrigin,
+};
+pub use sensitive::{
+    PolicySanitizer, ProjectionLimits, Sanitization, SanitizationContext, SanitizationTarget,
+    SanitizedValue, Sanitizer,
 };
 pub use server::{
     HttpServerConfig, HttpServerConfigBuilder, RunningServer, Server, ServerBuilder, ServerConfig,
@@ -65,7 +75,11 @@ pub mod __macro {
             ClientBuilder, ClientRuntime, Middleware, MiddlewareFuture, RpcArguments, RpcCall,
             RpcError, RpcResponse, WireProtocol,
         };
-        pub use fusen_contract::{MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector};
+        pub use fusen_contract::{
+            MethodDescriptor, MethodId, MethodSensitivity, SensitiveArgument, SensitiveField,
+            SensitiveFields, SensitiveShape, SensitiveShapeResolver, SensitivityKind,
+            ServiceDescriptor, ServiceSelector,
+        };
         pub use http;
     }
 }

@@ -13,22 +13,22 @@
 不新增生产 crate。依赖层固定为：
 
 ```text
-L0  fusen-contract
-L1  fusen-register  fusen-config           fusen-procedural-macro
-    fusen-observability
-L2  fusen-rs        fusen-nacos
-L3  examples and test consumers
+L0  fusen-procedural-macro  fusen-config  fusen-observability
+L1  fusen-contract
+L2  fusen-register
+L3  fusen-rs  fusen-nacos
+L4  examples and test consumers
 ```
 
 规则如下：
 
-- `fusen-contract` 只拥有 wire、service 和 registry 共用的稳定值对象，不拥有 executor、provider 或 backend；
+- `fusen-procedural-macro` 私有持有属性解析、`SensitiveFields` derive 和接口代码生成实现；生成代码引用 contract/runtime ABI，但过程宏 crate 自身不依赖它们；
+- `fusen-config` 与 `fusen-observability` 当前都不依赖其他 workspace crate；前者拥有静态解析、last-good typed hot config 和取消安全 lifecycle，后者拥有 backend-neutral `MetricsRecorder` SPI 与可选 telemetry adapter；
+- `fusen-contract` 只拥有 wire、service、registry 和进程内 sensitivity schema 共用的稳定值对象，不拥有 executor、provider 或 backend；其可选 `derive` feature 只重导出 L0 的 `SensitiveFields` derive，因此发布时必须在过程宏之后；
 - `fusen-register` 依赖 contract，拥有 registry、registration/subscription lifecycle 和 Directory SPI；
-- `fusen-config` 拥有静态解析、last-good typed hot config 和取消安全 lifecycle；
-- `fusen-observability` 拥有 backend-neutral `MetricsRecorder` SPI 与可选 telemetry adapter，可依赖 contract，但不依赖 `fusen-rs`；Core 自行产生 `tracing` span/event；
-- `fusen-procedural-macro` 私有持有属性解析和代码生成实现，不再发布单独的 macro-support crate；
 - `fusen-rs` 只依赖 contract、register、observability SPI 和过程宏；
-- `fusen-nacos` 依赖 register、config、contract 和 observability SPI，核心 crate 永不反向依赖 Nacos；
+- `fusen-nacos` 依赖 register、config 和 contract，核心 crate 永不反向依赖 Nacos；
+- Core 自行产生 `tracing` span/event；不再发布单独的 macro-support crate；
 - tracing subscriber、OpenTelemetry backend、Nacos SDK 和其他 provider 依赖不得通过公共类型泄漏到下层 crate。
 
 workspace 使用 Cargo resolver 3 和统一 lint policy。跨 crate 类型只有一个 canonical 定义路径；便捷 re-export 不应制造第二个公共契约入口。

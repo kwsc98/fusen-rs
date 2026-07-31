@@ -85,6 +85,76 @@ pub mod __macro {
             ) -> Result<Self, DescriptorError> {
                 Ok(Self)
             }
+
+            pub fn with_sensitivity(self, _sensitivity: MethodSensitivity) -> Self {
+                self
+            }
+        }
+
+        #[derive(Clone, Copy)]
+        pub struct SensitivityKind;
+
+        impl SensitivityKind {
+            pub fn new(_kind: &'static str) -> Result<Self, DescriptorError> {
+                Ok(Self)
+            }
+        }
+
+        pub enum SensitiveShape {
+            Opaque,
+            Kind(SensitivityKind),
+        }
+
+        pub trait SensitiveFields {
+            fn sensitive_shape() -> SensitiveShape;
+        }
+
+        macro_rules! opaque_sensitive_fields {
+            ($($type:ty),+ $(,)?) => {
+                $(
+                    impl SensitiveFields for $type {
+                        fn sensitive_shape() -> SensitiveShape {
+                            SensitiveShape::Opaque
+                        }
+                    }
+                )+
+            };
+        }
+
+        opaque_sensitive_fields!((), bool, String);
+
+        impl<T: SensitiveFields> SensitiveFields for Option<T> {
+            fn sensitive_shape() -> SensitiveShape {
+                T::sensitive_shape()
+            }
+        }
+
+        impl<T: SensitiveFields> SensitiveFields for Vec<T> {
+            fn sensitive_shape() -> SensitiveShape {
+                T::sensitive_shape()
+            }
+        }
+
+        pub struct SensitiveArgument;
+
+        impl SensitiveArgument {
+            pub const fn new(
+                _name: &'static str,
+                _resolver: fn() -> SensitiveShape,
+            ) -> Self {
+                Self
+            }
+        }
+
+        pub struct MethodSensitivity;
+
+        impl MethodSensitivity {
+            pub fn new(
+                _arguments: Vec<SensitiveArgument>,
+                _response: Option<fn() -> SensitiveShape>,
+            ) -> Self {
+                Self
+            }
         }
 
         pub struct ServiceSelector;
@@ -251,6 +321,12 @@ pub use __macro::v1::{RpcCall, RpcError, RpcResponse};
 
 struct User(String);
 
+impl __macro::v1::SensitiveFields for User {
+    fn sensitive_shape() -> __macro::v1::SensitiveShape {
+        __macro::v1::SensitiveShape::Opaque
+    }
+}
+
 #[interface(name = "user", group = "prod", version = "1")]
 trait UserApi {
     #[fusen_procedural_macro::method(
@@ -259,7 +335,8 @@ trait UserApi {
     async fn get(
         &self,
         #[param(context)] call: RpcCall,
-        #[param(name = "user_id")] id: String,
+        #[sensitive(kind = "identifier")]
+        #[param(path, name = "user_id")] id: String,
         #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
@@ -268,6 +345,7 @@ trait UserApi {
     )]
     async fn batch(
         &self,
+        #[sensitive(opaque)]
         names: Vec<String>,
         notify: bool,
     ) -> Result<RpcResponse<User>, RpcError>;

@@ -1,0 +1,7 @@
+error: #[param(context)] parameters cannot declare sensitivity metadata
+  --> tests/ui/fail/sensitive_context_parameter.rs:12:9
+   |
+12 | /         #[param(context)]
+13 | |         #[sensitive(kind = "identifier")]
+14 | |         call: RpcCall,
+   | |_____________________^

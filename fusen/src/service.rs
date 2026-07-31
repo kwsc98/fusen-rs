@@ -89,6 +89,7 @@ impl ServerInvocation {
             envelope_bytes,
             &self.response_budget,
         )?;
+        encoded.mark_declared_schema_origin(self.context.method());
         encoded.set_status(status)?;
         *encoded.headers_mut() = headers;
         *encoded.extensions_mut() = extensions;

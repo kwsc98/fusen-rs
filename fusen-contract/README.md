@@ -9,6 +9,8 @@ The public contract includes:
 - `WireProtocol::{FusenV1, SpringCloudV1}` and `ProtocolSet`.
 - `ServiceDescriptor`, `MethodDescriptor`, `ServiceSelector`, and Spring Cloud
   method/parameter metadata.
+- Process-local `SensitiveFields` shapes and method sensitivity metadata for
+  structured diagnostic redaction.
 - `ServiceRegistration`, `ServiceInstance`, stable `InstanceId`, and bounded
   positive `ServiceWeight`.
 - `ServiceEndpoint`, a canonical absolute HTTP or HTTPS endpoint.
@@ -27,6 +29,13 @@ assert_eq!(selector.identity(), "user/prod@1");
 assert_eq!(endpoint.as_str(), "http://127.0.0.1:8080/");
 assert_eq!(secure_endpoint.as_str(), "https://api.example.com/");
 ```
+
+Enable the optional `derive` feature to re-export
+`#[derive(fusen_contract::SensitiveFields)]`. Sensitivity shapes are lazy, so
+recursive DTOs are supported. They remain local to the process and never alter
+wire encoding, service identity, discovery, or registration. Built-in scalar
+types default to the fail-closed `Opaque` shape; retaining a value requires an
+explicit `public` classification.
 
 `ServiceEndpoint` rejects credentials, queries, fragments, invalid ports, and
 every scheme except `http` and `https`. It is a network-neutral value: accepting

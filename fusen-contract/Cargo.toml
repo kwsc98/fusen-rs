@@ -11,10 +11,17 @@ documentation = "https://docs.rs/fusen-contract"
 readme = "README.md"
 license-file.workspace = true
 
+[features]
+derive = ["dep:fusen-procedural-macro"]
+
 [dependencies]
+fusen-procedural-macro = { workspace = true, optional = true }
 http.workspace = true
 thiserror.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
 
 [lints]
 workspace = true

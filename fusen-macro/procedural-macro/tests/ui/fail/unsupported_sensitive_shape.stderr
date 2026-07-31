@@ -1,0 +1,25 @@
+error: tuple and unit structs require a type-level sensitivity kind, `opaque`, or a single-field `#[serde(transparent)]` representation
+  --> tests/ui/fail/unsupported_sensitive_shape.rs:10:13
+   |
+10 | struct Tuple(String);
+   |             ^^^^^^^^
+
+error: enums require a type-level `#[sensitive(kind = "...")]` or `#[sensitive(opaque)]`
+  --> tests/ui/fail/unsupported_sensitive_shape.rs:13:1
+   |
+13 | enum Choice {
+   | ^^^^
+
+error: a flattened serde field cannot be mapped safely; classify the complete type with a type-level sensitivity kind or `opaque`
+  --> tests/ui/fail/unsupported_sensitive_shape.rs:20:5
+   |
+20 | /     #[serde(flatten)]
+21 | |     values: Nested,
+   | |__________________^
+
+error: a field with a custom serde serializer requires `#[sensitive(kind = "...")]` or `#[sensitive(opaque)]`
+  --> tests/ui/fail/unsupported_sensitive_shape.rs:26:5
+   |
+26 | /     #[serde(serialize_with = "serialize_value")]
+27 | |     value: Nested,
+   | |_________________^

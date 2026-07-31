@@ -15,6 +15,9 @@ pub enum ContractError {
     /// A required identity component is not a bounded ASCII token.
     #[error("invalid {0}: expected 1-128 ASCII letters, digits, '.', '_' or '-'")]
     InvalidIdentifier(&'static str),
+    /// A custom sensitivity classification is not a bounded ASCII token.
+    #[error("invalid sensitivity kind {0:?}: expected 1-64 ASCII letters, digits, '.', '_' or '-'")]
+    InvalidSensitivityKind(&'static str),
     /// A provider instance identity is not a bounded stable token.
     #[error("invalid instance id: expected 1-128 ASCII letters, digits, '.', '_', '-' or ':'")]
     InvalidInstanceId,
@@ -368,12 +371,16 @@ impl SpringCloudMethod {
     }
 }
 
-/// Versioned wire metadata for one generated RPC method.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Versioned wire metadata and optional process-local policy metadata for one generated RPC method.
+///
+/// Equality intentionally excludes sensitivity metadata because it does not participate in the
+/// method's wire identity or service contract.
+#[derive(Clone)]
 pub struct MethodDescriptor {
     id: MethodId,
     fusen_identity: String,
     spring_cloud: Option<SpringCloudMethod>,
+    sensitivity: Option<crate::MethodSensitivity>,
 }
 
 impl MethodDescriptor {
@@ -388,7 +395,16 @@ impl MethodDescriptor {
             id,
             fusen_identity,
             spring_cloud,
+            sensitivity: None,
         })
+    }
+
+    /// Attaches process-local request and response sensitivity metadata.
+    ///
+    /// This metadata does not affect wire identity, protocol support, discovery, or registration.
+    pub fn with_sensitivity(mut self, sensitivity: crate::MethodSensitivity) -> Self {
+        self.sensitivity = Some(sensitivity);
+        self
     }
 
     /// Returns the process-local declaration-order identifier.
@@ -417,7 +433,34 @@ impl MethodDescriptor {
     pub const fn spring_cloud(&self) -> Option<&SpringCloudMethod> {
         self.spring_cloud.as_ref()
     }
+
+    /// Returns optional process-local request and response sensitivity metadata.
+    pub const fn sensitivity(&self) -> Option<&crate::MethodSensitivity> {
+        self.sensitivity.as_ref()
+    }
 }
+
+impl std::fmt::Debug for MethodDescriptor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MethodDescriptor")
+            .field("id", &self.id)
+            .field("fusen_identity", &self.fusen_identity)
+            .field("spring_cloud", &self.spring_cloud)
+            .field("has_sensitivity", &self.sensitivity.is_some())
+            .finish()
+    }
+}
+
+impl PartialEq for MethodDescriptor {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.fusen_identity == other.fusen_identity
+            && self.spring_cloud == other.spring_cloud
+    }
+}
+
+impl Eq for MethodDescriptor {}
 
 /// The immutable service description shared by generated clients, servers, and registries.
 #[derive(Debug)]
@@ -816,7 +859,18 @@ fn spring_route_shape(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ProtocolSet, WireProtocol};
+    use crate::{
+        MethodSensitivity, ProtocolSet, SensitiveArgument, SensitiveShape, SensitivityKind,
+        WireProtocol,
+    };
+
+    fn token_shape() -> SensitiveShape {
+        SensitiveShape::Kind(SensitivityKind::TOKEN)
+    }
+
+    fn public_shape() -> SensitiveShape {
+        SensitiveShape::Kind(SensitivityKind::PUBLIC)
+    }
 
     fn spring_get(path: &str, parameters: Vec<SpringCloudParameter>) -> SpringCloudMethod {
         SpringCloudMethod::new(Method::GET, path, parameters).unwrap()
@@ -1003,6 +1057,62 @@ mod tests {
         assert_eq!(descriptor.fusen_identity(), "inventory.users.list");
         assert!(descriptor.allows_retries());
         assert_eq!(descriptor.spring_cloud().unwrap().path(), "/users");
+    }
+
+    #[test]
+    fn method_sensitivity_is_optional_process_local_metadata() {
+        let spring = spring_get(
+            "/users/{id}",
+            vec![
+                SpringCloudParameter::new(
+                    "id",
+                    SpringCloudParameterSource::Path,
+                    SpringCloudParameterCardinality::Scalar,
+                )
+                .unwrap(),
+            ],
+        );
+        let plain = MethodDescriptor::new(
+            MethodId::new(0),
+            "inventory.users.get",
+            Some(spring.clone()),
+        )
+        .unwrap();
+        assert!(plain.sensitivity().is_none());
+
+        let classified =
+            MethodDescriptor::new(MethodId::new(0), "inventory.users.get", Some(spring))
+                .unwrap()
+                .with_sensitivity(MethodSensitivity::new(
+                    vec![SensitiveArgument::new("id", token_shape)],
+                    Some(public_shape),
+                ));
+
+        let sensitivity = classified.sensitivity().unwrap();
+        assert_eq!(sensitivity.arguments()[0].name(), "id");
+        assert!(matches!(
+            sensitivity.arguments()[0].shape(),
+            SensitiveShape::Kind(SensitivityKind::TOKEN)
+        ));
+        assert!(matches!(
+            sensitivity.response_shape(),
+            Some(SensitiveShape::Kind(SensitivityKind::PUBLIC))
+        ));
+        assert_eq!(classified.id(), plain.id());
+        assert_eq!(classified.fusen_identity(), plain.fusen_identity());
+        assert_eq!(classified.spring_cloud(), plain.spring_cloud());
+        assert_eq!(classified.allows_retries(), plain.allows_retries());
+        assert_eq!(classified, plain);
+        assert!(format!("{classified:?}").contains("has_sensitivity: true"));
+
+        let selector = ServiceSelector::new("inventory", None, None).unwrap();
+        let plain_service = ServiceDescriptor::new(selector.clone(), vec![plain]).unwrap();
+        let classified_service = ServiceDescriptor::new(selector, vec![classified]).unwrap();
+        assert_eq!(plain_service.identity(), classified_service.identity());
+        assert_eq!(
+            plain_service.supported_protocols(),
+            classified_service.supported_protocols()
+        );
     }
 
     #[test]

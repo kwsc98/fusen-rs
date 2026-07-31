@@ -14,7 +14,7 @@ license-file.workspace = true
 
 [dependencies]
 fusen-procedural-macro.workspace = true
-fusen-contract.workspace = true
+fusen-contract = { workspace = true, features = ["derive"] }
 fusen-register.workspace = true
 fusen-observability.workspace = true
 serde.workspace = true

@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 use fusen_rs::{
-    ClientRuntime, RpcCategory, RpcError, RpcErrorDetails, RpcResponse, Server, ServerConfig,
-    WireProtocol, contract::ProtocolSet, interface,
+    ClientRuntime, RpcCategory, RpcError, RpcErrorDetails, RpcResponse, SensitiveFields, Server,
+    ServerConfig, WireProtocol, contract::ProtocolSet, interface,
 };
 use http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version, header::CONTENT_TYPE};
 use http_body_util::{BodyExt, Full};
@@ -31,7 +31,7 @@ struct WireProblemDetails {
     details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SensitiveFields)]
 struct CreateUser {
     name: String,
 }
@@ -39,7 +39,7 @@ struct CreateUser {
 #[interface(name = "wire-contract", group = "prod", version = "1")]
 trait WireContract {
     #[fusen_rs::method(method = "GET", path = "/echo/{name}")]
-    async fn echo(&self, name: String) -> Result<RpcResponse<String>, RpcError>;
+    async fn echo(&self, #[param(path)] name: String) -> Result<RpcResponse<String>, RpcError>;
 
     #[fusen_rs::method(method = "POST", path = "/users/{id}")]
     async fn create(

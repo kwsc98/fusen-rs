@@ -1,11 +1,12 @@
 //! End-to-end ordering and isolation contracts for all four middleware stages.
 
 use fusen_rs::{
-    ClientConfig, ClientRuntime, Middleware, MiddlewareFuture, MiddlewareStage, Next, RetryConfig,
-    RpcCall, RpcCategory, RpcContext, RpcError, RpcResponse, RpcSide, Server, ServerConfig,
-    WireProtocol, contract::ProtocolSet, interface,
+    ClientConfig, ClientRuntime, Middleware, MiddlewareFuture, MiddlewareStage, Next,
+    PolicySanitizer, RetryConfig, RpcCall, RpcCategory, RpcContext, RpcError, RpcResponse, RpcSide,
+    SanitizedValue, Server, ServerConfig, WireProtocol, contract::ProtocolSet, interface,
 };
 use http::HeaderValue;
+use serde_json::{Value, json};
 use std::{
     sync::{
         Arc, Mutex,
@@ -451,5 +452,163 @@ async fn server_head_rejection_does_not_poll_the_request_body() {
         "{response}"
     );
 
+    server.shutdown().await.unwrap();
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, fusen_rs::SensitiveFields,
+)]
+struct ProjectionReply {
+    #[sensitive(kind = "public")]
+    visible: String,
+    #[sensitive(kind = "secret")]
+    secret: String,
+}
+
+#[interface(name = "middleware-projection-contract")]
+trait MiddlewareProjectionContract {
+    #[fusen_rs::method(method = "PUT", path = "/middleware/projection")]
+    async fn project(
+        &self,
+        #[param(context)] call: RpcCall,
+        #[param(body)]
+        #[sensitive(kind = "public")]
+        value: String,
+    ) -> Result<RpcResponse<ProjectionReply>, RpcError>;
+}
+
+struct ProjectionHandler;
+
+impl MiddlewareProjectionContract for ProjectionHandler {
+    async fn project(
+        &self,
+        _call: RpcCall,
+        value: String,
+    ) -> Result<RpcResponse<ProjectionReply>, RpcError> {
+        Ok(RpcResponse::new(ProjectionReply {
+            visible: value,
+            secret: "server-secret".to_owned(),
+        }))
+    }
+}
+
+#[derive(Default)]
+struct ProjectionObservations {
+    server: Vec<Option<Value>>,
+    client_remote: Vec<Option<Value>>,
+    client_short: Vec<Option<Value>>,
+}
+
+fn observed_value(value: SanitizedValue) -> Option<Value> {
+    if value.is_omitted() {
+        None
+    } else {
+        Some(serde_json::to_value(value).expect("sanitized projections serialize safely"))
+    }
+}
+
+#[derive(Clone)]
+struct ServerProjectionCapture(Arc<Mutex<ProjectionObservations>>);
+
+impl Middleware for ServerProjectionCapture {
+    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+        assert_eq!(context.stage(), MiddlewareStage::ServerCall);
+        let method = context.method();
+        let observations = self.0.clone();
+
+        Box::pin(async move {
+            let response = next.run(context).await?;
+            let projected =
+                observed_value(response.sanitized_body(method, &PolicySanitizer::default()));
+            observations.lock().unwrap().server.push(projected);
+            Ok(response)
+        })
+    }
+}
+
+#[derive(Clone)]
+struct ClientProjectionCapture(Arc<Mutex<ProjectionObservations>>);
+
+impl Middleware for ClientProjectionCapture {
+    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+        assert_eq!(context.stage(), MiddlewareStage::ClientCall);
+        let method = context.method();
+        let short_circuit = context.headers().contains_key("x-projection-short");
+        let observations = self.0.clone();
+
+        Box::pin(async move {
+            if short_circuit {
+                let response = context.respond(ProjectionReply {
+                    visible: "local".to_owned(),
+                    secret: "local-secret".to_owned(),
+                })?;
+                let projected =
+                    observed_value(response.sanitized_body(method, &PolicySanitizer::default()));
+                observations.lock().unwrap().client_short.push(projected);
+                return Ok(response);
+            }
+
+            let response = next.run(context).await?;
+            let projected =
+                observed_value(response.sanitized_body(method, &PolicySanitizer::default()));
+            observations.lock().unwrap().client_remote.push(projected);
+            Ok(response)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn declared_response_origins_are_projectable_but_context_responses_are_not() {
+    let observations = Arc::new(Mutex::new(ProjectionObservations::default()));
+    let server = Server::builder("127.0.0.1:0")
+        .config(
+            ServerConfig::builder()
+                .protocols(ProtocolSet::ALL)
+                .build()
+                .unwrap(),
+        )
+        .middleware(ServerProjectionCapture(observations.clone()))
+        .interface(MiddlewareProjectionContractServer::new(ProjectionHandler))
+        .build()
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = MiddlewareProjectionContractClient::builder(&runtime)
+        .direct(format!("http://{}", server.local_addr()))
+        .protocol(WireProtocol::SpringCloudV1)
+        .middleware(ClientProjectionCapture(observations.clone()))
+        .connect()
+        .await
+        .unwrap();
+
+    let remote = client
+        .project(RpcCall::new(), "safe".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(remote.body().visible, "safe");
+    assert_eq!(remote.body().secret, "server-secret");
+
+    let mut call = RpcCall::new();
+    call.headers_mut()
+        .insert("x-projection-short", HeaderValue::from_static("1"));
+    let local = client.project(call, "unused".to_owned()).await.unwrap();
+    assert_eq!(local.body().visible, "local");
+
+    let expected = Some(json!({
+        "visible": "safe",
+        "secret": "<redacted>",
+    }));
+    {
+        let observed = observations.lock().unwrap();
+        assert_eq!(observed.server, vec![expected.clone()]);
+        assert_eq!(observed.client_remote, vec![expected]);
+        assert_eq!(observed.client_short, vec![None]);
+    }
+
+    drop(client);
+    runtime.shutdown().await.unwrap();
     server.shutdown().await.unwrap();
 }

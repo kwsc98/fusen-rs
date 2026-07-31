@@ -17,14 +17,18 @@
 一个 trait 宏定义 Client/Server 共享接口；每个 RPC 方法可直接接收零到多个具名的 owned 参数，并返回 `Result<RpcResponse<T>, RpcError>`。
 
 ```rust,no_run
-use fusen_rs::{RpcError, RpcResponse, interface};
+use fusen_rs::{RpcError, RpcResponse, SensitiveFields, interface};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-pub struct User { pub id: String }
+#[derive(Serialize, Deserialize, SensitiveFields)]
+pub struct User {
+    #[sensitive(kind = "identifier")]
+    pub id: String,
+}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, SensitiveFields)]
 pub struct CreateUser {
+    #[sensitive(kind = "identifier")]
     pub id: String,
 }
 
@@ -35,7 +39,7 @@ pub trait UserApi {
     )]
     async fn get(
         &self,
-        id: String,
+        #[param(path)] id: String,
         #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 
@@ -52,7 +56,9 @@ pub trait UserApi {
 
 宏生成 `UserApiClient` 与 `UserApiServer<T>`。生成 Client 和用户 Handler 都实现 `UserApi`，所有 Client 统一使用 `ClientBuilder<UserApiClient>`。每个接口方法都必须声明 `#[method(method = "...", path = "...")]`；生成的 Client 用它构造请求，生成的 Server 用它匹配路由，自动重试资格也由标准 HTTP method 推导。
 
-参数位置采用确定性推断：wire name 与 `{placeholder}` 同名时为 path；其余 GET、HEAD、OPTIONS、DELETE 参数默认为 query；其余 POST、PUT、PATCH 参数成为同一个 JSON body object 的字段，因此 `create(user, audit)` 固定发送 `{"user": ..., "audit": ...}`，即使只有一个字段也不会退化成 raw body。`#[param(query)]` 用于覆盖默认位置，`#[param(body)]` 表示唯一的完整 JSON body，`#[param(context)]` 注入不进入 wire 的 `RpcCall`，`#[param(name = "...")]` 修改 wire name。Raw body 不能与推断 body field 混用；重复 query 使用 `Vec<T>`。Fusen V1 始终按名称把全部业务参数编码到 `arguments` object；非法映射在宏展开阶段失败，非法序列化值在网络 I/O 前于本地失败。
+参数位置采用确定性推断：wire name 与 `{placeholder}` 同名时为 path；其余 GET、HEAD、OPTIONS、DELETE 参数默认为 query；其余 POST、PUT、PATCH 参数成为同一个 JSON body object 的字段，因此 `create(user, audit)` 固定发送 `{"user": ..., "audit": ...}`，即使只有一个字段也不会退化成 raw body。`#[param(path)]` 可显式确认 path 参数，且 wire name 必须匹配同名占位符；`#[param(query)]` 用于覆盖默认位置，`#[param(body)]` 表示唯一的完整 JSON body，`#[param(context)]` 注入不进入 wire 的 `RpcCall`，`#[param(name = "...")]` 修改 wire name。所有非 context 参数的 wire name 必须唯一，即使来源不同也不能重复。Raw body 不能与推断 body field 混用；重复 query 使用 `Vec<T>`。Fusen V1 始终按名称把全部业务参数编码到 `arguments` object；非法映射在宏展开阶段失败，非法序列化值在网络 I/O 前于本地失败。
+
+自定义请求和响应 DTO 都 derive `SensitiveFields`，字段使用 `#[sensitive(kind = "...")]` 或 `#[sensitive(opaque)]`；接口宏自动发现请求和 `RpcResponse<T>` schema，不需要响应标记。Fusen 不会自动打印 payload；第三方 Middleware 显式调用 `sanitized_arguments` 与 `sanitized_body`，失败时安全省略，且不修改 DTO `Debug`、wire bytes 或注册/发现 metadata。详见 [Middleware 与宏行为](docs/modules/middleware-macros.md)。
 
 ## 客户端
 

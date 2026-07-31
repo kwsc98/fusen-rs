@@ -143,9 +143,10 @@ fn generated_trait(
             let syn::FnArg::Typed(input) = input else {
                 unreachable!("the interface validator rejected extra receivers")
             };
-            input
-                .attrs
-                .retain(|attribute| !validate::is_param_attr(attribute));
+            input.attrs.retain(|attribute| {
+                !validate::is_param_attr(attribute)
+                    && !crate::sensitive::is_sensitive_attr(attribute)
+            });
         }
         let response = &contract.response;
         method.sig.asyncness = None;
@@ -200,6 +201,29 @@ fn descriptor(
                 )
             })
         });
+        let sensitive_arguments = method.parameters.iter().filter_map(|parameter| {
+            if parameter.source == validate::ParameterSource::Context {
+                return None;
+            }
+            let name = &parameter.wire_name;
+            let kind = &parameter.kind;
+            let resolver = match &parameter.sensitivity {
+                Some(crate::sensitive::SensitiveOverride::Kind(sensitivity)) => quote! {
+                    || #abi::SensitiveShape::Kind(
+                        #abi::SensitivityKind::new(#sensitivity)
+                            .expect("the interface macro validated the sensitivity kind")
+                    )
+                },
+                Some(crate::sensitive::SensitiveOverride::Opaque) => {
+                    quote!(|| #abi::SensitiveShape::Opaque)
+                }
+                None => quote!(<#kind as #abi::SensitiveFields>::sensitive_shape),
+            };
+            Some(quote! {
+                #abi::SensitiveArgument::new(#name, #resolver)
+            })
+        });
+        let response = &method.response;
         let http = quote! {
             Some(#abi::http_method(
                 #abi::http::Method::#http_method,
@@ -212,7 +236,12 @@ fn descriptor(
                 #abi::MethodId::new(#index as u16),
                 #identity,
                 #http,
-            ).map_err(|error| error.to_string())?
+            )
+            .map_err(|error| error.to_string())?
+            .with_sensitivity(#abi::MethodSensitivity::new(
+                ::std::vec![#(#sensitive_arguments),*],
+                Some(<#response as #abi::SensitiveFields>::sensitive_shape),
+            ))
         }
     });
     quote! {{

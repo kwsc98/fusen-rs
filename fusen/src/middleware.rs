@@ -2,6 +2,10 @@ use crate::RpcResponse;
 pub use crate::{
     context::{MiddlewareStage, RpcBody, RpcContext, RpcSide},
     rpc::{RetryHint, RpcCategory, RpcError, RpcErrorDetails, RpcOrigin},
+    sensitive::{
+        PolicySanitizer, ProjectionLimits, Sanitization, SanitizationContext, SanitizationTarget,
+        SanitizedValue, Sanitizer,
+    },
 };
 use futures_util::FutureExt;
 use std::{

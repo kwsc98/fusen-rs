@@ -13,7 +13,14 @@ baseline and is intentionally incompatible with releases before 0.9.
 One trait declares the shared client and server contract:
 
 ```rust
-use fusen_rs::{RpcError, RpcResponse};
+use fusen_rs::{RpcError, RpcResponse, SensitiveFields};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, SensitiveFields)]
+struct User {
+    #[sensitive(kind = "identifier")]
+    id: String,
+}
 
 #[fusen_rs::interface(name = "user", group = "prod", version = "1")]
 pub trait UserApi {
@@ -22,7 +29,7 @@ pub trait UserApi {
     )]
     async fn get(
         &self,
-        id: String,
+        #[param(path)] id: String,
         #[param(query)] expand: Option<bool>,
     ) -> Result<RpcResponse<User>, RpcError>;
 }
@@ -30,12 +37,67 @@ pub trait UserApi {
 
 Every RPC requires `#[method(method = "...", path = "...")]`, accepts zero or
 more owned named parameters, and returns `Result<RpcResponse<T>, RpcError>`.
-Path placeholders are inferred by name; remaining read-method parameters become
-query values, while remaining POST/PUT/PATCH parameters become fields in one
-JSON body object. `#[param(query)]`, `#[param(body)]`, `#[param(context)]`, and
-`#[param(name = "...")]` provide explicit overrides. The macro generates
+Path placeholders are inferred by name, or confirmed explicitly with
+`#[param(path)]`; an explicit path wire name must match its placeholder.
+Remaining read-method parameters become query values, while remaining
+POST/PUT/PATCH parameters become fields in one JSON body object.
+`#[param(query)]`, `#[param(body)]`, `#[param(context)]`, and
+`#[param(name = "...")]` provide the other explicit overrides. Non-context wire
+names remain globally unique across sources. The macro generates
 `UserApiClient` and `UserApiServer<T>`; both the generated client and a user
 handler implement `UserApi`. Clients use the generic `ClientBuilder<UserApiClient>`.
+
+## Sensitive projections
+
+Request and successful-response DTOs derive the same process-local schema. Nested
+DTOs recurse automatically; classify a complete field with
+`#[sensitive(kind = "public")]` (or `credential`, `token`, `phone`, `email`,
+`identifier`, `secret`, or a validated custom kind), and use
+`#[sensitive(opaque)]` for a third-party field that must be omitted. Scalars are
+opaque by default. The interface macro discovers request and `RpcResponse<T>`
+schemas automatically, so there is no `#[sensitive(response)]` marker.
+
+```rust
+use fusen_rs::SensitiveFields;
+use serde::Serialize;
+
+#[derive(Serialize, SensitiveFields)]
+struct LoginRequest {
+    #[sensitive(kind = "public")]
+    username: String,
+    #[sensitive(kind = "credential")]
+    password: String,
+    #[sensitive(opaque)]
+    vendor_payload: serde_json::Value,
+}
+
+#[derive(Serialize, SensitiveFields)]
+struct LoginResponse {
+    #[sensitive(kind = "identifier")]
+    user_id: String,
+    #[sensitive(kind = "token")]
+    access_token: String,
+}
+```
+
+Fusen does not log these values. Third-party middleware explicitly calls
+`RpcContext::sanitized_arguments(&sanitizer)` before delegating and
+`RpcResponse<RpcBody>::sanitized_body(method, &sanitizer)` on a successful
+response. `PolicySanitizer` reveals only `public`, redacts predefined sensitive
+kinds, and omits custom or unclassified values. Missing metadata, shape errors,
+limits, sanitizer panics, and short-circuit responses fail closed to `<omitted>`
+without affecting the RPC. Response projection also applies a configurable 64
+KiB default input limit before constructing its JSON view.
+
+A `kind` classifies the complete JSON value and intentionally replaces its
+underlying structural schema. When a container inherits a kind, the policy sees
+the complete null or array once; structured DTO containers recurse per element.
+Known Serde shape-changing attributes must be classified or opaque, and
+`flatten` requires classifying the complete type.
+
+`SensitiveFields` does not change a DTO's `Debug`, either wire protocol, service
+identity, registry, or discovery metadata. Only the returned `SanitizedValue`
+is intended for safe `Debug`, `Display`, or structured serialization.
 
 ## Runtime lifecycle
 

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- 增加进程内 `SensitiveFields` DTO shape 与 method request/response 敏感度元数据；可选 `fusen-contract/derive` feature 提供 derive 宏，元数据不参与 wire、服务标识、注册或发现。
+- 接口参数支持显式 `#[param(path)]`，其 wire name 必须匹配同名 path placeholder；现有按名称推断保持兼容，且不同参数来源仍共享全局唯一的 wire name 空间。
+
 ## [0.9.0] - YYYY-MM-DD
 
 <!-- M0.11 冻结最终候选前必须将 YYYY-MM-DD 替换为实际发布日期；发布日期变动会使候选 SHA 失效并要求重跑全部证据。 -->
@@ -11,7 +14,7 @@
 ### Public Contract
 
 - Workspace 统一为 Rust 1.97、Edition 2024、resolver 3、禁止 unsafe，并集中 lint policy。
-- 接口声明统一为 `#[interface]` trait 宏；Client 与 Handler 实现同一个 trait，方法直接接收零到多个参数并返回 `Result<RpcResponse<T>, RpcError>`。每个方法必须用 `#[method(method = "...", path = "...")]` 声明请求语义；path/query/body field 按 method、path placeholder 与参数名确定性推断，`#[param(query/body/context/name)]` 只处理显式覆盖和调用上下文。
+- 接口声明统一为 `#[interface]` trait 宏；Client 与 Handler 实现同一个 trait，方法直接接收零到多个参数并返回 `Result<RpcResponse<T>, RpcError>`。每个方法必须用 `#[method(method = "...", path = "...")]` 声明请求语义；path/query/body field 按 method、path placeholder 与参数名确定性推断，`#[param(path/query/body/context/name)]` 处理显式确认、覆盖和调用上下文。
 - 调用错误拆分为 `RpcError`、`ClientError`、`ServerError`、`RegistryError` 与 `ConfigError`，字段私有并提供稳定分类/getter。
 - 公开扩展面收敛为 Middleware、Registry、InstanceRouter、LoadBalancer、RetryPolicy、ConfigSource 与 MetricsRecorder；transport/codec/acceptor/pool/lifecycle internals 全部私有。
 - 所有配置采用私有字段、`Default`、builder/setter 与 getter；可扩展 enum/error 标记为 non-exhaustive。
