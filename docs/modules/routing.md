@@ -7,7 +7,7 @@
 
 服务端启动时把每条 route 预绑定到静态 method descriptor、Middleware slice 与 service dispatch。Fusen V1 使用固定 `/_fusen/v1/{service}/{method}` identity；Spring Cloud V1 使用宏属性声明的 method/path。
 
-Spring routes 按 HTTP method 存入不可变 trie，启动时拒绝完全重复以及 `/users/{id}` 与 `/users/{name}` 这类等价动态路径。每一段优先静态分支，再匹配参数分支，结果不依赖 service 插入顺序。路径逐 segment 严格百分号解码，编码后的 `/` 保持单一参数值；非法编码返回 400。
+Spring routes 按 HTTP method 存入不可变 trie，启动时拒绝完全重复以及 `/users/{id}` 与 `/users/{name}` 这类等价动态路径。Route template literal 只接受 ASCII RFC3986 `pchar` 或以大写百分号编码的合法 UTF-8 非 ASCII 字符；raw Unicode、空白、控制字符、反斜线、坏或非规范 `%`、编码 ASCII、`.`/`..` 点段，以及解码后的 Unicode 空白或控制字符都会被拒绝。注册时使用解码后的 canonical literal，因此重复判断与请求匹配采用同一表示。每一段优先静态分支，再匹配参数分支，结果不依赖 service 插入顺序。请求路径逐 segment 严格百分号解码，编码后的 `/` 保持单一参数值；非法编码返回 400。
 
 Route head 在 admission 和 body 读取前解析。未知 route 不 poll body。URI 最大 8 KiB，query 最多 128 pairs，headers 总计最大 32 KiB。
 

@@ -35,8 +35,10 @@ A wire name matching a path placeholder is inferred as a path parameter. Other
 GET/HEAD/OPTIONS/DELETE parameters default to query values; other POST/PUT/PATCH
 parameters become fields in a synthesized JSON body object. `#[param(path)]`
 explicitly confirms a path parameter and requires a matching placeholder;
-`#[param(query)]` overrides the default, `#[param(body)]` declares one complete
-raw JSON body, `#[param(context)]` carries an unencoded `RpcCall`, and
+`#[param(query)]` overrides the default, `#[param(query, repeated)]` declares a
+query value serialized as an array and represented by repeated keys,
+`#[param(body)]` declares one complete raw JSON body,
+`#[param(context)]` carries an unencoded `RpcCall`, and
 `#[param(name = "...")]` renames the wire parameter. Non-context wire names remain
 globally unique across sources. A raw body cannot coexist with synthesized body
 fields. Retry eligibility is inferred from the standard HTTP method. Fusen V1

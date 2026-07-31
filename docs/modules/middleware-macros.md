@@ -13,7 +13,7 @@
 
 ## 敏感字段安全投影
 
-请求和成功响应 DTO 都用同一个 `SensitiveFields` derive 声明进程内 schema；接口方法不需要、也不支持 `#[sensitive(response)]`：
+请求和成功响应 DTO 都用 `SensitiveFields` derive 声明进程内 schema；每个结构 shape 分别保存 Serde serialization/deserialization 字段表，接口方法不需要、也不支持 `#[sensitive(response)]`：
 
 ```rust,no_run
 use fusen_rs::{RpcError, RpcResponse, SensitiveFields};
@@ -76,13 +76,13 @@ tracing::info!(arguments = %arguments, response = %body, "RPC completed");
 # }
 ```
 
-默认策略只 reveal `public`，将预置敏感 kind 替换为 `<redacted>`，并省略自定义 kind 与未分类值。缺少 schema、结构 schema 与 JSON 形状不匹配、超过输入/深度/节点/数组/字符串/输出限制或 `Sanitizer` panic 时，完整视图 fail closed 为 `<omitted>`，原始 RPC 不受影响。响应在构造 JSON 投影视图前受独立的 64 KiB 默认输入上限约束，可通过 `ProjectionLimits` 调整；任意 `RpcContext::respond` 短路响应没有声明来源，因此响应投影也默认省略。
+默认策略只 reveal `public`，将预置敏感 kind 替换为 `<redacted>`，并省略自定义 kind 与未分类值。投影按声明字段白名单遍历，输入中未出现在对应方向 schema 的未知 JSON 字段一律忽略，绝不会进入安全视图或日志。Client arguments 与服务端生成的 response 使用 serialization 表，Server arguments 与客户端收到的 response 使用 deserialization 表；方向性 `rename`、`alias` 和 `skip` 因此按实际 Serde 入口解释。缺少 schema、结构 schema 与 JSON 形状不匹配、超过输入/深度/节点/数组/字符串/输出限制或 `Sanitizer` panic 时，完整视图 fail closed 为 `<omitted>`，原始 RPC 不受影响。响应在构造 JSON 投影视图前受独立的 64 KiB 默认输入上限约束，可通过 `ProjectionLimits` 调整；任意 `RpcContext::respond` 短路响应没有声明来源，因此响应投影也默认省略。
 
 `kind` 是对完整值的显式覆盖，不保留被覆盖类型原来的 JSON 结构约束；自定义策略应把收到的只读 `Value` 当作完整分类值处理。容器继承到 `kind` 时也遵守这一规则：`Option<T>` 的完整 null/value 或 `Vec<T>`/数组的完整 JSON array 只调用一次 `Sanitizer`，默认 redaction 不会泄露数组长度。结构化 DTO 容器才逐元素递归。
 
 derive 只生成 schema，不修改业务 DTO 的 `Debug`，也不改变 Fusen V1/Spring Cloud V1 wire bytes、service identity、注册中心或服务发现 metadata。`SanitizedValue` 才是供第三方日志组件使用的安全 `Debug`、`Display` 与 `Serialize` 载体。
 
-`SensitiveFields` derive 会拒绝 `flatten`；字段级 `serialize_with`、`with`、`getter` 必须在该字段声明 `kind/opaque`，容器级 `into/remote` 必须使用类型级 `kind/opaque`。Rust 不会把同一列表中的其他 derive 信息传给过程宏，因此框架无法辨别手写的 `Serialize` 实现；这类实现必须保证字段名和结构与派生 schema 一致，或将整个类型声明为 `#[sensitive(kind = "...")]` / `#[sensitive(opaque)]`。
+`SensitiveFields` derive 会拒绝结构化 `flatten/tag/content/untagged`；字段级 `serialize_with`、`deserialize_with`、`with`、`getter` 必须在该字段声明 `kind/opaque`，容器级 `into/from/try_from/remote` 必须使用类型级 `kind/opaque`。`#[serde(transparent)]` 可带 skipped/default marker 或 `PhantomData`，但两个 Serde 方向必须选择同一个有效字段。递归泛型通常自动推导；过程宏无法解析的递归 type alias 可用类型级 `#[sensitive(bound = "...")]` 覆盖自动 bound。Rust 不会把同一列表中的其他 derive 信息传给过程宏，因此框架无法辨别手写的 `Serialize`/`Deserialize` 实现；手写 `SensitiveFields` 必须提供与两种实际表示一致的字段表，否则应将完整类型声明为 `kind/opaque`。这些手写实现属于受信任代码。
 
 ## `interface`、`method` 与多参数
 
@@ -109,6 +109,6 @@ pub trait UserApi {
 
 RPC trait 必须是非泛型 async trait 方法集合，receiver 为 `&self`；每个方法可接收零到多个 owned 具名参数，返回值精确为 `Result<RpcResponse<T>, RpcError>`。每个方法必须声明 `#[method(method = "...", path = "...")]`；生成 Client 用它构造请求，生成 Server 用它匹配路由，重试资格也按标准 HTTP method 保守推导，不接受用户自报的幂等语义。
 
-参数 wire name 与 path 中的 `{placeholder}` 同名时自动推断为 path；其余 GET、HEAD、OPTIONS、DELETE 参数默认为 query；其余 POST、PUT、PATCH 参数成为同一个 JSON body object 的字段，单字段也保持 object 形状。`#[param(path)]` 可显式确认 path 参数并要求 wire name 匹配同名占位符；`#[param(query)]` 可覆盖默认位置，`#[param(body)]` 声明唯一 raw JSON body，`#[param(name = "...")]` 修改 wire name。需要 headers、extensions 或框架调用信息时，可额外声明一个类型为 `RpcCall` 的 `#[param(context)]` 参数；它不进入 wire。所有非 context 参数的 wire name 必须全局唯一。Raw body 不能与推断 body field 混用；重复 query 使用 `Vec<T>`，不接受 `Option<Vec<T>>`。非法映射、重复名称、非法 query 类型和 path 不匹配均在宏展开阶段失败；无法静态判断的 serde 形状在网络 I/O 前于本地失败。
+参数 wire name 与 path 中的 `{placeholder}` 同名时自动推断为 path；其余 GET、HEAD、OPTIONS、DELETE 参数默认为 scalar query；其余 POST、PUT、PATCH 参数成为同一个 JSON body object 的字段，单字段也保持 object 形状。`#[param(path)]` 可显式确认 path 参数并要求 wire name 匹配同名占位符；`#[param(query)]` 可覆盖默认位置，`#[param(query, repeated)]` 声明序列化为 JSON array 的重复 query，`#[param(body)]` 声明唯一 raw JSON body，`#[param(name = "...")]` 修改 wire name。需要 headers、extensions 或框架调用信息时，可额外声明一个类型为 `RpcCall` 的 `#[param(context)]` 参数；它不进入 wire。所有非 context 参数的 wire name 必须全局唯一。Raw body 不能与推断 body field 混用；非法映射、重复名称、非规范 route 和 path 不匹配均在宏展开阶段失败；serialized value 与声明 cardinality 不一致时在网络 I/O 前本地失败。
 
 Fusen V1 始终按名称把全部业务参数编码进 `arguments` object，与 HTTP 位置无关。宏只生成 `*Client`、`*Server<T>` 和私有 dispatch；生成 Client 与用户 Handler 实现同一个 trait，Client 使用通用 `ClientBuilder<GeneratedClient>`。生成代码只依赖版本化 `fusen_rs::__macro::v1` ABI，并支持应用重命名 runtime crate。

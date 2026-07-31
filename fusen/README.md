@@ -41,8 +41,10 @@ Path placeholders are inferred by name, or confirmed explicitly with
 `#[param(path)]`; an explicit path wire name must match its placeholder.
 Remaining read-method parameters become query values, while remaining
 POST/PUT/PATCH parameters become fields in one JSON body object.
-`#[param(query)]`, `#[param(body)]`, `#[param(context)]`, and
-`#[param(name = "...")]` provide the other explicit overrides. Non-context wire
+`#[param(query)]`, `#[param(query, repeated)]`, `#[param(body)]`,
+`#[param(context)]`, and `#[param(name = "...")]` provide the other explicit
+overrides. Repeated query parameters must use the complete
+`#[param(query, repeated)]` form. Non-context wire
 names remain globally unique across sources. The macro generates
 `UserApiClient` and `UserApiServer<T>`; both the generated client and a user
 handler implement `UserApi`. Clients use the generic `ClientBuilder<UserApiClient>`.

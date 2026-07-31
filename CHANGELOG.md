@@ -3,7 +3,9 @@
 ## [Unreleased]
 
 - 增加进程内 `SensitiveFields` DTO shape 与 method request/response 敏感度元数据；可选 `fusen-contract/derive` feature 提供 derive 宏，元数据不参与 wire、服务标识、注册或发现。
+- `SensitiveFields` 结构 shape 分离 Serde serialization/deserialization 字段表；客户端/服务端请求与响应按实际方向投影，方向性 rename、alias 和 skip 不会跨分类泄漏。
 - 接口参数支持显式 `#[param(path)]`，其 wire name 必须匹配同名 path placeholder；现有按名称推断保持兼容，且不同参数来源仍共享全局唯一的 wire name 空间。
+- Spring Cloud repeated query 改为显式 `#[param(query, repeated)]`；primitive/newtype 解码不再依赖 Rust 类型 token 名称。
 
 ## [0.9.0] - YYYY-MM-DD
 
@@ -24,7 +26,7 @@
 - 定义 Fusen V1：h2c、固定 v1 URI、按名称 arguments envelope 与 result envelope。
 - 定义 Spring Cloud V1：HTTP/1.1、显式 method/path/query/body mapping 与 raw JSON success。
 - Spring route 按 HTTP method 构建不可变的确定性 trie；每个 segment 优先匹配 literal，并在 literal 后续失败时回退同层 parameter，匹配结果不受 service 插入顺序影响，等价动态 shape 在构建时被拒绝。
-- Spring query 通过公开的 `SpringCloudParameterCardinality::{Scalar, Repeated}` 固定基数语义：Scalar 缺失为 `null`、重复 key 返回 `duplicate_query_parameter`；Repeated 缺失为 `[]`，单值和多值始终为数组。宏将直接声明的 `Vec<T>` 标记为 Repeated、拒绝 `Option<Vec<T>>`，客户端空 Vec 不发送 key，其余元素按重复 key 编码。
+- Spring query 通过公开的 `SpringCloudParameterCardinality::{Scalar, Repeated}` 固定基数语义：Scalar 缺失为 `null`、重复 key 返回 `duplicate_query_parameter`；Repeated 缺失为 `[]`，单值和多值始终为数组。宏仅按显式 `#[param(query, repeated)]` 生成 Repeated，客户端空 array 不发送 key，其余元素按重复 key 编码。
 - 两种协议统一 request ID、relative timeout、attempt headers 与 RFC 9457 Problem Details；内部 source/panic 永不进入 wire。
 - Client 支持 canonical `http://`/`https://` endpoint；HTTPS 使用 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots、严格证书/hostname 验证与 Fusen ALPN `h2`，不提供明文降级、自定义 CA 或 mTLS。
 - Server listener 保持明文 HTTP/1.1/h2c；HTTPS advertised endpoint 只表示由 ingress、sidecar、反向代理或 service mesh 提供的外部 TLS 终止地址。

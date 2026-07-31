@@ -26,6 +26,8 @@
 
 - `http://` 与 `https://` 都使用 HTTP/1.1；
 - 使用方法属性显式声明的 method/path/query/body；
+- query 默认为 Scalar，只有 `#[param(query, repeated)]` 声明 Repeated；Repeated 的 0/1/N 个值分别编码为 0/1/N 个同名 key；
+- route template literal 仅接受 ASCII RFC3986 `pchar` 或以大写百分号编码的合法 UTF-8 非 ASCII 字符；拒绝 raw Unicode、空白、控制字符、反斜线、坏或非规范 `%`、编码 ASCII、点段，以及解码后属于 Unicode 空白或控制字符的 literal；
 - 最多一个 JSON body，success 为 raw JSON；
 - 只承诺 fixtures 覆盖的子集，不声明完整 Spring MVC 兼容。
 

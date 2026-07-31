@@ -31,11 +31,13 @@ assert_eq!(secure_endpoint.as_str(), "https://api.example.com/");
 ```
 
 Enable the optional `derive` feature to re-export
-`#[derive(fusen_contract::SensitiveFields)]`. Sensitivity shapes are lazy, so
-recursive DTOs are supported. They remain local to the process and never alter
-wire encoding, service identity, discovery, or registration. Built-in scalar
-types default to the fail-closed `Opaque` shape; retaining a value requires an
-explicit `public` classification.
+`#[derive(fusen_contract::SensitiveFields)]`. Structured shapes carry separate
+Serde serialization and deserialization field tables, and projection selects
+the table that matches the middleware side and response origin. Shapes are
+lazy, so recursive DTOs are supported. They remain local to the process and
+never alter wire encoding, service identity, discovery, or registration.
+Built-in scalar types default to the fail-closed `Opaque` shape; retaining a
+value requires an explicit `public` classification.
 
 `ServiceEndpoint` rejects credentials, queries, fragments, invalid ports, and
 every scheme except `http` and `https`. It is a network-neutral value: accepting
