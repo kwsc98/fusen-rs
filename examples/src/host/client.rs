@@ -1,28 +1,28 @@
-//! Direct Fusen V1 client example.
+//! Direct `http-json-v1` client example.
 
-use examples::middleware::{
+use examples::extensions::{
+    interceptor::tracing::TracingInterceptor,
     load_balancer::RandomLoadBalancer,
-    log::{LogMetricsRecorder, init_tracing},
-    tracing::TracingMiddleware,
+    metrics::{LogMetricsRecorder, init_tracing},
 };
 use examples::{DemoService, DemoServiceClient, DemoServiceV2, DemoServiceV2Client, RequestDto};
 use fusen_rs::ClientRuntime;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing("host_client=debug,examples::middleware=debug,fusen_rs=debug");
+    init_tracing("host_client=debug,examples::extensions=debug,fusen_rs=debug");
     let runtime = ClientRuntime::builder()
         .metrics(LogMetricsRecorder)
         .build()?;
     let client = DemoServiceClient::builder(&runtime)
         .direct("http://127.0.0.1:8081")
-        .middleware(TracingMiddleware)
+        .interceptor(TracingInterceptor)
         .load_balancer(RandomLoadBalancer)
         .connect()
         .await?;
     let client_v2 = DemoServiceV2Client::builder(&runtime)
         .direct("http://127.0.0.1:8081")
-        .middleware(TracingMiddleware)
+        .interceptor(TracingInterceptor)
         .connect()
         .await?;
 

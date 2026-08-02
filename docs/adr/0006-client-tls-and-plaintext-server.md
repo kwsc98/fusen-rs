@@ -5,6 +5,10 @@
 - 决策者：fusen-rs 维护者
 - 取代：[ADR 0003](0003-plaintext-core-and-tls-termination.md)
 
+> 旧协议与 HTTP version 的绑定关系已由
+> [ADR 0009](0009-http-binding-discovery-decoupling.md) 取代；本 ADR 的 TLS 信任与
+> plaintext Server 边界继续有效。
+
 ## 背景
 
 客户端需要直接调用 HTTPS 服务，包括第三方 Spring Cloud 服务和由 ingress、
@@ -20,9 +24,9 @@ Registry 提供的实例以及显式 server advertisement 使用同一验证规�
 
 客户端传输规则固定为：
 
-- `FusenV1` 在 `http://` 上使用 HTTP/2 prior knowledge（h2c），在 `https://` 上
-  使用 TLS ALPN `h2`；ALPN 未协商出 `h2` 时连接失败，不降级到 HTTP/1.1；
-- `SpringCloudV1` 在 `http://` 与 `https://` 上都使用 HTTP/1.1；
+- `HttpVersionPolicy` 与 endpoint capabilities 共同决定 HTTP version：`Http1`
+  使用 HTTP/1.1，`Http2` 要求 HTTPS ALPN `h2`，`H2c` 仅用于明文
+  HTTP/2 prior knowledge，`Auto` 在 endpoint 宣告的能力范围内选择；
 - HTTPS 使用 Rustls Ring provider、TLS 1.2/1.3 与 bundled Mozilla WebPKI roots，
   并验证证书链、有效期与 endpoint hostname；
 - 不提供自定义 CA、客户端证书/mTLS、跳过验证、明文 fallback 或用户可替换
@@ -34,8 +38,8 @@ Registry 提供的实例以及显式 server advertisement 使用同一验证规�
 提供的可达地址；应用负责让该地址转发到明文 listener，Server 不验证或创建终止器。
 
 Nacos adapter 必须保留 registration 的 `http`/`https` scheme，并允许 discovery
-恢复两种 endpoint；未知 scheme 继续被过滤。TLS 不改变 Fusen/Spring 的 method、
-URI、headers、JSON envelope 或 Problem Details，因此不新增 wire 版本。
+恢复两种 endpoint；未知 scheme 继续被过滤。TLS 不改变 HTTP binding
+的 method、URI、headers、body 或 Problem Details，因此不需要新 binding ID。
 
 依赖策略允许 `fusen-rs` 使用经过审计的 Rustls 客户端栈，但继续禁止
 `native-tls`、`hyper-tls`、OpenSSL TLS backend、AWS-LC provider、平台 verifier、

@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "repeated-non-query")]
 trait RepeatedNonQuery {
@@ -9,7 +9,7 @@ trait RepeatedNonQuery {
     async fn tags(
         &self,
         #[param(body, repeated)] tags: Vec<String>,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

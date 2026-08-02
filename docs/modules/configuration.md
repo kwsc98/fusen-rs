@@ -5,7 +5,7 @@
 
 ## Runtime Config
 
-`ClientConfig`、`ServerConfig` 与子配置字段均私有，只提供 `Default`、builder/setter 和 getter。它们不读取隐式环境变量。Build/start 在网络 I/O 前验证零值、预算关系、protocol 与 endpoint；`ServiceEndpoint` 只接受 canonical `http://`/`https://` URL。
+`ClientConfig`、`ServerConfig` 与子配置字段均私有，只提供 `Default`、builder/setter 和 getter。它们不读取隐式环境变量。Build/start 在网络 I/O 前验证零值、预算关系、HTTP binding/capabilities 与 endpoint；`ServiceEndpoint` 只接受 canonical `http://`/`https://` URL。
 
 Client TLS 没有公开配置面：固定使用 Rustls Ring、bundled Mozilla WebPKI roots 与 TLS 1.2/1.3，不读取系统 trust store。不支持私有 CA、自签名证书、自定义 CA、客户端证书/mTLS 或跳过验证。Server 配置不包含 TLS、证书或私钥字段；HTTPS advertisement 仅描述外部终止器。
 

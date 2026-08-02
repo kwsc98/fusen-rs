@@ -24,8 +24,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "spring_path"
-path = "fuzz_targets/spring_path.rs"
+name = "http_binding"
+path = "fuzz_targets/http_binding.rs"
 test = false
 doc = false
 bench = false

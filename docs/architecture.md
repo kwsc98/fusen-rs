@@ -13,7 +13,7 @@ ClientRuntime / Server runtime
 │   └── Readiness / stale state
 ├── Data plane
 │   ├── Admission / byte budgets
-│   ├── Middleware / interface Handler
+│   ├── Interceptor / interface Handler
 │   └── HTTP transport (client HTTP/HTTPS, server plaintext)
 └── LogicalInvocation
     └── AttemptExecutor
@@ -22,7 +22,7 @@ ClientRuntime / Server runtime
         └── Endpoint + service circuit breaker
 ```
 
-生命周期 supervisor 是资源的唯一所有者。调用者等待 activation、close 或 shutdown 时可以取消自己的 waiter，但不会夺走 provider worker 或 coordinator 的所有权。Transport、Codec、Acceptor、连接池和内部失败分类均不属于公开扩展面。
+生命周期 supervisor 是资源的唯一所有者。调用者等待 activation、close 或 shutdown 时可以取消自己的 waiter，但不会夺走 provider worker 或 coordinator 的所有权。Client 可通过 `RequestEncoder`、`ResponseDecoder` 与 `ErrorDecoder` 实现一个已注册 binding 的 HTTP 语义 codec；HTTP Transport、Server codec、Acceptor、连接池和内部失败分类仍不属于公开扩展面。
 
 ## Crate 边界
 
@@ -30,13 +30,13 @@ ClientRuntime / Server runtime
 
 | Crate | 职责 |
 | --- | --- |
-| `fusen-contract` | 无 executor 依赖的 service/method/protocol/endpoint/instance 值对象 |
+| `fusen-contract` | 无 executor 依赖的 service/method/HTTP binding/capability/endpoint/instance 值对象 |
 | `fusen-register` | `Registry`、registration/subscription handle 与 `DirectorySnapshot` |
 | `fusen-config` | 静态解析、last-good 热配置及显式关闭 |
 | `fusen-nacos` | Nacos naming/config provider adapter |
 | `fusen-observability` | 同步非阻塞 `MetricsRecorder` 及可选 backend adapter |
 | `fusen-procedural-macro` | `interface`/`method` 参数解析、校验和 wrapper 生成 |
-| `fusen-rs` | HTTP/HTTPS Client、明文 HTTP Server、策略与 Middleware runtime |
+| `fusen-rs` | HTTP/HTTPS Client、明文 HTTP Server、策略与 Interceptor runtime |
 
 Core 不依赖 Nacos、OpenSSL/native-tls、系统证书加载器、进程级 tracing subscriber 或 OTel backend。Client 内部使用 Rustls Ring 和 bundled Mozilla WebPKI roots 实现 TLS 1.2/1.3；Server acceptor 仍为明文 HTTP/1.1 与 h2c。宏生成代码只通过版本化的 `fusen_rs::__macro::v1` ABI 使用 runtime internals。
 
@@ -46,37 +46,38 @@ Core 不依赖 Nacos、OpenSSL/native-tls、系统证书加载器、进程级 tr
 
 ```text
 logical admission + tracing
--> ClientCall Middleware exactly once
+-> ClientCall Interceptor exactly once
 -> freeze replayable RequestTemplate
 -> service circuit breaker
 -> AttemptExecutor
    -> latest DirectorySnapshot
+   -> binding/version capability filter
    -> InstanceRouter -> breaker filter -> LoadBalancer
    -> endpoint bulkhead
-   -> ClientAttempt Middleware
+   -> ClientAttempt Interceptor
    -> send / decode
    -> AttemptOutcome -> retry decision / backoff
 -> one logical terminal outcome
 ```
 
-ClientCall Middleware 包围整个逻辑调用，ClientAttempt Middleware 包围每个物理 attempt。一个 absolute deadline 覆盖排队、Middleware、全部 attempts、退避与 decode。每次 attempt 重新读取发现快照；只要仍有未尝试 endpoint，就不能重复选择本次调用中已失败的 endpoint。调用方取消会直接取消当前 attempt，不产生 detached retry。
+ClientCall Interceptor 包围整个逻辑调用，ClientAttempt Interceptor 包围每个物理 attempt。一个 absolute deadline 覆盖排队、Interceptor、全部 attempts、退避与 decode。每次 attempt 重新读取发现快照；只要仍有未尝试 endpoint，就不能重复选择本次调用中已失败的 endpoint。调用方取消会直接取消当前 attempt，不产生 detached retry。
 
 Endpoint breaker 记录真实 attempt；service breaker 只记录逻辑调用的最终结果。序列化、无实例、本地 admission、普通 4xx、Application error 和调用方取消不污染 breaker。自定义 `RetryPolicy` 仍受幂等性、三次 attempt、deadline 和 token budget 的硬上限约束。
 
-HTTP/wire 成功但 typed `result` 无法解码时，调用以非重试的 `DataLoss`/`invalid_result` 结束；selected endpoint attempt 和 service 最终结果均记录为 `Protocol` failure。这类响应说明远端契约或部署版本已失配，属于健康度信号而不是本地序列化错误。
+HTTP 成功但 raw JSON response 无法解码为声明的 Rust 类型时，调用以非重试的 `DataLoss`/`invalid_result` 结束；selected endpoint attempt 和 service 最终结果均记录为 `Protocol` failure。这类响应说明远端契约或部署版本已失配，属于健康度信号而不是本地序列化错误。
 
 ## 服务端请求管线
 
 服务端执行顺序固定为：
 
 ```text
-protocol / request-id / deadline / readiness
+HTTP binding / request-id / deadline / readiness
 -> route head
 -> fail-fast admission
 -> content-type / content-length
--> ServerHead Middleware
+-> ServerHead Interceptor
 -> byte budget + body read / decode
--> ServerCall Middleware / interface Handler
+-> ServerCall Interceptor / interface Handler
 -> bounded response encode
 ```
 
@@ -86,7 +87,9 @@ protocol / request-id / deadline / readiness
 
 `Registry::prepare_registration(RegistrationRequest)` 和 `prepare_subscription(SubscriptionRequest)` 同步返回已拥有 worker 与补偿状态的 handle。Runtime 先追踪 handle，再等待 `activate()`。Late success 若已经没有 waiter，会自动执行一次补偿关闭；`close()` 幂等且并发调用共享同一终态。
 
-发现按 `(ServiceSelector, WireProtocol)` 共享唯一 supervisor。状态流为：
+发现按 `ServiceSelector` 共享唯一 supervisor。Registry 返回的每个 `ServiceInstance`
+携带 `EndpointCapabilities`；binding 与 HTTP version 不参与订阅身份，而是在每次 attempt
+选择 endpoint 时进行能力过滤和 transport 决策。状态流为：
 
 ```text
 Absent -> Starting -> Active -> Stale -> Closing -> Absent
@@ -114,6 +117,6 @@ Client shutdown 先线性化关闭 admission，再并行排空逻辑调用、关
 
 ## Panic 与可观测性
 
-发布 profile 使用 `panic=unwind`。Middleware、interface Handler、InstanceRouter、LoadBalancer、RetryPolicy 和 `MetricsRecorder` 分别隔离：请求扩展 panic 只终止当前请求；单个 H2 stream panic 不关闭同连接其他 stream；registry activation/close panic 转成生命周期错误并继续补偿；metrics recorder 首次 panic 后被原子禁用。
+发布 profile 使用 `panic=unwind`。Interceptor、interface Handler、InstanceRouter、LoadBalancer、RetryPolicy 和 `MetricsRecorder` 分别隔离：请求扩展 panic 只终止当前请求；单个 H2 stream panic 不关闭同连接其他 stream；registry activation/close panic 转成生命周期错误并继续补偿；metrics recorder 首次 panic 后被原子禁用。
 
 Core 直接产生结构化 tracing span/event，应用负责安装 subscriber。Metrics callback 必须同步且非阻塞，label 禁止包含 request ID、endpoint、错误文本、body、完整 headers 或凭据。同步死循环和阻塞无法被 async timeout 抢占，扩展实现应将阻塞工作移到 `spawn_blocking`。

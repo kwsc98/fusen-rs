@@ -1,8 +1,8 @@
 error[E0277]: the trait bound `Response: SensitiveFields` is not satisfied
-  --> tests/ui/missing_response_sensitive_fields.rs:11:53
+  --> tests/ui/missing_response_sensitive_fields.rs:11:54
    |
-11 |     async fn call(&self) -> Result<rpc::RpcResponse<Response>, rpc::RpcError>;
-   |                                                     ^^^^^^^^ unsatisfied trait bound
+11 |     async fn call(&self) -> Result<runtime::Response<Response>, runtime::Error>;
+   |                                                      ^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `SensitiveFields` is not implemented for `Response`
   --> tests/ui/missing_response_sensitive_fields.rs:4:1

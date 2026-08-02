@@ -1,6 +1,6 @@
 use crate::{
-    Middleware, MiddlewareFuture, MiddlewareResult, RpcArguments, RpcCall, RpcCategory, RpcContext,
-    RpcError, RpcResponse, middleware::erase_middleware,
+    Arguments, Call, Context, Error, ErrorCategory, Interceptor, InterceptorFuture,
+    InterceptorResult, Response, interceptor::erase_interceptor,
 };
 use fusen_contract::{MethodId, ServiceDescriptor};
 use futures_util::FutureExt;
@@ -10,15 +10,15 @@ use std::{panic::AssertUnwindSafe, sync::Arc};
 /// Decoded invocation passed to macro-generated server dispatch.
 #[doc(hidden)]
 pub struct ServerInvocation {
-    context: RpcContext,
-    arguments: RpcArguments,
+    context: Context,
+    arguments: Arguments,
     max_response_body: usize,
     response_budget: Arc<crate::runtime::budget::ByteBudget>,
 }
 
 impl ServerInvocation {
     pub(crate) fn new(
-        mut context: RpcContext,
+        mut context: Context,
         max_response_body: usize,
         response_budget: Arc<crate::runtime::budget::ByteBudget>,
     ) -> Self {
@@ -38,8 +38,8 @@ impl ServerInvocation {
 
     /// Returns server-bound call metadata for an explicit `#[param(context)]` parameter.
     #[doc(hidden)]
-    pub fn rpc_call(&self) -> RpcCall {
-        RpcCall::from_server(&self.context)
+    pub fn call(&self) -> Call {
+        Call::from_server(&self.context)
     }
 
     /// Removes and decodes one named method argument.
@@ -47,19 +47,18 @@ impl ServerInvocation {
     pub fn decode_argument<T: serde::de::DeserializeOwned>(
         &mut self,
         name: &str,
-        spring_text: bool,
-    ) -> Result<T, RpcError> {
-        let protocol = self.context.protocol();
+        text_encoded: bool,
+    ) -> Result<T, Error> {
         let value = self
             .arguments
             .remove(name)
             .unwrap_or(serde_json::Value::Null);
-        crate::interface::decode_argument(value, protocol, spring_text)
+        crate::interface::decode_argument(value, text_encoded)
     }
 
     /// Rejects arguments that are absent from the generated method schema.
     #[doc(hidden)]
-    pub fn finish_arguments(&self) -> Result<(), RpcError> {
+    pub fn finish_arguments(&self) -> Result<(), Error> {
         if self.arguments.is_empty() {
             Ok(())
         } else {
@@ -69,26 +68,10 @@ impl ServerInvocation {
 
     /// Encodes a handler response without an unbudgeted JSON buffer.
     #[doc(hidden)]
-    pub fn encode_response<T: Serialize>(self, response: RpcResponse<T>) -> MiddlewareResult {
+    pub fn encode_response<T: Serialize>(self, response: Response<T>) -> InterceptorResult {
         let (body, status, headers, extensions, attempts) = response.into_parts();
-        let envelope_bytes = match self.context.protocol() {
-            fusen_contract::WireProtocol::FusenV1 => 11,
-            fusen_contract::WireProtocol::SpringCloudV1 => 0,
-            _ => self.max_response_body,
-        };
-        let Some(result_limit) = self.max_response_body.checked_sub(envelope_bytes) else {
-            return Err(RpcError::framework(
-                RpcCategory::Internal,
-                "response_too_large",
-                "encoded RPC response exceeds the configured limit",
-            ));
-        };
-        let mut encoded = RpcResponse::success_with_budget(
-            body,
-            result_limit,
-            envelope_bytes,
-            &self.response_budget,
-        )?;
+        let mut encoded =
+            Response::success_with_budget(body, self.max_response_body, 0, &self.response_budget)?;
         encoded.mark_declared_serialize_schema_origin(self.context.method());
         encoded.set_status(status)?;
         *encoded.headers_mut() = headers;
@@ -100,17 +83,17 @@ impl ServerInvocation {
 
 /// Creates the stable dispatch error for an unknown declaration-order method ID.
 #[doc(hidden)]
-pub fn method_not_found(method: MethodId) -> RpcError {
-    RpcError::framework(
-        RpcCategory::Unimplemented,
+pub fn method_not_found(method: MethodId) -> Error {
+    Error::framework(
+        ErrorCategory::Unimplemented,
         "method_not_found",
-        format!("RPC method {} is not implemented", method.get()),
+        format!("service method {} is not implemented", method.get()),
     )
 }
 
 /// Dispatch function emitted by the interface macro.
 #[doc(hidden)]
-pub type DispatchFn<T> = for<'a> fn(&'a T, ServerInvocation) -> MiddlewareFuture<'a>;
+pub type DispatchFn<T> = for<'a> fn(&'a T, ServerInvocation) -> InterceptorFuture<'a>;
 
 /// Fallible descriptor factory emitted by the interface macro.
 #[doc(hidden)]
@@ -122,8 +105,8 @@ pub struct ServerService<T> {
     handler: T,
     descriptor: DescriptorFn,
     dispatch: DispatchFn<T>,
-    head_middleware: Vec<Arc<dyn Middleware>>,
-    middleware: Vec<Arc<dyn Middleware>>,
+    head_interceptor: Vec<Arc<dyn Interceptor>>,
+    interceptor: Vec<Arc<dyn Interceptor>>,
 }
 
 impl<T> ServerService<T> {
@@ -134,22 +117,22 @@ impl<T> ServerService<T> {
             handler,
             descriptor,
             dispatch,
-            head_middleware: Vec::new(),
-            middleware: Vec::new(),
+            head_interceptor: Vec::new(),
+            interceptor: Vec::new(),
         }
     }
 
-    /// Appends interface-local head middleware.
+    /// Appends interface-local head interceptor.
     #[doc(hidden)]
-    pub fn head_middleware(mut self, middleware: impl Middleware) -> Self {
-        self.head_middleware.push(erase_middleware(middleware));
+    pub fn head_interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.head_interceptor.push(erase_interceptor(interceptor));
         self
     }
 
-    /// Appends interface-local decoded-call middleware.
+    /// Appends interface-local decoded-call interceptor.
     #[doc(hidden)]
-    pub fn middleware(mut self, middleware: impl Middleware) -> Self {
-        self.middleware.push(erase_middleware(middleware));
+    pub fn interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.interceptor.push(erase_interceptor(interceptor));
         self
     }
 }
@@ -172,8 +155,8 @@ where
                 handler: self.handler,
                 dispatch: self.dispatch,
             }),
-            head_middleware: self.head_middleware,
-            middleware: self.middleware,
+            head_interceptor: self.head_interceptor,
+            interceptor: self.interceptor,
         }
     }
 }
@@ -190,7 +173,7 @@ where
 }
 
 pub(crate) trait ErasedDispatch: Send + Sync {
-    fn call<'a>(&'a self, invocation: ServerInvocation) -> MiddlewareFuture<'a>;
+    fn call<'a>(&'a self, invocation: ServerInvocation) -> InterceptorFuture<'a>;
 }
 
 struct FunctionDispatch<T> {
@@ -202,15 +185,15 @@ impl<T> ErasedDispatch for FunctionDispatch<T>
 where
     T: Send + Sync + 'static,
 {
-    fn call<'a>(&'a self, invocation: ServerInvocation) -> MiddlewareFuture<'a> {
+    fn call<'a>(&'a self, invocation: ServerInvocation) -> InterceptorFuture<'a> {
         let future = (self.dispatch)(&self.handler, invocation);
         Box::pin(async move {
             match AssertUnwindSafe(future).catch_unwind().await {
                 Ok(result) => result,
                 Err(_) => {
-                    tracing::error!("RPC interface handler panicked");
-                    Err(RpcError::framework(
-                        RpcCategory::Internal,
+                    tracing::error!("service interface handler panicked");
+                    Err(Error::framework(
+                        ErrorCategory::Internal,
                         "handler_panic",
                         "interface handler failed",
                     ))
@@ -225,8 +208,8 @@ where
 pub struct PreparedService {
     descriptor: DescriptorFn,
     pub(crate) dispatch: Arc<dyn ErasedDispatch>,
-    pub(crate) head_middleware: Vec<Arc<dyn Middleware>>,
-    pub(crate) middleware: Vec<Arc<dyn Middleware>>,
+    pub(crate) head_interceptor: Vec<Arc<dyn Interceptor>>,
+    pub(crate) interceptor: Vec<Arc<dyn Interceptor>>,
 }
 
 impl PreparedService {

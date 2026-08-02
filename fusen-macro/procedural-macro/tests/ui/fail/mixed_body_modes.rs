@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "mixed-body-modes")]
 trait MixedBodyModes {
@@ -10,7 +10,7 @@ trait MixedBodyModes {
         &self,
         #[param(body)] document: String,
         audit: bool,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

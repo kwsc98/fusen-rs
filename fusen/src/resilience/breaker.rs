@@ -418,10 +418,7 @@ impl CircuitBreaker {
                 BreakerImpact::Failure => {
                     Transition::Reopen(self.config.next_open_duration(*previous_open_duration))
                 }
-                BreakerImpact::Ignore => {
-                    *consecutive_successes = 0;
-                    Transition::None
-                }
+                BreakerImpact::Ignore => Transition::None,
                 BreakerImpact::Unattempted => Transition::None,
             }
         };
@@ -652,13 +649,12 @@ where
         CircuitBreaker::with_observer(self.config.clone(), Some(observer))
     }
 
-    /// Removes one cached endpoint while allowing existing permits to retain the breaker by Arc.
-    pub(crate) fn remove(&self, key: &K) -> bool {
+    /// Retains cached entries selected by `keep` while existing permits retain their Arcs.
+    pub(crate) fn retain(&self, mut keep: impl FnMut(&K) -> bool) {
         self.entries
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .remove(key)
-            .is_some()
+            .retain(|key, _| keep(key));
     }
 
     fn get_or_insert_with_observer(
@@ -834,17 +830,17 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn abandoned_half_open_probe_releases_its_slot_and_breaks_success_streak() {
-        let breaker = CircuitBreaker::endpoint(config(1, 2, 1));
-        failure(&breaker);
-        tokio::time::advance(Duration::from_secs(10)).await;
+    async fn ignored_half_open_outcomes_preserve_success_streak() {
+        for ignored in [FailureClass::Cancelled, FailureClass::LocalRejection] {
+            let breaker = CircuitBreaker::endpoint(config(1, 2, 1));
+            failure(&breaker);
+            tokio::time::advance(Duration::from_secs(10)).await;
 
-        breaker.try_acquire().unwrap().succeed();
-        drop(breaker.try_acquire().unwrap());
-        breaker.try_acquire().unwrap().succeed();
-        assert_eq!(breaker.snapshot().state, BreakerState::HalfOpen);
-        breaker.try_acquire().unwrap().succeed();
-        assert_eq!(breaker.snapshot().state, BreakerState::Closed);
+            breaker.try_acquire().unwrap().succeed();
+            breaker.try_acquire().unwrap().fail(ignored);
+            breaker.try_acquire().unwrap().succeed();
+            assert_eq!(breaker.snapshot().state, BreakerState::Closed);
+        }
     }
 
     #[tokio::test(start_paused = true)]

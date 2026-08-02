@@ -1,4 +1,4 @@
-//! Safe, policy-driven projections of RPC values for diagnostics.
+//! Safe, policy-driven projections of service invocation values for diagnostics.
 
 use fusen_contract::SensitivityKind;
 use serde::Serialize;
@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 
 const OMITTED: &str = "<omitted>";
 
-/// The part of an RPC being projected for diagnostic output.
+/// The part of a service invocation being projected for diagnostic output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SanitizationTarget {
@@ -54,7 +54,7 @@ impl<'a> SanitizationContext<'a> {
         self.path
     }
 
-    /// Returns the sensitivity classification declared by the RPC schema.
+    /// Returns the sensitivity classification declared by the invocation schema.
     pub const fn kind(&self) -> SensitivityKind {
         self.kind
     }
@@ -183,7 +183,7 @@ impl Default for ProjectionLimits {
     }
 }
 
-/// Object-safe policy for values whose sensitivity is declared by an RPC schema.
+/// Object-safe policy for values whose sensitivity is declared by an invocation schema.
 pub trait Sanitizer: Send + Sync + 'static {
     /// Decides how one classified value appears in diagnostic output.
     fn sanitize(&self, context: SanitizationContext<'_>) -> Sanitization;
@@ -207,7 +207,7 @@ where
     }
 }
 
-/// A sensitivity-kind policy suitable for application and middleware logging.
+/// A sensitivity-kind policy suitable for application and interceptor logging.
 ///
 /// The default policy reveals values explicitly classified as public, redacts all built-in
 /// sensitive kinds, and omits custom kinds until the application adds a rule.

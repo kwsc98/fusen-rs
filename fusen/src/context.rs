@@ -3,7 +3,7 @@ use crate::runtime::{
     deadline::Deadline,
 };
 use bytes::Bytes;
-use fusen_contract::{MethodDescriptor, ServiceDescriptor, ServiceInstance, WireProtocol};
+use fusen_contract::{HttpBindingId, MethodDescriptor, ServiceDescriptor, ServiceInstance};
 use http::{Extensions, HeaderMap, StatusCode};
 use serde_json::{Map, Value};
 use std::{
@@ -17,25 +17,25 @@ use std::{
 /// Named JSON values used by the versioned wire protocols.
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
-pub struct RpcArguments(Map<String, Value>);
+pub struct Arguments(Map<String, Value>);
 
-impl fmt::Debug for RpcArguments {
+impl fmt::Debug for Arguments {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RpcArguments")
+            .debug_struct("Arguments")
             .field("field_count", &self.0.len())
             .finish()
     }
 }
 
-impl RpcArguments {
+impl Arguments {
     /// Creates an empty argument object.
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl Deref for RpcArguments {
+impl Deref for Arguments {
     type Target = Map<String, Value>;
 
     fn deref(&self) -> &Self::Target {
@@ -43,26 +43,26 @@ impl Deref for RpcArguments {
     }
 }
 
-impl DerefMut for RpcArguments {
+impl DerefMut for Arguments {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-/// Whether middleware is processing an outbound or inbound RPC.
+/// Whether an interceptor is processing an outbound or inbound service invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum RpcSide {
+pub enum Side {
     /// An outbound client invocation.
     Client,
     /// An inbound server invocation.
     Server,
 }
 
-/// The precise point at which middleware runs.
+/// The precise point at which interceptor runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum MiddlewareStage {
+pub enum InterceptionStage {
     /// Once around the complete logical client invocation.
     ClientCall,
     /// Once around each physical client transport attempt.
@@ -73,11 +73,12 @@ pub enum MiddlewareStage {
     ServerCall,
 }
 
-/// Framework metadata bound to an [`RpcCall`].
+/// Framework metadata bound to a [`Call`].
 #[derive(Clone, Debug)]
 pub struct CallInfo {
     request_id: String,
-    protocol: WireProtocol,
+    binding_id: HttpBindingId,
+    http_version: Option<http::Version>,
     interface: &'static ServiceDescriptor,
     method: &'static MethodDescriptor,
     deadline: Deadline,
@@ -89,9 +90,14 @@ impl CallInfo {
         &self.request_id
     }
 
-    /// Returns the selected wire protocol.
-    pub const fn protocol(&self) -> WireProtocol {
-        self.protocol
+    /// Returns the selected HTTP binding.
+    pub const fn binding_id(&self) -> &HttpBindingId {
+        &self.binding_id
+    }
+
+    /// Returns the selected or negotiated HTTP version when transport has been bound.
+    pub const fn http_version(&self) -> Option<http::Version> {
+        self.http_version
     }
 
     /// Returns the immutable interface descriptor.
@@ -112,13 +118,13 @@ impl CallInfo {
 
 /// Optional call metadata passed explicitly by generated clients and interface handlers.
 #[derive(Clone, Debug, Default)]
-pub struct RpcCall {
+pub struct Call {
     headers: HeaderMap,
     extensions: Extensions,
     call_info: Option<CallInfo>,
 }
 
-impl RpcCall {
+impl Call {
     /// Creates call metadata with empty headers and extensions.
     pub fn new() -> Self {
         Self {
@@ -157,7 +163,7 @@ impl RpcCall {
         (self.headers, self.extensions)
     }
 
-    pub(crate) fn from_server(context: &RpcContext) -> Self {
+    pub(crate) fn from_server(context: &Context) -> Self {
         Self {
             headers: context.headers.clone(),
             extensions: context.extensions.clone(),
@@ -175,24 +181,24 @@ enum ResponseSchemaOrigin {
     },
 }
 
-/// Budget-aware encoded JSON body carried through middleware and transport.
+/// Budget-aware encoded JSON body carried through interceptor and transport.
 #[derive(Clone)]
-pub struct RpcBody {
+pub struct Body {
     bytes: Bytes,
     budget_permit: Option<Arc<BytePermit>>,
     schema_origin: ResponseSchemaOrigin,
 }
 
-impl fmt::Debug for RpcBody {
+impl fmt::Debug for Body {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RpcBody")
+            .debug_struct("Body")
             .field("length", &self.bytes.len())
             .finish()
     }
 }
 
-impl RpcBody {
+impl Body {
     /// Returns the encoded JSON bytes.
     pub const fn as_bytes(&self) -> &Bytes {
         &self.bytes
@@ -208,7 +214,8 @@ impl RpcBody {
         self.bytes.is_empty()
     }
 
-    pub(crate) fn from_bytes(bytes: Bytes) -> Self {
+    /// Creates an encoded body from already bounded bytes.
+    pub fn from_bytes(bytes: Bytes) -> Self {
         Self {
             bytes,
             budget_permit: None,
@@ -225,15 +232,38 @@ impl RpcBody {
     }
 }
 
-#[derive(Clone, Debug)]
-struct ResponseRuntime {
-    tracks_endpoint_breaker: bool,
-    service_breaker_permit: Option<Arc<Mutex<Option<crate::resilience::breaker::BreakerPermit>>>>,
+pub(crate) trait ResponseAttemptCompletion: Send + Sync {
+    fn seal_duration(&self, duration: Duration);
+
+    fn finish(&self, failure: Option<crate::resilience::FailureClass>);
 }
 
-/// A typed successful RPC response.
 #[derive(Clone)]
-pub struct RpcResponse<T> {
+struct ResponseRuntime {
+    wire_origin: bool,
+    tracks_endpoint_breaker: bool,
+    service_breaker_permit: Option<Arc<Mutex<Option<crate::resilience::breaker::BreakerPermit>>>>,
+    attempt_completion: Option<Arc<dyn ResponseAttemptCompletion>>,
+}
+
+impl fmt::Debug for ResponseRuntime {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResponseRuntime")
+            .field("wire_origin", &self.wire_origin)
+            .field("tracks_endpoint_breaker", &self.tracks_endpoint_breaker)
+            .field(
+                "has_service_breaker_permit",
+                &self.service_breaker_permit.is_some(),
+            )
+            .field("has_attempt_completion", &self.attempt_completion.is_some())
+            .finish()
+    }
+}
+
+/// A typed successful service invocation response.
+#[derive(Clone)]
+pub struct Response<T> {
     body: T,
     status: StatusCode,
     headers: HeaderMap,
@@ -242,10 +272,10 @@ pub struct RpcResponse<T> {
     runtime: ResponseRuntime,
 }
 
-impl<T> fmt::Debug for RpcResponse<T> {
+impl<T> fmt::Debug for Response<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RpcResponse")
+            .debug_struct("Response")
             .field("body", &"<omitted>")
             .field("status", &self.status)
             .field("headers", &self.headers)
@@ -256,7 +286,7 @@ impl<T> fmt::Debug for RpcResponse<T> {
     }
 }
 
-impl<T> RpcResponse<T> {
+impl<T> Response<T> {
     /// Creates a `200 OK` response with empty headers and extensions.
     pub fn new(body: T) -> Self {
         Self {
@@ -264,10 +294,12 @@ impl<T> RpcResponse<T> {
             status: StatusCode::OK,
             headers: HeaderMap::new(),
             extensions: Extensions::new(),
-            attempts: 1,
+            attempts: 0,
             runtime: ResponseRuntime {
+                wire_origin: false,
                 tracks_endpoint_breaker: false,
                 service_breaker_permit: None,
+                attempt_completion: None,
             },
         }
     }
@@ -277,8 +309,12 @@ impl<T> RpcResponse<T> {
         &self.body
     }
 
-    /// Returns the mutable response body.
+    /// Returns the mutable response body and marks it as locally transformed.
+    ///
+    /// A typed decode failure after mutable body access is attributed to the interceptor rather
+    /// than to the remote service response.
     pub fn body_mut(&mut self) -> &mut T {
+        self.runtime.wire_origin = false;
         &mut self.body
     }
 
@@ -288,14 +324,19 @@ impl<T> RpcResponse<T> {
     }
 
     /// Transforms the body while preserving response metadata.
-    pub fn map<U>(self, map: impl FnOnce(T) -> U) -> RpcResponse<U> {
-        RpcResponse {
+    ///
+    /// The transformed body is local even when the original body came from the wire. Status,
+    /// headers, extensions, physical-attempt accounting, and breaker completion state are kept.
+    pub fn map<U>(self, map: impl FnOnce(T) -> U) -> Response<U> {
+        let mut runtime = self.runtime;
+        runtime.wire_origin = false;
+        Response {
             body: map(self.body),
             status: self.status,
             headers: self.headers,
             extensions: self.extensions,
             attempts: self.attempts,
-            runtime: self.runtime,
+            runtime,
         }
     }
 
@@ -305,12 +346,12 @@ impl<T> RpcResponse<T> {
     }
 
     /// Replaces the response status. Successful responses must remain 2xx.
-    pub fn set_status(&mut self, status: StatusCode) -> Result<(), crate::RpcError> {
+    pub fn set_status(&mut self, status: StatusCode) -> Result<(), crate::Error> {
         if !status.is_success() {
-            return Err(crate::RpcError::framework(
-                crate::RpcCategory::InvalidArgument,
+            return Err(crate::Error::framework(
+                crate::ErrorCategory::InvalidArgument,
                 "invalid_response_status",
-                "RPC success response status must be 2xx",
+                "service invocation success response status must be 2xx",
             ));
         }
         self.status = status;
@@ -353,11 +394,38 @@ impl<T> RpcResponse<T> {
     }
 
     pub(crate) fn set_attempts(&mut self, attempts: u8) {
-        self.attempts = attempts.max(1);
+        self.attempts = attempts;
+    }
+
+    pub(crate) fn hold_attempt_completion(
+        &mut self,
+        completion: Arc<dyn ResponseAttemptCompletion>,
+    ) {
+        self.runtime.attempt_completion = Some(completion);
+    }
+
+    pub(crate) fn mark_wire_origin(&mut self) {
+        self.runtime.wire_origin = true;
+    }
+
+    pub(crate) const fn is_wire_origin(&self) -> bool {
+        self.runtime.wire_origin
+    }
+
+    pub(crate) fn seal_attempt_duration(&self, duration: Duration) {
+        if let Some(completion) = &self.runtime.attempt_completion {
+            completion.seal_duration(duration);
+        }
+    }
+
+    pub(crate) fn finish_attempt(&mut self, failure: Option<crate::resilience::FailureClass>) {
+        if let Some(completion) = self.runtime.attempt_completion.take() {
+            completion.finish(failure);
+        }
     }
 }
 
-impl RpcResponse<RpcBody> {
+impl Response<Body> {
     /// Projects the encoded result through declared response sensitivity metadata.
     ///
     /// Responses that did not originate from the generated response schema, methods without
@@ -381,16 +449,16 @@ impl RpcResponse<RpcBody> {
         limit: usize,
         wire_overhead: usize,
         budget: &Arc<ByteBudget>,
-    ) -> Result<Self, crate::RpcError> {
+    ) -> Result<Self, crate::Error> {
         let mut writer = BudgetedWriter::new(limit, budget, wire_overhead)
             .map_err(|_| response_budget_exhausted())?;
         serde_json::to_writer(&mut writer, &value).map_err(|error| match writer.failure() {
             Some(BudgetedWriteFailure::LimitExceeded) => response_too_large(),
             Some(BudgetedWriteFailure::BudgetExhausted) => response_budget_exhausted(),
-            None => crate::RpcError::internal("failed to serialize RPC response", error),
+            None => crate::Error::internal("failed to serialize invocation response", error),
         })?;
         let (bytes, permit) = writer.into_parts();
-        Ok(Self::new(RpcBody {
+        Ok(Self::new(Body {
             bytes,
             budget_permit: Some(permit),
             schema_origin: ResponseSchemaOrigin::Unclassified,
@@ -398,7 +466,7 @@ impl RpcResponse<RpcBody> {
     }
 
     pub(crate) fn from_json_bytes(bytes: Bytes) -> Self {
-        Self::new(RpcBody::from_bytes(bytes))
+        Self::new(Body::from_bytes(bytes))
     }
 
     pub(crate) fn result_bytes(&self) -> &Bytes {
@@ -482,13 +550,14 @@ impl RpcResponse<RpcBody> {
     }
 }
 
-/// Metadata and mutable state for one middleware position.
+/// Metadata and mutable state for one interceptor position.
 #[derive(Clone)]
-pub struct RpcContext {
-    side: RpcSide,
-    stage: MiddlewareStage,
+pub struct Context {
+    side: Side,
+    stage: InterceptionStage,
     request_id: String,
-    protocol: WireProtocol,
+    binding_id: HttpBindingId,
+    http_version: Option<http::Version>,
     interface: &'static ServiceDescriptor,
     method: &'static MethodDescriptor,
     deadline: Deadline,
@@ -496,20 +565,21 @@ pub struct RpcContext {
     endpoint: Option<ServiceInstance>,
     headers: HeaderMap,
     extensions: Extensions,
-    arguments: Option<RpcArguments>,
+    arguments: Option<Arguments>,
     response_limit: usize,
     response_wire_overhead: usize,
     response_budget: Arc<ByteBudget>,
 }
 
-impl fmt::Debug for RpcContext {
+impl fmt::Debug for Context {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RpcContext")
+            .debug_struct("Context")
             .field("side", &self.side)
             .field("stage", &self.stage)
             .field("request_id", &self.request_id)
-            .field("protocol", &self.protocol)
+            .field("binding_id", &self.binding_id)
+            .field("http_version", &self.http_version)
             .field("interface", &self.interface)
             .field("method", &self.method)
             .field("deadline", &self.deadline)
@@ -528,11 +598,12 @@ impl fmt::Debug for RpcContext {
     }
 }
 
-pub(crate) struct RpcContextParts {
-    pub side: RpcSide,
-    pub stage: MiddlewareStage,
+pub(crate) struct ContextParts {
+    pub side: Side,
+    pub stage: InterceptionStage,
     pub request_id: String,
-    pub protocol: WireProtocol,
+    pub binding_id: HttpBindingId,
+    pub http_version: Option<http::Version>,
     pub interface: &'static ServiceDescriptor,
     pub method: &'static MethodDescriptor,
     pub deadline: Deadline,
@@ -540,19 +611,20 @@ pub(crate) struct RpcContextParts {
     pub endpoint: Option<ServiceInstance>,
     pub headers: HeaderMap,
     pub extensions: Extensions,
-    pub arguments: Option<RpcArguments>,
+    pub arguments: Option<Arguments>,
     pub response_limit: usize,
     pub response_wire_overhead: usize,
     pub response_budget: Arc<ByteBudget>,
 }
 
-impl RpcContext {
-    pub(crate) fn new(parts: RpcContextParts) -> Self {
+impl Context {
+    pub(crate) fn new(parts: ContextParts) -> Self {
         Self {
             side: parts.side,
             stage: parts.stage,
             request_id: parts.request_id,
-            protocol: parts.protocol,
+            binding_id: parts.binding_id,
+            http_version: parts.http_version,
             interface: parts.interface,
             method: parts.method,
             deadline: parts.deadline,
@@ -567,13 +639,13 @@ impl RpcContext {
         }
     }
 
-    /// Returns the client/server side of this middleware position.
-    pub const fn side(&self) -> RpcSide {
+    /// Returns the client/server side of this interceptor position.
+    pub const fn side(&self) -> Side {
         self.side
     }
 
-    /// Returns the middleware execution stage.
-    pub const fn stage(&self) -> MiddlewareStage {
+    /// Returns the interceptor execution stage.
+    pub const fn stage(&self) -> InterceptionStage {
         self.stage
     }
 
@@ -582,9 +654,14 @@ impl RpcContext {
         &self.request_id
     }
 
-    /// Returns the selected wire protocol.
-    pub const fn protocol(&self) -> WireProtocol {
-        self.protocol
+    /// Returns the selected HTTP binding.
+    pub const fn binding_id(&self) -> &HttpBindingId {
+        &self.binding_id
+    }
+
+    /// Returns the selected or negotiated HTTP version at transport-bound stages.
+    pub const fn http_version(&self) -> Option<http::Version> {
+        self.http_version
     }
 
     /// Returns the static interface contract.
@@ -623,7 +700,7 @@ impl RpcContext {
     }
 
     /// Returns decoded or encoded arguments when available at this stage.
-    pub const fn arguments(&self) -> Option<&RpcArguments> {
+    pub const fn arguments(&self) -> Option<&Arguments> {
         self.arguments.as_ref()
     }
 
@@ -637,8 +714,8 @@ impl RpcContext {
         sanitizer: &dyn crate::sensitive::Sanitizer,
     ) -> crate::sensitive::SanitizedValue {
         let direction = match self.side {
-            RpcSide::Client => crate::projection::ProjectionDirection::Serialize,
-            RpcSide::Server => crate::projection::ProjectionDirection::Deserialize,
+            Side::Client => crate::projection::ProjectionDirection::Serialize,
+            Side::Server => crate::projection::ProjectionDirection::Deserialize,
         };
         self.arguments.as_ref().map_or_else(
             crate::sensitive::SanitizedValue::omitted,
@@ -659,11 +736,8 @@ impl RpcContext {
     }
 
     /// Creates a successful, budget-controlled short-circuit response.
-    pub fn respond<T: serde::Serialize>(
-        &self,
-        value: T,
-    ) -> Result<RpcResponse<RpcBody>, crate::RpcError> {
-        RpcResponse::success_with_budget(
+    pub fn respond<T: serde::Serialize>(&self, value: T) -> Result<Response<Body>, crate::Error> {
+        Response::success_with_budget(
             value,
             self.response_limit,
             self.response_wire_overhead,
@@ -675,7 +749,7 @@ impl RpcContext {
         self.deadline
     }
 
-    pub(crate) fn set_stage(&mut self, stage: MiddlewareStage) {
+    pub(crate) fn set_stage(&mut self, stage: InterceptionStage) {
         self.stage = stage;
     }
 
@@ -687,18 +761,23 @@ impl RpcContext {
         self.endpoint = Some(endpoint);
     }
 
-    pub(crate) fn take_arguments(&mut self) -> Option<RpcArguments> {
+    pub(crate) fn set_http_version(&mut self, version: http::Version) {
+        self.http_version = Some(version);
+    }
+
+    pub(crate) fn take_arguments(&mut self) -> Option<Arguments> {
         self.arguments.take()
     }
 
-    pub(crate) fn set_arguments(&mut self, arguments: RpcArguments) {
+    pub(crate) fn set_arguments(&mut self, arguments: Arguments) {
         self.arguments = Some(arguments);
     }
 
     pub(crate) fn call_info(&self) -> CallInfo {
         CallInfo {
             request_id: self.request_id.clone(),
-            protocol: self.protocol,
+            binding_id: self.binding_id.clone(),
+            http_version: self.http_version,
             interface: self.interface,
             method: self.method,
             deadline: self.deadline,
@@ -706,17 +785,17 @@ impl RpcContext {
     }
 }
 
-fn response_too_large() -> crate::RpcError {
-    crate::RpcError::framework(
-        crate::RpcCategory::Internal,
+fn response_too_large() -> crate::Error {
+    crate::Error::framework(
+        crate::ErrorCategory::Internal,
         "response_too_large",
-        "encoded RPC response exceeds the configured limit",
+        "encoded invocation response exceeds the configured limit",
     )
 }
 
-fn response_budget_exhausted() -> crate::RpcError {
-    crate::RpcError::framework(
-        crate::RpcCategory::ResourceExhausted,
+fn response_budget_exhausted() -> crate::Error {
+    crate::Error::framework(
+        crate::ErrorCategory::ResourceExhausted,
         "response_byte_budget_exhausted",
         "response byte budget is exhausted",
     )
@@ -727,9 +806,10 @@ mod tests {
     use super::*;
     use crate::{PolicySanitizer, runtime::budget::ByteBudget};
     use fusen_contract::{
-        MethodId, MethodSensitivity, SensitiveArgument, SensitiveField, SensitiveShape,
-        SensitivityKind, ServiceSelector,
+        HttpBindingId, HttpOperation, MethodId, MethodSensitivity, SensitiveArgument,
+        SensitiveField, SensitiveShape, SensitivityKind, ServiceSelector,
     };
+    use http::Method;
     use serde_json::json;
     use std::{sync::OnceLock, time::Duration};
 
@@ -757,7 +837,15 @@ mod tests {
     fn service() -> &'static ServiceDescriptor {
         static SERVICE: OnceLock<ServiceDescriptor> = OnceLock::new();
         SERVICE.get_or_init(|| {
-            let method = MethodDescriptor::new(MethodId::new(0), "call", None)
+            let operation = HttpOperation::new(
+                Method::POST,
+                "/call",
+                Vec::new(),
+                "application/json",
+                "application/json",
+            )
+            .unwrap();
+            let method = MethodDescriptor::new(MethodId::new(0), "call", operation)
                 .unwrap()
                 .with_sensitivity(MethodSensitivity::new(
                     vec![SensitiveArgument::new("request", payload_shape)],
@@ -771,18 +859,19 @@ mod tests {
         })
     }
 
-    fn context() -> RpcContext {
+    fn context() -> Context {
         let service = service();
-        let mut arguments = RpcArguments::new();
+        let mut arguments = Arguments::new();
         arguments.insert(
             "request".to_owned(),
             json!({"visible_in": "safe", "visible_out": "private-argument"}),
         );
-        RpcContext::new(RpcContextParts {
-            side: RpcSide::Server,
-            stage: MiddlewareStage::ServerCall,
+        Context::new(ContextParts {
+            side: Side::Server,
+            stage: InterceptionStage::ServerCall,
             request_id: "request-1".to_owned(),
-            protocol: WireProtocol::FusenV1,
+            binding_id: HttpBindingId::default(),
+            http_version: Some(http::Version::HTTP_11),
             interface: service,
             method: service.method(MethodId::new(0)).unwrap(),
             deadline: Deadline::after(Duration::from_secs(1)),
@@ -812,13 +901,26 @@ mod tests {
         let context_debug = format!("{context:?}");
         let body_debug = format!(
             "{:?}",
-            RpcBody::from_bytes(Bytes::from_static(b"private-encoded-body"))
+            Body::from_bytes(Bytes::from_static(b"private-encoded-body"))
         );
-        let response_debug = format!("{:?}", RpcResponse::new(PrivateDebug));
+        let response_debug = format!("{:?}", Response::new(PrivateDebug));
 
         for debug in [arguments_debug, context_debug, body_debug, response_debug] {
             assert!(!debug.contains("private-"));
         }
+    }
+
+    #[test]
+    fn response_attempts_are_exact_and_preserved_by_map() {
+        let mut response = Response::new("body");
+        assert_eq!(response.attempts(), 0);
+
+        response.set_attempts(2);
+        assert_eq!(response.attempts(), 2);
+
+        response.set_attempts(0);
+        assert_eq!(response.attempts(), 0);
+        assert_eq!(response.map(str::len).attempts(), 0);
     }
 
     #[test]
@@ -837,7 +939,7 @@ mod tests {
             .unwrap();
         assert!(short_circuit.sanitized_body(method, &policy).is_omitted());
 
-        let mut declared = RpcResponse::from_json_bytes(Bytes::from_static(
+        let mut declared = Response::from_json_bytes(Bytes::from_static(
             br#"{"visible_out":"safe","secret_out":"private-response"}"#,
         ));
         declared.mark_declared_serialize_schema_origin(method);
@@ -846,7 +948,7 @@ mod tests {
             json!({"visible_out": "safe", "secret_out": "<redacted>"})
         );
 
-        let mut received = RpcResponse::from_json_bytes(Bytes::from_static(
+        let mut received = Response::from_json_bytes(Bytes::from_static(
             br#"{"visible_in":"safe","visible_out":"private-response"}"#,
         ));
         received.mark_declared_deserialize_schema_origin(method);
@@ -855,9 +957,20 @@ mod tests {
             json!({"visible_in": "safe", "visible_out": "<redacted>"})
         );
 
-        let wrong_method = MethodDescriptor::new(MethodId::new(1), "other", None)
-            .unwrap()
-            .with_sensitivity(MethodSensitivity::new(vec![], Some(payload_shape)));
+        let wrong_method = MethodDescriptor::new(
+            MethodId::new(1),
+            "other",
+            HttpOperation::new(
+                Method::POST,
+                "/other",
+                Vec::new(),
+                "application/json",
+                "application/json",
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .with_sensitivity(MethodSensitivity::new(vec![], Some(payload_shape)));
         assert!(declared.sanitized_body(&wrong_method, &policy).is_omitted());
 
         let replacement = context
@@ -868,7 +981,7 @@ mod tests {
         assert!(declared.sanitized_body(method, &policy).is_omitted());
 
         let mut declared =
-            RpcResponse::from_json_bytes(Bytes::from_static(br#"{"visible_out":"safe"}"#));
+            Response::from_json_bytes(Bytes::from_static(br#"{"visible_out":"safe"}"#));
         declared.mark_declared_serialize_schema_origin(method);
         let replacement = context
             .respond(json!({"visible_out": "private-map-replacement"}))

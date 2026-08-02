@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "path-without-placeholder")]
 trait PathWithoutPlaceholder {
@@ -9,7 +9,7 @@ trait PathWithoutPlaceholder {
     async fn get(
         &self,
         #[param(path)] user_id: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

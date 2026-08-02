@@ -10,7 +10,7 @@ Run one target with a nightly toolchain and `cargo-fuzz`:
 ```shell
 cd fuzz
 cargo +nightly fuzz run wire_codec
-cargo +nightly fuzz run spring_path
+cargo +nightly fuzz run http_binding
 cargo +nightly fuzz run problem_details
 ```
 

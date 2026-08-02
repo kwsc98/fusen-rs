@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
 //! Cancellation-safe service registration and discovery contracts for fusen-rs.
 
-use fusen_contract::{ServiceRegistration, ServiceSelector, WireProtocol};
+use fusen_contract::{ServiceRegistration, ServiceSelector};
 use futures_util::FutureExt;
 use std::{
     future::Future,
@@ -31,16 +31,12 @@ pub type RegistryFuture<T> =
 #[derive(Clone, Debug)]
 pub struct RegistrationRequest {
     registration: Arc<ServiceRegistration>,
-    protocol: WireProtocol,
 }
 
 impl RegistrationRequest {
     /// Creates a registration request.
-    pub fn new(registration: Arc<ServiceRegistration>, protocol: WireProtocol) -> Self {
-        Self {
-            registration,
-            protocol,
-        }
+    pub fn new(registration: Arc<ServiceRegistration>) -> Self {
+        Self { registration }
     }
 
     /// Returns the immutable provider registration.
@@ -48,14 +44,9 @@ impl RegistrationRequest {
         &self.registration
     }
 
-    /// Returns the wire protocol being published.
-    pub const fn protocol(&self) -> WireProtocol {
-        self.protocol
-    }
-
-    /// Consumes this request into its parts.
-    pub fn into_parts(self) -> (Arc<ServiceRegistration>, WireProtocol) {
-        (self.registration, self.protocol)
+    /// Consumes this request into the immutable provider registration.
+    pub fn into_registration(self) -> Arc<ServiceRegistration> {
+        self.registration
     }
 }
 
@@ -63,13 +54,12 @@ impl RegistrationRequest {
 #[derive(Clone, Debug)]
 pub struct SubscriptionRequest {
     selector: ServiceSelector,
-    protocol: WireProtocol,
 }
 
 impl SubscriptionRequest {
     /// Creates a subscription request.
-    pub fn new(selector: ServiceSelector, protocol: WireProtocol) -> Self {
-        Self { selector, protocol }
+    pub fn new(selector: ServiceSelector) -> Self {
+        Self { selector }
     }
 
     /// Returns the service selector.
@@ -77,14 +67,9 @@ impl SubscriptionRequest {
         &self.selector
     }
 
-    /// Returns the requested wire protocol.
-    pub const fn protocol(&self) -> WireProtocol {
-        self.protocol
-    }
-
-    /// Consumes this request into its parts.
-    pub fn into_parts(self) -> (ServiceSelector, WireProtocol) {
-        (self.selector, self.protocol)
+    /// Consumes this request into the service selector.
+    pub fn into_selector(self) -> ServiceSelector {
+        self.selector
     }
 }
 

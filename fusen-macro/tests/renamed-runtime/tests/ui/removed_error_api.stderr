@@ -1,0 +1,88 @@
+error[E0599]: no associated function or constant named `new` found for struct `fusen_rs::Error` in the current scope
+ --> tests/ui/removed_error_api.rs:4:20
+  |
+4 |     let _ = Error::new(ErrorCategory::Internal, "old_error", "removed");
+  |                    ^^^ associated function or constant not found in `fusen_rs::Error`
+  |
+note: if you're trying to build a new `fusen_rs::Error` consider using one of the following associated functions:
+      fusen_rs::Error::application
+      fusen_rs::Error::application_status
+      fusen_rs::Error::local
+ --> $WORKSPACE/fusen/src/error/invocation.rs
+  |
+  | /     pub fn application(
+  | |         category: ErrorCategory,
+  | |         code: impl Into<String>,
+  | |         message: impl Into<String>,
+  | |     ) -> Result<Self, ErrorConstructionError> {
+  | |_____________________________________________^
+...
+  | /     pub fn application_status(
+  | |         status: StatusCode,
+  | |         code: impl Into<String>,
+  | |         message: impl Into<String>,
+  | |     ) -> Result<Self, ErrorConstructionError> {
+  | |_____________________________________________^
+...
+  | /     pub fn local(
+  | |         category: ErrorCategory,
+  | |         code: impl Into<String>,
+  | |         message: impl Into<String>,
+  | |     ) -> Result<Self, ErrorConstructionError> {
+  | |_____________________________________________^
+
+error[E0308]: mismatched types
+ --> tests/ui/removed_error_api.rs:5:32
+  |
+5 |     let _ = Error::application(status, "old_application", "removed");
+  |             ------------------ ^^^^^^ expected `ErrorCategory`, found `StatusCode`
+  |             |
+  |             arguments to this function are incorrect
+  |
+note: associated function defined here
+ --> $WORKSPACE/fusen/src/error/invocation.rs
+  |
+  |     pub fn application(
+  |            ^^^^^^^^^^^
+
+error[E0599]: no variant, associated function, or constant named `Application` found for enum `ErrorCategory` in the current scope
+ --> tests/ui/removed_error_api.rs:6:28
+  |
+6 |     let _ = ErrorCategory::Application;
+  |                            ^^^^^^^^^^^ variant, associated function, or constant not found in `ErrorCategory`
+
+error[E0599]: no variant, associated function, or constant named `Application` found for enum `ErrorOrigin` in the current scope
+ --> tests/ui/removed_error_api.rs:7:26
+  |
+7 |     let _ = ErrorOrigin::Application;
+  |                          ^^^^^^^^^^^ variant, associated function, or constant not found in `ErrorOrigin`
+
+error[E0599]: no method named `status` found for enum `ErrorCategory` in the current scope
+ --> tests/ui/removed_error_api.rs:8:37
+  |
+8 |     let _ = ErrorCategory::Internal.status();
+  |                                     ^^^^^^ method not found in `ErrorCategory`
+
+error[E0599]: no method named `message_ref` found for reference `&ClientError` in the current scope
+  --> tests/ui/removed_error_api.rs:12:20
+   |
+12 |     let _ = client.message_ref();
+   |                    ^^^^^^^^^^^
+   |
+help: there is a method `message` with a similar name
+   |
+12 -     let _ = client.message_ref();
+12 +     let _ = client.message();
+   |
+
+error[E0599]: no method named `message_ref` found for reference `&ServerError` in the current scope
+  --> tests/ui/removed_error_api.rs:13:20
+   |
+13 |     let _ = server.message_ref();
+   |                    ^^^^^^^^^^^
+   |
+help: there is a method `message` with a similar name
+   |
+13 -     let _ = server.message_ref();
+13 +     let _ = server.message();
+   |

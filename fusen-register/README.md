@@ -4,6 +4,11 @@
 discovery SPI used by `fusen-rs`. Provider implementations own their remote
 workers while callers interact through prepared lifecycle handles.
 
+The SPI is independent from HTTP bindings and transport versions. A registration
+publishes one service endpoint and its capabilities, while a subscription watches
+one `ServiceSelector`; registry providers decide how that identity maps to their
+native service names, groups, and metadata.
+
 The lifecycle is explicit:
 
 ```text

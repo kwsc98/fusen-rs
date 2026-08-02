@@ -6,9 +6,9 @@ use fusen_register::{
     provider,
 };
 use fusen_rs::{
-    ClientAdmissionConfig, ClientConfig, ClientRuntime, HttpServerConfig, Middleware,
-    MiddlewareFuture, Next, RpcCategory, RpcContext, RpcError, RpcOrigin, RpcResponse, Server,
-    ServerConfig, ServerRequestConfig, ServerState, contract::ProtocolSet, interface,
+    ClientAdmissionConfig, ClientConfig, ClientRuntime, Context, Error, ErrorCategory, ErrorOrigin,
+    HttpServerConfig, Interceptor, InterceptorFuture, Next, Response, RetryConfig, Server,
+    ServerConfig, ServerRequestConfig, ServerState, interface,
 };
 use serde::Deserialize;
 use std::{
@@ -31,16 +31,16 @@ const SERVER_ADMISSION_LIMIT: usize = 1024;
 #[interface(name = "server-resource-e2e")]
 trait ResourceService {
     #[fusen_rs::method(method = "POST", path = "/resources/echo")]
-    async fn echo(&self, #[param(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
+    async fn echo(&self, #[param(body)] value: String) -> Result<Response<String>, Error>;
 
     #[fusen_rs::method(method = "POST", path = "/resources/panic")]
     async fn panic_after_decode(
         &self,
         #[param(body)] value: String,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    ) -> Result<Response<String>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/resources/hold/{value}")]
-    async fn hold(&self, value: String) -> Result<RpcResponse<String>, RpcError>;
+    async fn hold(&self, value: String) -> Result<Response<String>, Error>;
 }
 
 struct ResourceServiceImpl {
@@ -48,15 +48,15 @@ struct ResourceServiceImpl {
 }
 
 impl ResourceService for ResourceServiceImpl {
-    async fn echo(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(value))
+    async fn echo(&self, value: String) -> Result<Response<String>, Error> {
+        Ok(Response::new(value))
     }
 
-    async fn panic_after_decode(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
+    async fn panic_after_decode(&self, value: String) -> Result<Response<String>, Error> {
         panic!("private panic after decoding {value}")
     }
 
-    async fn hold(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
+    async fn hold(&self, value: String) -> Result<Response<String>, Error> {
         if let Some(saturation) = &self.saturation {
             saturation.entered.fetch_add(1, Ordering::AcqRel);
             saturation.changed.notify_waiters();
@@ -67,7 +67,7 @@ impl ResourceService for ResourceServiceImpl {
                 .await
                 .expect("test release semaphore remains open");
         }
-        Ok(RpcResponse::new(value))
+        Ok(Response::new(value))
     }
 }
 
@@ -109,12 +109,12 @@ impl Saturation {
     }
 }
 
-struct PanicOnceMiddleware(AtomicUsize);
+struct PanicOnceInterceptor(AtomicUsize);
 
-impl Middleware for PanicOnceMiddleware {
-    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for PanicOnceInterceptor {
+    fn intercept<'a>(&'a self, context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
         if self.0.fetch_add(1, Ordering::AcqRel) == 0 {
-            panic!("private synchronous middleware panic");
+            panic!("private synchronous interceptor panic");
         }
         Box::pin(async move { next.run(context).await })
     }
@@ -151,6 +151,23 @@ async fn head_rejections_return_without_receiving_the_declared_body() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn early_route_rejection_echoes_a_valid_request_id() {
+    let server = start_resource_server(ServerConfig::default()).await;
+    let response = exchange(
+        server.local_addr(),
+        request_head("POST", "/disabled/interface", 0, "early-rejection-id", None),
+        &[],
+    )
+    .await;
+
+    assert_problem(&response, 404, "route_not_found");
+    assert_eq!(response.request_id.as_deref(), Some("early-rejection-id"));
+    assert_eq!(problem(&response).request_id, "early-rejection-id");
+
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn not_ready_returns_without_receiving_the_declared_body() {
     let (endpoint_sender, endpoint_receiver) = oneshot::channel();
     let activation_gate = Arc::new(Semaphore::new(0));
@@ -159,7 +176,6 @@ async fn not_ready_returns_without_receiving_the_declared_body() {
         activation_gate: activation_gate.clone(),
     };
     let config = ServerConfig::builder()
-        .protocols(ProtocolSet::SPRING_CLOUD_V1)
         .request(
             ServerRequestConfig::builder()
                 .max_request_body_bytes(16)
@@ -231,6 +247,7 @@ async fn the_1025th_request_is_rejected_while_1024_are_in_flight() {
         .unwrap();
     let client_config = ClientConfig::builder()
         .request_timeout(Duration::from_secs(30))
+        .retry(RetryConfig::builder().max_attempts(1).build().unwrap())
         .admission(
             ClientAdmissionConfig::builder()
                 .max_in_flight(2048)
@@ -262,8 +279,8 @@ async fn the_1025th_request_is_rejected_while_1024_are_in_flight() {
         .await
         .expect("fail-fast admission must not wait for an existing request")
         .expect_err("the 1025th request must be rejected");
-    assert_eq!(rejected.category(), RpcCategory::ResourceExhausted);
-    assert_eq!(rejected.origin(), RpcOrigin::Remote);
+    assert_eq!(rejected.category(), ErrorCategory::ResourceExhausted);
+    assert_eq!(rejected.origin(), ErrorOrigin::Remote);
     assert_eq!(rejected.code().as_str(), "overloaded");
     assert_eq!(rejected.attempts(), 1);
 
@@ -367,12 +384,7 @@ async fn request_byte_budget_is_restored_after_handler_panic() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn graceful_shutdown_drains_an_inflight_http1_response() {
     let saturation = Saturation::new();
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .unwrap();
     let server = Server::builder("127.0.0.1:0")
-        .config(config)
         .interface(ResourceServiceServer::new(ResourceServiceImpl {
             saturation: Some(saturation.clone()),
         }))
@@ -412,14 +424,9 @@ async fn graceful_shutdown_drains_an_inflight_http1_response() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn synchronous_middleware_panic_does_not_poison_an_http1_connection() {
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .unwrap();
+async fn synchronous_interceptor_panic_does_not_poison_an_http1_connection() {
     let server = Server::builder("127.0.0.1:0")
-        .config(config)
-        .middleware(PanicOnceMiddleware(AtomicUsize::new(0)))
+        .interceptor(PanicOnceInterceptor(AtomicUsize::new(0)))
         .interface(ResourceServiceServer::new(ResourceServiceImpl {
             saturation: None,
         }))
@@ -447,7 +454,7 @@ async fn synchronous_middleware_panic_does_not_poison_an_http1_connection() {
         .unwrap();
     stream.write_all(&first_body).await.unwrap();
     let failed = read_response(&mut stream).await;
-    assert_problem(&failed, 500, "middleware_panic");
+    assert_problem(&failed, 500, "interceptor_panic");
     assert!(!String::from_utf8_lossy(&failed.body).contains("private synchronous"));
 
     let second_body = serde_json::to_vec("healthy").unwrap();
@@ -532,6 +539,7 @@ impl Registry for StartupGateRegistry {
 
 struct RawResponse {
     status: u16,
+    request_id: Option<String>,
     body: Vec<u8>,
 }
 
@@ -550,7 +558,6 @@ async fn start_resource_server(config: ServerConfig) -> fusen_rs::RunningServer 
 
 fn body_limited_config(timeout: Duration) -> ServerConfig {
     ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
         .request(
             ServerRequestConfig::builder()
                 .timeout(timeout)
@@ -706,6 +713,11 @@ async fn read_response_inner(stream: &mut TcpStream) -> io::Result<RawResponse> 
                     .then(|| value.trim().parse::<usize>().unwrap())
             })
             .expect("bounded server responses carry Content-Length");
+        let request_id = head.lines().skip(1).find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("x-request-id")
+                .then(|| value.trim().to_owned())
+        });
         while received.len() < body_start + content_length {
             let read = stream.read(&mut buffer).await?;
             assert!(read > 0, "HTTP response ended before its body completed");
@@ -713,6 +725,7 @@ async fn read_response_inner(stream: &mut TcpStream) -> io::Result<RawResponse> 
         }
         return Ok(RawResponse {
             status,
+            request_id,
             body: received[body_start..body_start + content_length].to_vec(),
         });
     }
@@ -780,6 +793,7 @@ fn assert_problem(response: &RawResponse, status: u16, code: &str) {
 struct WireProblem {
     status: u16,
     code: String,
+    request_id: String,
     retryable: bool,
 }
 

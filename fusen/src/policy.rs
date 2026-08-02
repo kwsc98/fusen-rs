@@ -1,7 +1,7 @@
 pub use crate::{
-    context::RpcContext,
+    context::Context,
+    error::{Error, ErrorCategory},
     resilience::{FailureClass, RetryDecision, RetryDecisionContext, RetryPolicy},
-    rpc::{RpcCategory, RpcError},
 };
 pub use fusen_contract::ServiceInstance;
 use rand::RngExt;
@@ -33,17 +33,17 @@ impl Deref for InstanceSnapshot {
 
 /// Input to one instance-routing decision.
 pub struct RouteRequest<'a> {
-    context: &'a RpcContext,
+    context: &'a Context,
     instances: InstanceSnapshot,
 }
 
 impl<'a> RouteRequest<'a> {
-    pub(crate) fn new(context: &'a RpcContext, instances: InstanceSnapshot) -> Self {
+    pub(crate) fn new(context: &'a Context, instances: InstanceSnapshot) -> Self {
         Self { context, instances }
     }
 
-    /// Returns attempt-scoped RPC metadata.
-    pub const fn context(&self) -> &RpcContext {
+    /// Returns attempt-scoped service invocation metadata.
+    pub const fn context(&self) -> &Context {
         self.context
     }
 
@@ -61,14 +61,14 @@ impl<'a> RouteRequest<'a> {
 /// Filters or reorders a discovery snapshot before endpoint selection.
 pub trait InstanceRouter: Send + Sync + 'static {
     /// Returns the eligible snapshot for this attempt.
-    fn route(&self, request: RouteRequest<'_>) -> Result<InstanceSnapshot, RpcError>;
+    fn route(&self, request: RouteRequest<'_>) -> Result<InstanceSnapshot, Error>;
 }
 
 impl<T> InstanceRouter for Arc<T>
 where
     T: InstanceRouter + ?Sized,
 {
-    fn route(&self, request: RouteRequest<'_>) -> Result<InstanceSnapshot, RpcError> {
+    fn route(&self, request: RouteRequest<'_>) -> Result<InstanceSnapshot, Error> {
         (**self).route(request)
     }
 }
@@ -76,19 +76,14 @@ where
 /// Selects one endpoint index from a routed snapshot.
 pub trait LoadBalancer: Send + Sync + 'static {
     /// Returns a valid index into `instances`.
-    fn select(&self, context: &RpcContext, instances: &InstanceSnapshot)
-    -> Result<usize, RpcError>;
+    fn select(&self, context: &Context, instances: &InstanceSnapshot) -> Result<usize, Error>;
 }
 
 impl<T> LoadBalancer for Arc<T>
 where
     T: LoadBalancer + ?Sized,
 {
-    fn select(
-        &self,
-        context: &RpcContext,
-        instances: &InstanceSnapshot,
-    ) -> Result<usize, RpcError> {
+    fn select(&self, context: &Context, instances: &InstanceSnapshot) -> Result<usize, Error> {
         (**self).select(context, instances)
     }
 }
@@ -98,11 +93,7 @@ where
 pub struct WeightedRandom;
 
 impl LoadBalancer for WeightedRandom {
-    fn select(
-        &self,
-        _context: &RpcContext,
-        instances: &InstanceSnapshot,
-    ) -> Result<usize, RpcError> {
+    fn select(&self, _context: &Context, instances: &InstanceSnapshot) -> Result<usize, Error> {
         if instances.is_empty() {
             return Err(no_instances());
         }
@@ -124,9 +115,9 @@ impl LoadBalancer for WeightedRandom {
     }
 }
 
-pub(crate) fn no_instances() -> RpcError {
-    RpcError::framework(
-        RpcCategory::Unavailable,
+pub(crate) fn no_instances() -> Error {
+    Error::framework(
+        ErrorCategory::Unavailable,
         "no_instances",
         "no eligible service instances",
     )

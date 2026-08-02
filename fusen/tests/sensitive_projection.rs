@@ -57,7 +57,7 @@ trait SensitiveMetadataContract {
         #[param(path)]
         #[sensitive(kind = "identifier")]
         tenant_id: String,
-    ) -> Result<fusen_rs::RpcResponse<LoginResponse>, fusen_rs::RpcError>;
+    ) -> Result<fusen_rs::Response<LoginResponse>, fusen_rs::Error>;
 }
 
 #[test]

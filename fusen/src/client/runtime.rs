@@ -5,15 +5,17 @@ use super::{
     transport::HttpTransport,
 };
 use crate::{
-    ClientError, ClientErrorKind, Middleware, RetryPolicy,
-    middleware::erase_middleware,
+    ClientError, ClientErrorKind, ErrorDecoder, Interceptor, RequestEncoder, ResponseDecoder,
+    RetryPolicy,
+    interceptor::erase_interceptor,
     resilience::{
         breaker::{BreakerConfig, BreakerPhase, CircuitBreaker},
         retry::{RetryBudget, StandardRetryPolicy},
     },
     runtime::{admission::AdmissionGate, budget::ByteBudget, metrics::SafeMetrics},
+    wire::JsonCodec,
 };
-use fusen_contract::{ServiceDescriptor, WireProtocol};
+use fusen_contract::{HttpBindingId, ServiceDescriptor};
 use fusen_observability::{
     CircuitState, CircuitStateChangedEvent, MetricEvent, MetricOutcome, MetricsRecorder,
     ShutdownFinishedEvent,
@@ -46,7 +48,7 @@ pub enum ClientState {
     Closed,
 }
 
-/// Shared client runtime for discovery, middleware, pools, and resilience state.
+/// Shared client runtime for discovery, interceptor, pools, and resilience state.
 #[derive(Clone)]
 pub struct ClientRuntime {
     pub(crate) inner: Arc<ClientRuntimeInner>,
@@ -56,10 +58,11 @@ pub struct ClientRuntime {
 pub struct ClientRuntimeBuilder {
     config: ClientConfig,
     registry: Option<Arc<dyn Registry>>,
-    middleware: Vec<Arc<dyn Middleware>>,
-    attempt_middleware: Vec<Arc<dyn Middleware>>,
+    interceptor: Vec<Arc<dyn Interceptor>>,
+    attempt_interceptor: Vec<Arc<dyn Interceptor>>,
     metrics: Option<Arc<dyn MetricsRecorder>>,
     retry_policy: Arc<dyn RetryPolicy>,
+    http_bindings: Vec<(HttpBindingId, Arc<ClientHttpBinding>)>,
 }
 
 impl ClientRuntime {
@@ -68,10 +71,11 @@ impl ClientRuntime {
         ClientRuntimeBuilder {
             config: ClientConfig::default(),
             registry: None,
-            middleware: Vec::new(),
-            attempt_middleware: Vec::new(),
+            interceptor: Vec::new(),
+            attempt_interceptor: Vec::new(),
             metrics: None,
             retry_policy: Arc::new(StandardRetryPolicy),
+            http_bindings: Vec::new(),
         }
     }
 
@@ -119,15 +123,16 @@ impl ClientRuntimeBuilder {
         self
     }
 
-    /// Appends global logical-invocation middleware.
-    pub fn middleware(mut self, middleware: impl Middleware) -> Self {
-        self.middleware.push(erase_middleware(middleware));
+    /// Appends global logical-invocation interceptor.
+    pub fn interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.interceptor.push(erase_interceptor(interceptor));
         self
     }
 
-    /// Appends global middleware around every physical transport attempt.
-    pub fn attempt_middleware(mut self, middleware: impl Middleware) -> Self {
-        self.attempt_middleware.push(erase_middleware(middleware));
+    /// Appends global interceptor around every physical transport attempt.
+    pub fn attempt_interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.attempt_interceptor
+            .push(erase_interceptor(interceptor));
         self
     }
 
@@ -140,6 +145,25 @@ impl ClientRuntimeBuilder {
     /// Replaces the retry decision extension while retaining runtime hard limits.
     pub fn retry_policy(mut self, policy: impl RetryPolicy) -> Self {
         self.retry_policy = Arc::new(policy);
+        self
+    }
+
+    /// Registers a complete client-side HTTP binding under one stable identifier.
+    pub fn http_binding(
+        mut self,
+        id: HttpBindingId,
+        request_encoder: impl RequestEncoder,
+        response_decoder: impl ResponseDecoder,
+        error_decoder: impl ErrorDecoder,
+    ) -> Self {
+        self.http_bindings.push((
+            id,
+            Arc::new(ClientHttpBinding {
+                request_encoder: Arc::new(request_encoder),
+                response_decoder: Arc::new(response_decoder),
+                error_decoder: Arc::new(error_decoder),
+            }),
+        ));
         self
     }
 
@@ -159,6 +183,21 @@ impl ClientRuntimeBuilder {
                 error,
             )
         })?;
+        let mut http_bindings = HashMap::new();
+        let json = Arc::new(ClientHttpBinding {
+            request_encoder: Arc::new(JsonCodec),
+            response_decoder: Arc::new(JsonCodec),
+            error_decoder: Arc::new(JsonCodec),
+        });
+        http_bindings.insert(HttpBindingId::default(), json);
+        for (id, binding) in self.http_bindings {
+            if http_bindings.insert(id.clone(), binding).is_some() {
+                return Err(ClientError::from_message(
+                    ClientErrorKind::Build,
+                    format!("duplicate or reserved HTTP binding {id}"),
+                ));
+            }
+        }
         let config = Arc::new(self.config);
         let admission = AdmissionGate::new(config.admission().max_in_flight());
         let queue_slots = (config.admission().queue().capacity() > 0)
@@ -194,10 +233,11 @@ impl ClientRuntimeBuilder {
         let (completion_sender, completion) = watch::channel(None);
         let inner = Arc::new(ClientRuntimeInner {
             config: config.clone(),
-            middleware: Arc::from(self.middleware),
-            attempt_middleware: Arc::from(self.attempt_middleware),
+            interceptor: Arc::from(self.interceptor),
+            attempt_interceptor: Arc::from(self.attempt_interceptor),
             metrics: metrics.clone(),
             retry_policy: self.retry_policy,
+            http_bindings,
             admission: admission.clone(),
             queue_slots,
             request_budget,
@@ -230,10 +270,11 @@ impl ClientRuntimeBuilder {
 
 pub(crate) struct ClientRuntimeInner {
     pub config: Arc<ClientConfig>,
-    pub middleware: Arc<[Arc<dyn Middleware>]>,
-    pub attempt_middleware: Arc<[Arc<dyn Middleware>]>,
+    pub interceptor: Arc<[Arc<dyn Interceptor>]>,
+    pub attempt_interceptor: Arc<[Arc<dyn Interceptor>]>,
     pub metrics: SafeMetrics,
     pub retry_policy: Arc<dyn RetryPolicy>,
+    pub http_bindings: HashMap<HttpBindingId, Arc<ClientHttpBinding>>,
     pub admission: Arc<AdmissionGate>,
     pub queue_slots: Option<Arc<Semaphore>>,
     pub request_budget: Arc<ByteBudget>,
@@ -250,6 +291,12 @@ pub(crate) struct ClientRuntimeInner {
     completion: watch::Receiver<Option<Result<(), ClientError>>>,
 }
 
+pub(crate) struct ClientHttpBinding {
+    pub request_encoder: Arc<dyn RequestEncoder>,
+    pub response_decoder: Arc<dyn ResponseDecoder>,
+    pub error_decoder: Arc<dyn ErrorDecoder>,
+}
+
 impl ClientRuntimeInner {
     pub(crate) fn transport(&self) -> Result<HttpTransport, ClientError> {
         self.transport
@@ -257,22 +304,27 @@ impl ClientRuntimeInner {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
             .ok_or_else(|| {
-                ClientError::message(ClientErrorKind::Closed, "client connection pool is closed")
+                ClientError::from_message(
+                    ClientErrorKind::Closed,
+                    "client connection pool is closed",
+                )
             })
     }
 
     pub(crate) fn service_breaker(
         &self,
         service: &'static ServiceDescriptor,
+        binding_id: &HttpBindingId,
     ) -> Arc<CircuitBreaker> {
         let mut breakers = self
             .service_breakers
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         breakers
-            .entry(service.identity().to_owned())
+            .entry(binding_key(service, binding_id))
             .or_insert_with(|| {
                 let metrics = self.metrics.clone();
+                let binding = binding_id.as_str().to_owned();
                 let service_id = service.selector().service_id().to_owned();
                 CircuitBreaker::observed(
                     breaker_config(
@@ -283,6 +335,7 @@ impl ClientRuntimeInner {
                         metrics.record(&MetricEvent::CircuitStateChanged(
                             CircuitStateChangedEvent::new(
                                 "service",
+                                &binding,
                                 &service_id,
                                 metric_circuit_state(phase),
                             ),
@@ -296,21 +349,23 @@ impl ClientRuntimeInner {
     pub(crate) fn endpoint_breaker(
         &self,
         service: &'static ServiceDescriptor,
-        protocol: WireProtocol,
+        binding_id: &HttpBindingId,
         source: EndpointBreakerSource,
         endpoint: &str,
     ) -> Arc<CircuitBreaker> {
         let metrics = self.metrics.clone();
+        let binding = binding_id.as_str().to_owned();
         let service_id = service.selector().service_id().to_owned();
         self.endpoint_breakers.get_or_insert_observed(
             service.identity(),
-            protocol,
+            binding_id,
             source,
             endpoint,
             Arc::new(move |phase| {
                 metrics.record(&MetricEvent::CircuitStateChanged(
                     CircuitStateChangedEvent::new(
                         "endpoint",
+                        &binding,
                         &service_id,
                         metric_circuit_state(phase),
                     ),
@@ -319,13 +374,17 @@ impl ClientRuntimeInner {
         )
     }
 
-    pub(crate) fn retry_budget(&self, service: &'static ServiceDescriptor) -> Arc<RetryBudget> {
+    pub(crate) fn retry_budget(
+        &self,
+        service: &'static ServiceDescriptor,
+        binding_id: &HttpBindingId,
+    ) -> Arc<RetryBudget> {
         let mut budgets = self
             .retry_budgets
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         budgets
-            .entry(service.identity().to_owned())
+            .entry(binding_key(service, binding_id))
             .or_insert_with(|| {
                 Arc::new(RetryBudget::new(
                     self.config.retry().budget_capacity(),
@@ -355,6 +414,10 @@ impl ClientRuntimeInner {
             })
             .clone()
     }
+}
+
+fn binding_key(service: &ServiceDescriptor, binding_id: &HttpBindingId) -> String {
+    format!("{}\0{}", service.identity(), binding_id.as_str())
 }
 
 const fn metric_circuit_state(phase: BreakerPhase) -> CircuitState {
@@ -433,7 +496,7 @@ async fn client_shutdown_coordinator(coordinator: ClientShutdown) {
         Err(_) => {
             coordinator.force_cancel.cancel();
             close_transport(&coordinator.transport);
-            Err(ClientError::message(
+            Err(ClientError::from_message(
                 ClientErrorKind::Timeout,
                 "client graceful shutdown deadline elapsed",
             ))
@@ -469,7 +532,7 @@ fn close_transport(transport: &Mutex<Option<HttpTransport>>) {
 mod tests {
     use super::*;
     use fusen_contract::{
-        InstanceId, ServiceInstance, ServiceSelector, ServiceWeight, WireProtocol,
+        EndpointCapabilities, InstanceId, ServiceInstance, ServiceSelector, ServiceWeight,
     };
     use fusen_register::{
         RegistrationHandle, RegistrationRequest, SubscriptionHandle, SubscriptionRequest,
@@ -510,6 +573,7 @@ mod tests {
                     publisher.publish_ready(vec![ServiceInstance::new(
                         InstanceId::new("shutdown-test").unwrap(),
                         "http://127.0.0.1:8080".parse().unwrap(),
+                        EndpointCapabilities::default(),
                         ServiceWeight::default(),
                     )])?;
                     Ok(())
@@ -561,10 +625,7 @@ mod tests {
             .subscriptions
             .as_ref()
             .unwrap()
-            .acquire(
-                ServiceSelector::new("shutdown-test", None, None).unwrap(),
-                WireProtocol::FusenV1,
-            )
+            .acquire(ServiceSelector::new("shutdown-test", None, None).unwrap())
             .await
             .unwrap();
         let admitted = runtime.inner.admission.try_enter().unwrap();

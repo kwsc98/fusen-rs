@@ -323,6 +323,7 @@ version = "0.9.0"
 dependencies = [
  "fusen-procedural-macro",
  "http",
+ "mime",
  "serde",
  "thiserror",
  "url",
@@ -363,6 +364,7 @@ dependencies = [
 name = "fusen-procedural-macro"
 version = "0.9.0"
 dependencies = [
+ "mime",
  "proc-macro-crate",
  "proc-macro2",
  "quote",

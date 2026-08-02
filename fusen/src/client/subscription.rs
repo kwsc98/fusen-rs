@@ -3,7 +3,7 @@ use crate::{
     ClientError, ClientErrorKind, resilience::retry::full_jitter_backoff,
     runtime::metrics::SafeMetrics,
 };
-use fusen_contract::{ServiceSelector, WireProtocol};
+use fusen_contract::ServiceSelector;
 use fusen_observability::{DirectoryMetricState, DirectoryStateChangedEvent, MetricEvent};
 use fusen_register::{
     Registry, SubscriptionHandle, SubscriptionRequest,
@@ -26,7 +26,6 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct SubscriptionKey {
     selector: ServiceSelector,
-    protocol: WireProtocol,
 }
 
 #[derive(Clone)]
@@ -78,12 +77,11 @@ impl SubscriptionManager {
     pub(crate) async fn acquire(
         self: &Arc<Self>,
         selector: ServiceSelector,
-        protocol: WireProtocol,
     ) -> Result<Directory, ClientError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(closed());
         }
-        let key = SubscriptionKey { selector, protocol };
+        let key = SubscriptionKey { selector };
         let slot = {
             let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
             if self.closed.load(Ordering::Acquire) {
@@ -93,7 +91,7 @@ impl SubscriptionManager {
                 slot.clone()
             } else {
                 if slots.len() >= self.config.max_subscriptions() {
-                    return Err(ClientError::message(
+                    return Err(ClientError::from_message(
                         ClientErrorKind::Discovery,
                         "runtime subscription limit reached",
                     ));
@@ -178,8 +176,7 @@ impl SubscriptionManager {
             (keys, publishers)
         };
         for key in keys {
-            self.endpoint_breakers
-                .remove_discovery(&key.selector, key.protocol);
+            self.endpoint_breakers.remove_discovery(&key.selector);
         }
         drop(publishers);
     }
@@ -217,13 +214,13 @@ async fn wait_until_ready(slot: Arc<Slot>, timeout: Duration) -> Result<Director
                     ));
                 }
                 SlotState::Quarantined => {
-                    return Err(ClientError::message(
+                    return Err(ClientError::from_message(
                         ClientErrorKind::Discovery,
                         "subscription is quarantined until provider cleanup completes",
                     ));
                 }
                 SlotState::Unavailable => {
-                    return Err(ClientError::message(
+                    return Err(ClientError::from_message(
                         ClientErrorKind::Discovery,
                         "service directory is unavailable",
                     ));
@@ -236,7 +233,7 @@ async fn wait_until_ready(slot: Arc<Slot>, timeout: Duration) -> Result<Director
     })
     .await
     .map_err(|_| {
-        ClientError::message(
+        ClientError::from_message(
             ClientErrorKind::Timeout,
             "initial discovery did not become Ready before its deadline",
         )
@@ -250,7 +247,6 @@ struct DirectoryForwarder<'a> {
     state: &'a watch::Sender<SlotState>,
     metrics: &'a SafeMetrics,
     selector: &'a ServiceSelector,
-    protocol: WireProtocol,
     endpoint_breakers: &'a EndpointBreakers,
 }
 
@@ -275,7 +271,6 @@ async fn run_subscription(
         state: &state,
         metrics: &metrics,
         selector: &key.selector,
-        protocol: key.protocol,
         endpoint_breakers: &endpoint_breakers,
     };
     let mut reconnect_attempt = 0u8;
@@ -286,8 +281,7 @@ async fn run_subscription(
             break;
         }
         let prepared = catch_unwind(AssertUnwindSafe(|| {
-            registry
-                .prepare_subscription(SubscriptionRequest::new(key.selector.clone(), key.protocol))
+            registry.prepare_subscription(SubscriptionRequest::new(key.selector.clone()))
         }));
         let handle = match prepared {
             Ok(Ok(handle)) => handle,
@@ -471,7 +465,7 @@ async fn run_subscription(
     }
     state.send_replace(terminal_state);
     if !shutdown.is_cancelled() {
-        endpoint_breakers.remove_discovery(&key.selector, key.protocol);
+        endpoint_breakers.remove_discovery(&key.selector);
         retained_publisher
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -490,11 +484,9 @@ fn update_snapshot(
 ) {
     match snapshot.state() {
         DirectoryState::Ready => {
-            forwarder.endpoint_breakers.replace_discovery(
-                forwarder.selector,
-                forwarder.protocol,
-                snapshot.instances(),
-            );
+            forwarder
+                .endpoint_breakers
+                .replace_discovery(forwarder.selector, snapshot.instances());
             let _ = forwarder
                 .publisher
                 .publish_snapshot(DirectoryState::Ready, snapshot.instances().to_vec());
@@ -512,11 +504,9 @@ fn update_snapshot(
                 DirectoryState::Ready | DirectoryState::Stale
             ) =>
         {
-            forwarder.endpoint_breakers.replace_discovery(
-                forwarder.selector,
-                forwarder.protocol,
-                snapshot.instances(),
-            );
+            forwarder
+                .endpoint_breakers
+                .replace_discovery(forwarder.selector, snapshot.instances());
             let _ = forwarder
                 .publisher
                 .publish_snapshot(DirectoryState::Stale, snapshot.instances().to_vec());
@@ -531,11 +521,9 @@ fn update_snapshot(
             );
         }
         DirectoryState::Stale | DirectoryState::Unavailable => {
-            forwarder.endpoint_breakers.replace_discovery(
-                forwarder.selector,
-                forwarder.protocol,
-                snapshot.instances(),
-            );
+            forwarder
+                .endpoint_breakers
+                .replace_discovery(forwarder.selector, snapshot.instances());
             let _ = forwarder
                 .publisher
                 .publish_snapshot(DirectoryState::Unavailable, snapshot.instances().to_vec());
@@ -726,7 +714,7 @@ async fn reconnect_delay(
 }
 
 fn closed() -> ClientError {
-    ClientError::message(
+    ClientError::from_message(
         ClientErrorKind::Closed,
         "client runtime is draining or closed",
     )
@@ -736,7 +724,7 @@ fn closed() -> ClientError {
 mod tests {
     use super::*;
     use crate::resilience::breaker::{BreakerConfig, DEFAULT_ENDPOINT_IDLE_EVICTION};
-    use fusen_contract::{InstanceId, ServiceInstance, ServiceWeight};
+    use fusen_contract::{EndpointCapabilities, InstanceId, ServiceInstance, ServiceWeight};
     use fusen_register::{
         RegistrationHandle, RegistrationRequest, SubscriptionRequest,
         error::{RegistryErrorKind, RegistryOperation},
@@ -868,6 +856,7 @@ mod tests {
         ServiceInstance::new(
             InstanceId::new("instance-1").unwrap(),
             "http://127.0.0.1:8080".parse().unwrap(),
+            EndpointCapabilities::default(),
             ServiceWeight::default(),
         )
     }
@@ -943,10 +932,7 @@ mod tests {
             SafeMetrics::new(None),
             endpoint_breakers(),
         );
-        let mut discovered = manager
-            .acquire(selector(), WireProtocol::FusenV1)
-            .await
-            .unwrap();
+        let mut discovered = manager.acquire(selector()).await.unwrap();
         assert_eq!(discovered.snapshot().state(), DirectoryState::Ready);
         assert_eq!(discovered.snapshot().instances().len(), 1);
 
@@ -979,10 +965,7 @@ mod tests {
             SafeMetrics::new(None),
             endpoint_breakers(),
         );
-        let discovered = manager
-            .acquire(selector(), WireProtocol::FusenV1)
-            .await
-            .unwrap();
+        let discovered = manager.acquire(selector()).await.unwrap();
 
         manager.begin_shutdown();
         manager.closed().await.unwrap();
@@ -1003,10 +986,7 @@ mod tests {
             SafeMetrics::new(None),
             endpoint_breakers(),
         );
-        let mut discovered = manager
-            .acquire(selector(), WireProtocol::FusenV1)
-            .await
-            .unwrap();
+        let mut discovered = manager.acquire(selector()).await.unwrap();
         let ready_revision = discovered.snapshot().revision();
 
         registry.disconnect();
@@ -1014,22 +994,14 @@ mod tests {
         registry.close_started.notified().await;
         assert!(stale.revision() > ready_revision);
         assert_eq!(stale.instances().len(), 1);
-        assert!(
-            manager
-                .acquire(selector(), WireProtocol::FusenV1)
-                .await
-                .is_ok()
-        );
+        assert!(manager.acquire(selector()).await.is_ok());
 
         tokio::time::advance(Duration::from_secs(10)).await;
         let unavailable =
             wait_for_directory_state(&mut discovered, DirectoryState::Unavailable).await;
         assert!(unavailable.revision() > stale.revision());
         assert_eq!(unavailable.instances().len(), 1);
-        let error = manager
-            .acquire(selector(), WireProtocol::FusenV1)
-            .await
-            .unwrap_err();
+        let error = manager.acquire(selector()).await.unwrap_err();
         assert_eq!(error.kind(), ClientErrorKind::Discovery);
 
         close_release.send(()).unwrap();
@@ -1072,7 +1044,6 @@ mod tests {
             slots.insert(
                 SubscriptionKey {
                     selector: named_selector("a-failed"),
-                    protocol: WireProtocol::FusenV1,
                 },
                 Arc::new(Slot {
                     directory: failed_directory,
@@ -1084,7 +1055,6 @@ mod tests {
             slots.insert(
                 SubscriptionKey {
                     selector: named_selector("b-pending"),
-                    protocol: WireProtocol::FusenV1,
                 },
                 Arc::new(Slot {
                     directory: pending_directory,
@@ -1123,7 +1093,7 @@ mod tests {
         );
         let acquiring = tokio::spawn({
             let manager = manager.clone();
-            async move { manager.acquire(selector(), WireProtocol::FusenV1).await }
+            async move { manager.acquire(selector()).await }
         });
         registry.activation_started.notified().await;
 
@@ -1155,10 +1125,7 @@ mod tests {
             SafeMetrics::new(None),
             endpoint_breakers(),
         );
-        manager
-            .acquire(selector(), WireProtocol::FusenV1)
-            .await
-            .unwrap();
+        manager.acquire(selector()).await.unwrap();
         manager.begin_shutdown();
         let closing = tokio::spawn({
             let manager = manager.clone();
@@ -1190,10 +1157,7 @@ mod tests {
             SafeMetrics::new(None),
             endpoint_breakers(),
         );
-        manager
-            .acquire(selector(), WireProtocol::FusenV1)
-            .await
-            .unwrap();
+        manager.acquire(selector()).await.unwrap();
         manager.begin_shutdown();
 
         let error = manager.closed().await.unwrap_err();

@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "optional-query")]
 trait OptionalRepeatedQuery {
@@ -9,7 +9,7 @@ trait OptionalRepeatedQuery {
     async fn call(
         &self,
         #[param(query)] tags: Option<Vec<String>>,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

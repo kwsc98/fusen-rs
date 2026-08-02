@@ -14,7 +14,7 @@ use std::time::Duration;
 #[cfg(feature = "otel")]
 pub mod otel;
 
-/// The side of an observed RPC.
+/// The side of an observed service invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MetricSide {
@@ -73,7 +73,8 @@ pub enum DirectoryMetricState {
 #[non_exhaustive]
 pub struct InvocationStartedEvent<'a> {
     side: MetricSide,
-    protocol: &'a str,
+    binding: &'a str,
+    http_version: Option<&'a str>,
     service: &'a str,
     method: &'a str,
 }
@@ -82,13 +83,15 @@ impl<'a> InvocationStartedEvent<'a> {
     /// Creates an invocation-started event.
     pub const fn new(
         side: MetricSide,
-        protocol: &'a str,
+        binding: &'a str,
+        http_version: Option<&'a str>,
         service: &'a str,
         method: &'a str,
     ) -> Self {
         Self {
             side,
-            protocol,
+            binding,
+            http_version,
             service,
             method,
         }
@@ -97,9 +100,13 @@ impl<'a> InvocationStartedEvent<'a> {
     pub const fn side(&self) -> MetricSide {
         self.side
     }
-    /// Returns the wire protocol name.
-    pub const fn protocol(&self) -> &'a str {
-        self.protocol
+    /// Returns the stable HTTP binding identifier.
+    pub const fn binding(&self) -> &'a str {
+        self.binding
+    }
+    /// Returns the actual HTTP version when this event represents physical server work.
+    pub const fn http_version(&self) -> Option<&'a str> {
+        self.http_version
     }
     /// Returns the interface identifier.
     pub const fn service(&self) -> &'a str {
@@ -116,7 +123,8 @@ impl<'a> InvocationStartedEvent<'a> {
 #[non_exhaustive]
 pub struct InvocationFinishedEvent<'a> {
     side: MetricSide,
-    protocol: &'a str,
+    binding: &'a str,
+    http_version: Option<&'a str>,
     service: &'a str,
     method: &'a str,
     outcome: MetricOutcome,
@@ -131,7 +139,8 @@ impl<'a> InvocationFinishedEvent<'a> {
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
         side: MetricSide,
-        protocol: &'a str,
+        binding: &'a str,
+        http_version: Option<&'a str>,
         service: &'a str,
         method: &'a str,
         outcome: MetricOutcome,
@@ -142,7 +151,8 @@ impl<'a> InvocationFinishedEvent<'a> {
     ) -> Self {
         Self {
             side,
-            protocol,
+            binding,
+            http_version,
             service,
             method,
             outcome,
@@ -156,9 +166,13 @@ impl<'a> InvocationFinishedEvent<'a> {
     pub const fn side(&self) -> MetricSide {
         self.side
     }
-    /// Returns the wire protocol name.
-    pub const fn protocol(&self) -> &'a str {
-        self.protocol
+    /// Returns the stable HTTP binding identifier.
+    pub const fn binding(&self) -> &'a str {
+        self.binding
+    }
+    /// Returns the actual HTTP version when this event represents physical server work.
+    pub const fn http_version(&self) -> Option<&'a str> {
+        self.http_version
     }
     /// Returns the interface identifier.
     pub const fn service(&self) -> &'a str {
@@ -194,7 +208,8 @@ impl<'a> InvocationFinishedEvent<'a> {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct AttemptFinishedEvent<'a> {
-    protocol: &'a str,
+    binding: &'a str,
+    http_version: Option<&'a str>,
     service: &'a str,
     method: &'a str,
     attempt: u8,
@@ -205,8 +220,10 @@ pub struct AttemptFinishedEvent<'a> {
 
 impl<'a> AttemptFinishedEvent<'a> {
     /// Creates an attempt-finished event.
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
-        protocol: &'a str,
+        binding: &'a str,
+        http_version: Option<&'a str>,
         service: &'a str,
         method: &'a str,
         attempt: u8,
@@ -215,7 +232,8 @@ impl<'a> AttemptFinishedEvent<'a> {
         duration: Duration,
     ) -> Self {
         Self {
-            protocol,
+            binding,
+            http_version,
             service,
             method,
             attempt,
@@ -224,9 +242,13 @@ impl<'a> AttemptFinishedEvent<'a> {
             duration,
         }
     }
-    /// Returns the wire protocol name.
-    pub const fn protocol(&self) -> &'a str {
-        self.protocol
+    /// Returns the stable HTTP binding identifier.
+    pub const fn binding(&self) -> &'a str {
+        self.binding
+    }
+    /// Returns the actual HTTP version, or `None` when the attempt failed before one was known.
+    pub const fn http_version(&self) -> Option<&'a str> {
+        self.http_version
     }
     /// Returns the interface identifier.
     pub const fn service(&self) -> &'a str {
@@ -348,15 +370,22 @@ impl<'a> DirectoryStateChangedEvent<'a> {
 #[non_exhaustive]
 pub struct CircuitStateChangedEvent<'a> {
     scope: &'a str,
+    binding: &'a str,
     service: &'a str,
     state: CircuitState,
 }
 
 impl<'a> CircuitStateChangedEvent<'a> {
     /// Creates a circuit-state event.
-    pub const fn new(scope: &'a str, service: &'a str, state: CircuitState) -> Self {
+    pub const fn new(
+        scope: &'a str,
+        binding: &'a str,
+        service: &'a str,
+        state: CircuitState,
+    ) -> Self {
         Self {
             scope,
+            binding,
             service,
             state,
         }
@@ -364,6 +393,10 @@ impl<'a> CircuitStateChangedEvent<'a> {
     /// Returns `service` or `endpoint`.
     pub const fn scope(&self) -> &'a str {
         self.scope
+    }
+    /// Returns the HTTP binding identifier.
+    pub const fn binding(&self) -> &'a str {
+        self.binding
     }
     /// Returns the interface identifier.
     pub const fn service(&self) -> &'a str {
@@ -476,5 +509,43 @@ mod tests {
             format!("{event:?}"),
             "AdmissionRejected(AdmissionRejectedEvent { side: Server, reason: \"concurrency\" })"
         );
+    }
+
+    #[test]
+    fn attempt_http_version_can_be_unknown_before_protocol_establishment() {
+        let unknown = AttemptFinishedEvent::new(
+            "http-json-v1",
+            None,
+            "service",
+            "call",
+            1,
+            MetricOutcome::Error,
+            Some("connect"),
+            Duration::ZERO,
+        );
+        assert_eq!(unknown.http_version(), None);
+
+        let known = AttemptFinishedEvent::new(
+            "http-json-v1",
+            Some("2"),
+            "service",
+            "call",
+            1,
+            MetricOutcome::Success,
+            None,
+            Duration::ZERO,
+        );
+        assert_eq!(known.http_version(), Some("2"));
+    }
+
+    #[test]
+    fn circuit_state_changes_include_the_http_binding() {
+        let event =
+            CircuitStateChangedEvent::new("service", "http-json-v1", "service", CircuitState::Open);
+
+        assert_eq!(event.scope(), "service");
+        assert_eq!(event.binding(), "http-json-v1");
+        assert_eq!(event.service(), "service");
+        assert_eq!(event.state(), CircuitState::Open);
     }
 }

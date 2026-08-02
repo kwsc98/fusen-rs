@@ -1,0 +1,5 @@
+error: invalid produces media type "application/json, text/plain": expected a MIME media type
+ --> tests/ui/fail/invalid_produces_media_type.rs:8:20
+  |
+8 |         produces = "application/json, text/plain"
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

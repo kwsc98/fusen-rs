@@ -17,8 +17,8 @@ import sys
 from datetime import datetime, timezone
 
 
-SCHEMA_VERSION = 2
-BENCHMARK_SUITE = "direct-invocation-matrix-v1"
+SCHEMA_VERSION = 3
+BENCHMARK_SUITE = "http-json-transport-matrix-v1"
 REQUIRED_BASELINE_RUNS = 5
 DEFAULT_THRESHOLD_PERCENT = 10
 HOST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -29,15 +29,16 @@ PARAMETERS_PATTERN = re.compile(
     re.MULTILINE,
 )
 RESULT_PATTERN = re.compile(
-    r"^benchmark-result case=(\S+) protocol=(\S+) transport=(\S+) "
+    r"^benchmark-result case=(\S+) binding=(\S+) transport=(\S+) "
     r"concurrency=(\d+) payload=(\S+) payload_bytes=(\d+) "
     r"iterations=(\d+) bytes=(\d+) errors=(\d+) duration_ns=(\d+) "
     r"qps=([0-9]+(?:\.[0-9]+)?) p50_ns=(\d+) p99_ns=(\d+)$",
     re.MULTILINE,
 )
-PROTOCOLS = (
-    ("fusen", "fusen-v1", "h2c", True),
-    ("spring", "spring-cloud-v1", "http1", False),
+HTTP_BINDING = "http-json-v1"
+TRANSPORTS = (
+    ("http1", "http1", True),
+    ("h2c", "h2c", True),
 )
 CONCURRENCIES = (1, 100)
 PAYLOADS = (
@@ -124,12 +125,12 @@ def benchmark_parameters(
 
 def expected_case_specs(parameters: dict) -> dict[str, dict]:
     specs = {}
-    for prefix, protocol, transport, blocking in PROTOCOLS:
+    for prefix, transport, blocking in TRANSPORTS:
         for concurrency in CONCURRENCIES:
             for payload, payload_bytes, iteration_key in PAYLOADS:
                 case = f"{prefix}-c{concurrency}-{payload}"
                 specs[case] = {
-                    "protocol": protocol,
+                    "binding": HTTP_BINDING,
                     "transport": transport,
                     "concurrency": concurrency,
                     "payload": payload,
@@ -158,7 +159,7 @@ def parse_sample(output: str, run_number: int) -> dict:
     for match in RESULT_PATTERN.finditer(output):
         (
             case,
-            protocol,
+            binding,
             transport,
             concurrency,
             payload,
@@ -174,7 +175,7 @@ def parse_sample(output: str, run_number: int) -> dict:
         if case in cases:
             raise RuntimeError(f"benchmark run {run_number} duplicated case {case}")
         cases[case] = {
-            "protocol": protocol,
+            "binding": binding,
             "transport": transport,
             "concurrency": int(concurrency),
             "payload": payload,
@@ -199,7 +200,7 @@ def parse_sample(output: str, run_number: int) -> dict:
     for case, spec in expected.items():
         sample = cases[case]
         for field in (
-            "protocol",
+            "binding",
             "transport",
             "concurrency",
             "payload",
@@ -733,7 +734,8 @@ def main() -> int:
     print(
         "benchmark matrix medians: "
         + "; ".join(
-            f"{case['protocol']}/c{case['concurrency']}/{case['payload']} "
+            f"{case['binding']}/{case['transport']}/c{case['concurrency']}/"
+            f"{case['payload']} "
             f"p50={case['median_p50_ns']}ns p99={case['median_p99_ns']}ns "
             f"qps={case['median_qps']:.3f}"
             for case in blocking

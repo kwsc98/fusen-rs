@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "invalid-call")]
 trait InvalidCallType {
@@ -9,7 +9,7 @@ trait InvalidCallType {
     async fn call(
         &self,
         #[param(context)] call: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

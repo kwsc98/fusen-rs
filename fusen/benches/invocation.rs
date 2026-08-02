@@ -1,12 +1,13 @@
 //! Direct single-attempt socket matrix used by the 0.9 release gate.
 
 use fusen_rs::{
-    ClientConfig, ClientRuntime, RetryConfig, RpcError, RpcResponse, Server, ServerConfig,
-    WireProtocol, contract::ProtocolSet, interface,
+    ClientConfig, ClientRuntime, Error, Response, RetryConfig, Server, ServerConfig,
+    contract::{EndpointCapabilities, HttpBindingId, HttpVersionPolicy, HttpVersionSet},
+    interface,
 };
 use std::{
     env,
-    error::Error,
+    error::Error as StdError,
     hint::black_box,
     io,
     sync::Arc,
@@ -23,51 +24,37 @@ const CONCURRENCIES: [usize; 2] = [1, 100];
 #[interface(name = "benchmark")]
 trait BenchmarkService {
     #[method(method = "POST", path = "/benchmark/echo")]
-    async fn echo(&self, #[param(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
+    async fn echo(&self, #[param(body)] value: String) -> Result<Response<String>, Error>;
 }
 
 struct BenchmarkServiceImpl;
 
 impl BenchmarkService for BenchmarkServiceImpl {
-    async fn echo(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(value))
+    async fn echo(&self, value: String) -> Result<Response<String>, Error> {
+        Ok(Response::new(value))
     }
 }
 
 #[derive(Clone, Copy)]
-enum BenchmarkProtocol {
-    Fusen,
-    Spring,
+enum BenchmarkTransport {
+    Http1,
+    H2c,
 }
 
-impl BenchmarkProtocol {
-    const ALL: [Self; 2] = [Self::Fusen, Self::Spring];
+impl BenchmarkTransport {
+    const ALL: [Self; 2] = [Self::Http1, Self::H2c];
 
     const fn id(self) -> &'static str {
         match self {
-            Self::Fusen => "fusen-v1",
-            Self::Spring => "spring-cloud-v1",
+            Self::Http1 => "http1",
+            Self::H2c => "h2c",
         }
     }
 
-    const fn case_prefix(self) -> &'static str {
+    const fn policy(self) -> HttpVersionPolicy {
         match self {
-            Self::Fusen => "fusen",
-            Self::Spring => "spring",
-        }
-    }
-
-    const fn transport(self) -> &'static str {
-        match self {
-            Self::Fusen => "h2c",
-            Self::Spring => "http1",
-        }
-    }
-
-    const fn wire_protocol(self) -> WireProtocol {
-        match self {
-            Self::Fusen => WireProtocol::FusenV1,
-            Self::Spring => WireProtocol::SpringCloudV1,
+            Self::Http1 => HttpVersionPolicy::Http1,
+            Self::H2c => HttpVersionPolicy::H2c,
         }
     }
 }
@@ -138,15 +125,17 @@ fn main() {
         .expect("direct invocation benchmark matrix must complete");
 }
 
-async fn run() -> Result<(), Box<dyn Error>> {
+async fn run() -> Result<(), Box<dyn StdError>> {
     let parameters = BenchmarkParameters::from_env()?;
     println!(
         "benchmark-parameters warmup_iterations={} small_iterations={} large_iterations={}",
         parameters.warmup_iterations, parameters.small_iterations, parameters.large_iterations,
     );
 
+    let binding = HttpBindingId::default();
+    let capabilities = EndpointCapabilities::new(HttpVersionSet::ALL, [binding.clone()], true)?;
     let server_config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
+        .capabilities(capabilities.clone())
         .build()?;
     let server = Server::builder("127.0.0.1:0")
         .config(server_config)
@@ -170,14 +159,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
     ];
     let mut benchmark_errors = 0_u64;
 
-    for protocol in BenchmarkProtocol::ALL {
+    for transport in BenchmarkTransport::ALL {
         let client_config = ClientConfig::builder()
             .retry(RetryConfig::builder().max_attempts(1).build()?)
             .build()?;
         let client_runtime = ClientRuntime::builder().config(client_config).build()?;
         let client = BenchmarkServiceClient::builder(&client_runtime)
             .direct(&server_url)
-            .protocol(protocol.wire_protocol())
+            .binding(binding.clone())
+            .http_version_policy(transport.policy())
+            .direct_capabilities(capabilities.clone())
             .connect()
             .await?;
 
@@ -198,7 +189,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 )
                 .await?;
                 benchmark_errors = benchmark_errors.saturating_add(result.errors);
-                print_result(protocol, concurrency, payload, &result);
+                print_result(&binding, transport, concurrency, payload, &result);
             }
         }
 
@@ -221,7 +212,7 @@ async fn warm_up(
     payload: Arc<String>,
     iterations: usize,
     concurrency: usize,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn StdError>> {
     let result = execute_requests(client, payload, iterations, concurrency).await?;
     if result.errors != 0 {
         return Err(io::Error::other(format!(
@@ -332,24 +323,21 @@ fn percentile(samples: &[u64], percentile: usize) -> u64 {
 }
 
 fn print_result(
-    protocol: BenchmarkProtocol,
+    binding: &HttpBindingId,
+    transport: BenchmarkTransport,
     concurrency: usize,
     payload: &Payload,
     result: &CaseResult,
 ) {
-    let case = format!(
-        "{}-c{concurrency}-{}",
-        protocol.case_prefix(),
-        payload.label
-    );
+    let case = format!("{}-c{concurrency}-{}", transport.id(), payload.label);
     let successful = result.iterations as u64 - result.errors.min(result.iterations as u64);
     let qps = successful as f64 / result.duration.as_secs_f64();
     println!(
-        "benchmark-result case={case} protocol={} transport={} concurrency={concurrency} \
+        "benchmark-result case={case} binding={} transport={} concurrency={concurrency} \
          payload={} payload_bytes={} iterations={} bytes={} errors={} duration_ns={} \
          qps={qps:.3} p50_ns={} p99_ns={}",
-        protocol.id(),
-        protocol.transport(),
+        binding.as_str(),
+        transport.id(),
         payload.label,
         payload.value.len(),
         result.iterations,

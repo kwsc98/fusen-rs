@@ -2,8 +2,8 @@
 
 use fusen_config::{ConfigHandle, ConfigKey, ConfigSource};
 use fusen_contract::{
-    InstanceId, MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor, ServiceRegistration,
-    ServiceSelector, ServiceWeight, WireProtocol,
+    EndpointCapabilities, HttpOperation, InstanceId, MethodDescriptor, MethodId, ServiceDescriptor,
+    ServiceRegistration, ServiceSelector, ServiceWeight,
 };
 use fusen_nacos::{NacosConfig, NacosConfigSource, NacosRegistry};
 use fusen_register::{RegistrationRequest, Registry, SubscriptionRequest, directory::Directory};
@@ -63,16 +63,26 @@ async fn live_registry_case(
     let selector = ServiceSelector::new(resource, Some(GROUP.into()), Some("1".into()))?;
     let descriptor = Box::leak(Box::new(ServiceDescriptor::new(
         selector.clone(),
-        vec![MethodDescriptor::new(MethodId::new(0), "ping", None)?],
+        vec![MethodDescriptor::new(
+            MethodId::new(0),
+            "ping",
+            HttpOperation::new(
+                "GET".parse()?,
+                "/ping",
+                vec![],
+                "application/json",
+                "application/json",
+            )?,
+        )?],
     )?));
     let instance_id = InstanceId::new(format!("{resource}-instance"))?;
     let registration = Arc::new(ServiceRegistration::new(
         instance_id.clone(),
         descriptor,
         "http://127.0.0.1:18080/live".parse()?,
-        ProtocolSet::FUSEN_V1,
+        EndpointCapabilities::default(),
         ServiceWeight::default(),
-    )?);
+    ));
     let registry = timed(
         "connect Nacos registry adapter",
         NacosRegistry::connect(format!("{resource}-registry"), config),
@@ -83,12 +93,9 @@ async fn live_registry_case(
         NamingServiceBuilder::new(admin_props).build(),
     )
     .await?;
-    let subscription =
-        registry.prepare_subscription(SubscriptionRequest::new(selector, WireProtocol::FusenV1))?;
-    let registration_handle = registry.prepare_registration(RegistrationRequest::new(
-        registration,
-        WireProtocol::FusenV1,
-    ))?;
+    let subscription = registry.prepare_subscription(SubscriptionRequest::new(selector))?;
+    let registration_handle =
+        registry.prepare_registration(RegistrationRequest::new(registration))?;
 
     let exercise = async {
         let directory = timed("activate Nacos subscription", subscription.activate()).await?;
@@ -102,7 +109,7 @@ async fn live_registry_case(
     .await;
 
     let registration_cleanup = timed("close Nacos registration", registration_handle.close()).await;
-    let service_name = format!("fusen:v1:{resource}:1:{GROUP}");
+    let service_name = resource.to_owned();
     let remote_cleanup =
         wait_for_remote_instance_absence(&admin, &service_name, Some(GROUP.into()), &instance_id)
             .await;

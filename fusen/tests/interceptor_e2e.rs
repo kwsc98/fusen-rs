@@ -1,9 +1,9 @@
-//! End-to-end ordering and isolation contracts for all four middleware stages.
+//! End-to-end ordering and isolation contracts for all four interceptor stages.
 
 use fusen_rs::{
-    ClientConfig, ClientRuntime, Middleware, MiddlewareFuture, MiddlewareStage, Next,
-    PolicySanitizer, RetryConfig, RpcCall, RpcCategory, RpcContext, RpcError, RpcResponse, RpcSide,
-    SanitizedValue, Server, ServerConfig, WireProtocol, contract::ProtocolSet, interface,
+    Call, ClientConfig, ClientRuntime, Context, Error, ErrorCategory, InterceptionStage,
+    Interceptor, InterceptorFuture, Next, PolicySanitizer, Response, RetryConfig, SanitizedValue,
+    Server, Side, interface,
 };
 use http::HeaderValue;
 use serde_json::{Value, json};
@@ -19,14 +19,14 @@ use tokio::{
     net::TcpStream,
 };
 
-#[interface(name = "middleware-contract")]
-trait MiddlewareContract {
-    #[fusen_rs::method(method = "PUT", path = "/middleware")]
+#[interface(name = "interceptor-contract")]
+trait InterceptorContract {
+    #[fusen_rs::method(method = "PUT", path = "/interceptor")]
     async fn execute(
         &self,
-        #[param(context)] call: RpcCall,
+        #[param(context)] call: Call,
         #[param(body)] value: String,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    ) -> Result<Response<String>, Error>;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -39,8 +39,8 @@ struct OrderedHandler {
     events: Arc<Mutex<Vec<&'static str>>>,
 }
 
-impl MiddlewareContract for OrderedHandler {
-    async fn execute(&self, call: RpcCall, value: String) -> Result<RpcResponse<String>, RpcError> {
+impl InterceptorContract for OrderedHandler {
+    async fn execute(&self, call: Call, value: String) -> Result<Response<String>, Error> {
         assert_eq!(
             call.extensions()
                 .get::<ServerExtension>()
@@ -49,39 +49,39 @@ impl MiddlewareContract for OrderedHandler {
         );
         assert_eq!(call.headers().get("x-client-chain").unwrap(), "ready");
         self.events.lock().unwrap().push("handler");
-        Ok(RpcResponse::new(value))
+        Ok(Response::new(value))
     }
 }
 
 #[derive(Clone)]
-struct OrderedMiddleware {
+struct OrderedInterceptor {
     before: &'static str,
     after: &'static str,
-    stage: MiddlewareStage,
-    side: RpcSide,
+    stage: InterceptionStage,
+    side: Side,
     events: Arc<Mutex<Vec<&'static str>>>,
 }
 
-impl Middleware for OrderedMiddleware {
-    fn call<'a>(&'a self, mut context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for OrderedInterceptor {
+    fn intercept<'a>(&'a self, mut context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
         assert_eq!(context.stage(), self.stage);
         assert_eq!(context.side(), self.side);
         assert!(!context.request_id().is_empty());
         assert!(context.remaining() > Duration::ZERO);
         assert_eq!(
             context.interface().selector().service_id(),
-            "middleware-contract"
+            "interceptor-contract"
         );
-        assert_eq!(context.method().fusen_identity(), "execute");
+        assert_eq!(context.method().invocation_name(), "execute");
 
         match self.stage {
-            MiddlewareStage::ClientCall if self.before == "client-call-global:before" => {
+            InterceptionStage::ClientCall if self.before == "client-call-global:before" => {
                 context.extensions_mut().insert(ClientExtension(11));
                 context
                     .headers_mut()
                     .insert("x-client-chain", HeaderValue::from_static("ready"));
             }
-            MiddlewareStage::ClientCall => {
+            InterceptionStage::ClientCall => {
                 assert_eq!(
                     context
                         .extensions()
@@ -90,7 +90,7 @@ impl Middleware for OrderedMiddleware {
                     Some(11)
                 );
             }
-            MiddlewareStage::ClientAttempt => {
+            InterceptionStage::ClientAttempt => {
                 assert_eq!(context.attempt().map(|value| value.get()), Some(1));
                 assert!(context.endpoint().is_some());
                 assert_eq!(
@@ -101,11 +101,11 @@ impl Middleware for OrderedMiddleware {
                     Some(11)
                 );
             }
-            MiddlewareStage::ServerHead if self.before == "server-head-global:before" => {
+            InterceptionStage::ServerHead if self.before == "server-head-global:before" => {
                 assert!(context.arguments().is_none());
                 context.extensions_mut().insert(ServerExtension(23));
             }
-            MiddlewareStage::ServerHead => {
+            InterceptionStage::ServerHead => {
                 assert!(context.arguments().is_none());
                 assert_eq!(
                     context
@@ -115,7 +115,7 @@ impl Middleware for OrderedMiddleware {
                     Some(23)
                 );
             }
-            MiddlewareStage::ServerCall => {
+            InterceptionStage::ServerCall => {
                 assert!(context.arguments().is_some());
                 assert_eq!(
                     context
@@ -125,7 +125,7 @@ impl Middleware for OrderedMiddleware {
                     Some(23)
                 );
             }
-            _ => panic!("unexpected middleware stage"),
+            _ => panic!("unexpected interceptor stage"),
         }
 
         self.events.lock().unwrap().push(self.before);
@@ -133,7 +133,7 @@ impl Middleware for OrderedMiddleware {
             let mut response = next.run(context).await?;
             response
                 .headers_mut()
-                .append("x-middleware-count", HeaderValue::from_static("1"));
+                .append("x-interceptor-count", HeaderValue::from_static("1"));
             self.events.lock().unwrap().push(self.after);
             Ok(response)
         })
@@ -143,11 +143,11 @@ impl Middleware for OrderedMiddleware {
 fn ordered(
     before: &'static str,
     after: &'static str,
-    stage: MiddlewareStage,
-    side: RpcSide,
+    stage: InterceptionStage,
+    side: Side,
     events: &Arc<Mutex<Vec<&'static str>>>,
-) -> OrderedMiddleware {
-    OrderedMiddleware {
+) -> OrderedInterceptor {
+    OrderedInterceptor {
         before,
         after,
         stage,
@@ -160,42 +160,36 @@ fn ordered(
 async fn four_stages_run_global_then_local_with_shared_server_extensions() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let server = Server::builder("127.0.0.1:0")
-        .config(
-            ServerConfig::builder()
-                .protocols(ProtocolSet::ALL)
-                .build()
-                .unwrap(),
-        )
-        .head_middleware(ordered(
+        .head_interceptor(ordered(
             "server-head-global:before",
             "server-head-global:after",
-            MiddlewareStage::ServerHead,
-            RpcSide::Server,
+            InterceptionStage::ServerHead,
+            Side::Server,
             &events,
         ))
-        .middleware(ordered(
+        .interceptor(ordered(
             "server-call-global:before",
             "server-call-global:after",
-            MiddlewareStage::ServerCall,
-            RpcSide::Server,
+            InterceptionStage::ServerCall,
+            Side::Server,
             &events,
         ))
         .interface(
-            MiddlewareContractServer::new(OrderedHandler {
+            InterceptorContractServer::new(OrderedHandler {
                 events: events.clone(),
             })
-            .head_middleware(ordered(
+            .head_interceptor(ordered(
                 "server-head-local:before",
                 "server-head-local:after",
-                MiddlewareStage::ServerHead,
-                RpcSide::Server,
+                InterceptionStage::ServerHead,
+                Side::Server,
                 &events,
             ))
-            .middleware(ordered(
+            .interceptor(ordered(
                 "server-call-local:before",
                 "server-call-local:after",
-                MiddlewareStage::ServerCall,
-                RpcSide::Server,
+                InterceptionStage::ServerCall,
+                Side::Server,
                 &events,
             )),
         )
@@ -206,37 +200,36 @@ async fn four_stages_run_global_then_local_with_shared_server_extensions() {
         .unwrap();
 
     let runtime = ClientRuntime::builder()
-        .middleware(ordered(
+        .interceptor(ordered(
             "client-call-global:before",
             "client-call-global:after",
-            MiddlewareStage::ClientCall,
-            RpcSide::Client,
+            InterceptionStage::ClientCall,
+            Side::Client,
             &events,
         ))
-        .attempt_middleware(ordered(
+        .attempt_interceptor(ordered(
             "client-attempt-global:before",
             "client-attempt-global:after",
-            MiddlewareStage::ClientAttempt,
-            RpcSide::Client,
+            InterceptionStage::ClientAttempt,
+            Side::Client,
             &events,
         ))
         .build()
         .unwrap();
-    let client = MiddlewareContractClient::builder(&runtime)
+    let client = InterceptorContractClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
-        .protocol(WireProtocol::SpringCloudV1)
-        .middleware(ordered(
+        .interceptor(ordered(
             "client-call-local:before",
             "client-call-local:after",
-            MiddlewareStage::ClientCall,
-            RpcSide::Client,
+            InterceptionStage::ClientCall,
+            Side::Client,
             &events,
         ))
-        .attempt_middleware(ordered(
+        .attempt_interceptor(ordered(
             "client-attempt-local:before",
             "client-attempt-local:after",
-            MiddlewareStage::ClientAttempt,
-            RpcSide::Client,
+            InterceptionStage::ClientAttempt,
+            Side::Client,
             &events,
         ))
         .connect()
@@ -244,7 +237,7 @@ async fn four_stages_run_global_then_local_with_shared_server_extensions() {
         .unwrap();
 
     let response = client
-        .execute(RpcCall::new(), "complete".to_owned())
+        .execute(Call::new(), "complete".to_owned())
         .await
         .unwrap();
     assert_eq!(response.body(), "complete");
@@ -252,7 +245,7 @@ async fn four_stages_run_global_then_local_with_shared_server_extensions() {
     assert_eq!(
         response
             .headers()
-            .get_all("x-middleware-count")
+            .get_all("x-interceptor-count")
             .iter()
             .count(),
         8
@@ -287,26 +280,22 @@ async fn four_stages_run_global_then_local_with_shared_server_extensions() {
 
 struct RetryHandler(AtomicUsize);
 
-impl MiddlewareContract for RetryHandler {
-    async fn execute(
-        &self,
-        _call: RpcCall,
-        value: String,
-    ) -> Result<RpcResponse<String>, RpcError> {
+impl InterceptorContract for RetryHandler {
+    async fn execute(&self, _call: Call, value: String) -> Result<Response<String>, Error> {
         if self.0.fetch_add(1, Ordering::AcqRel) == 0 {
             return Err(
-                RpcError::new(RpcCategory::Unavailable, "retry_once", "retry once").unwrap(),
+                Error::local(ErrorCategory::Unavailable, "retry_once", "retry once").unwrap(),
             );
         }
-        Ok(RpcResponse::new(value))
+        Ok(Response::new(value))
     }
 }
 
 #[derive(Clone)]
 struct LogicalExtension;
 
-impl Middleware for LogicalExtension {
-    fn call<'a>(&'a self, mut context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for LogicalExtension {
+    fn intercept<'a>(&'a self, mut context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
         context.extensions_mut().insert(ClientExtension(41));
         Box::pin(async move { next.run(context).await })
     }
@@ -317,8 +306,8 @@ struct AttemptIsolation {
     seen: Arc<Mutex<Vec<(u8, u8)>>>,
 }
 
-impl Middleware for AttemptIsolation {
-    fn call<'a>(&'a self, mut context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for AttemptIsolation {
+    fn intercept<'a>(&'a self, mut context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
         let attempt = context.attempt().unwrap().get();
         let inherited = context.extensions().get::<ClientExtension>().unwrap().0;
         self.seen.lock().unwrap().push((attempt, inherited));
@@ -330,13 +319,7 @@ impl Middleware for AttemptIsolation {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn each_attempt_gets_an_isolated_clone_and_success_reports_final_attempts() {
     let server = Server::builder("127.0.0.1:0")
-        .config(
-            ServerConfig::builder()
-                .protocols(ProtocolSet::ALL)
-                .build()
-                .unwrap(),
-        )
-        .interface(MiddlewareContractServer::new(RetryHandler(
+        .interface(InterceptorContractServer::new(RetryHandler(
             AtomicUsize::new(0),
         )))
         .build()
@@ -354,19 +337,18 @@ async fn each_attempt_gets_an_isolated_clone_and_success_reports_final_attempts(
     let seen = Arc::new(Mutex::new(Vec::new()));
     let runtime = ClientRuntime::builder()
         .config(config)
-        .middleware(LogicalExtension)
-        .attempt_middleware(AttemptIsolation { seen: seen.clone() })
+        .interceptor(LogicalExtension)
+        .attempt_interceptor(AttemptIsolation { seen: seen.clone() })
         .build()
         .unwrap();
-    let client = MiddlewareContractClient::builder(&runtime)
+    let client = InterceptorContractClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
 
     let response = client
-        .execute(RpcCall::new(), "retried".to_owned())
+        .execute(Call::new(), "retried".to_owned())
         .await
         .unwrap();
     assert_eq!(response.body(), "retried");
@@ -381,11 +363,11 @@ async fn each_attempt_gets_an_isolated_clone_and_success_reports_final_attempts(
 #[derive(Clone)]
 struct RejectHead;
 
-impl Middleware for RejectHead {
-    fn call<'a>(&'a self, _context: RpcContext, _next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for RejectHead {
+    fn intercept<'a>(&'a self, _context: Context, _next: Next<'a>) -> InterceptorFuture<'a> {
         Box::pin(async {
-            let mut error = RpcError::new(
-                RpcCategory::PermissionDenied,
+            let mut error = Error::local(
+                ErrorCategory::PermissionDenied,
                 "authentication_required",
                 "authentication required",
             )
@@ -400,12 +382,8 @@ impl Middleware for RejectHead {
 
 struct UnreachableHandler;
 
-impl MiddlewareContract for UnreachableHandler {
-    async fn execute(
-        &self,
-        _call: RpcCall,
-        _value: String,
-    ) -> Result<RpcResponse<String>, RpcError> {
+impl InterceptorContract for UnreachableHandler {
+    async fn execute(&self, _call: Call, _value: String) -> Result<Response<String>, Error> {
         panic!("ServerHead rejection must not invoke the handler")
     }
 }
@@ -413,13 +391,7 @@ impl MiddlewareContract for UnreachableHandler {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_head_rejection_does_not_poll_the_request_body() {
     let server = Server::builder("127.0.0.1:0")
-        .config(
-            ServerConfig::builder()
-                .protocols(ProtocolSet::SPRING_CLOUD_V1)
-                .build()
-                .unwrap(),
-        )
-        .interface(MiddlewareContractServer::new(UnreachableHandler).head_middleware(RejectHead))
+        .interface(InterceptorContractServer::new(UnreachableHandler).head_interceptor(RejectHead))
         .build()
         .unwrap()
         .start()
@@ -428,7 +400,7 @@ async fn server_head_rejection_does_not_poll_the_request_body() {
 
     let mut stream = TcpStream::connect(server.local_addr()).await.unwrap();
     let head = concat!(
-        "PUT /middleware HTTP/1.1\r\n",
+        "PUT /interceptor HTTP/1.1\r\n",
         "Host: localhost\r\n",
         "Content-Type: application/json\r\n",
         "Content-Length: 1048576\r\n",
@@ -465,27 +437,27 @@ struct ProjectionReply {
     secret: String,
 }
 
-#[interface(name = "middleware-projection-contract")]
-trait MiddlewareProjectionContract {
-    #[fusen_rs::method(method = "PUT", path = "/middleware/projection")]
+#[interface(name = "interceptor-projection-contract")]
+trait InterceptorProjectionContract {
+    #[fusen_rs::method(method = "PUT", path = "/interceptor/projection")]
     async fn project(
         &self,
-        #[param(context)] call: RpcCall,
+        #[param(context)] call: Call,
         #[param(body)]
         #[sensitive(kind = "public")]
         value: String,
-    ) -> Result<RpcResponse<ProjectionReply>, RpcError>;
+    ) -> Result<Response<ProjectionReply>, Error>;
 }
 
 struct ProjectionHandler;
 
-impl MiddlewareProjectionContract for ProjectionHandler {
+impl InterceptorProjectionContract for ProjectionHandler {
     async fn project(
         &self,
-        _call: RpcCall,
+        _call: Call,
         value: String,
-    ) -> Result<RpcResponse<ProjectionReply>, RpcError> {
-        Ok(RpcResponse::new(ProjectionReply {
+    ) -> Result<Response<ProjectionReply>, Error> {
+        Ok(Response::new(ProjectionReply {
             visible: value,
             secret: "server-secret".to_owned(),
         }))
@@ -510,9 +482,9 @@ fn observed_value(value: SanitizedValue) -> Option<Value> {
 #[derive(Clone)]
 struct ServerProjectionCapture(Arc<Mutex<ProjectionObservations>>);
 
-impl Middleware for ServerProjectionCapture {
-    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
-        assert_eq!(context.stage(), MiddlewareStage::ServerCall);
+impl Interceptor for ServerProjectionCapture {
+    fn intercept<'a>(&'a self, context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
+        assert_eq!(context.stage(), InterceptionStage::ServerCall);
         let method = context.method();
         let observations = self.0.clone();
 
@@ -529,9 +501,9 @@ impl Middleware for ServerProjectionCapture {
 #[derive(Clone)]
 struct ClientProjectionCapture(Arc<Mutex<ProjectionObservations>>);
 
-impl Middleware for ClientProjectionCapture {
-    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
-        assert_eq!(context.stage(), MiddlewareStage::ClientCall);
+impl Interceptor for ClientProjectionCapture {
+    fn intercept<'a>(&'a self, context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
+        assert_eq!(context.stage(), InterceptionStage::ClientCall);
         let method = context.method();
         let short_circuit = context.headers().contains_key("x-projection-short");
         let observations = self.0.clone();
@@ -561,14 +533,8 @@ impl Middleware for ClientProjectionCapture {
 async fn declared_response_origins_are_projectable_but_context_responses_are_not() {
     let observations = Arc::new(Mutex::new(ProjectionObservations::default()));
     let server = Server::builder("127.0.0.1:0")
-        .config(
-            ServerConfig::builder()
-                .protocols(ProtocolSet::ALL)
-                .build()
-                .unwrap(),
-        )
-        .middleware(ServerProjectionCapture(observations.clone()))
-        .interface(MiddlewareProjectionContractServer::new(ProjectionHandler))
+        .interceptor(ServerProjectionCapture(observations.clone()))
+        .interface(InterceptorProjectionContractServer::new(ProjectionHandler))
         .build()
         .unwrap()
         .start()
@@ -576,22 +542,21 @@ async fn declared_response_origins_are_projectable_but_context_responses_are_not
         .unwrap();
 
     let runtime = ClientRuntime::builder().build().unwrap();
-    let client = MiddlewareProjectionContractClient::builder(&runtime)
+    let client = InterceptorProjectionContractClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
-        .protocol(WireProtocol::SpringCloudV1)
-        .middleware(ClientProjectionCapture(observations.clone()))
+        .interceptor(ClientProjectionCapture(observations.clone()))
         .connect()
         .await
         .unwrap();
 
     let remote = client
-        .project(RpcCall::new(), "safe".to_owned())
+        .project(Call::new(), "safe".to_owned())
         .await
         .unwrap();
     assert_eq!(remote.body().visible, "safe");
     assert_eq!(remote.body().secret, "server-secret");
 
-    let mut call = RpcCall::new();
+    let mut call = Call::new();
     call.headers_mut()
         .insert("x-projection-short", HeaderValue::from_static("1"));
     let local = client.project(call, "unused".to_owned()).await.unwrap();
@@ -627,11 +592,11 @@ struct DirectionalPayload {
 
 #[interface(name = "directional-projection-contract")]
 trait DirectionalProjectionContract {
-    #[fusen_rs::method(method = "PUT", path = "/middleware/directional")]
+    #[fusen_rs::method(method = "PUT", path = "/interceptor/directional")]
     async fn directional(
         &self,
         #[param(body)] value: DirectionalPayload,
-    ) -> Result<RpcResponse<DirectionalPayload>, RpcError>;
+    ) -> Result<Response<DirectionalPayload>, Error>;
 }
 
 struct DirectionalHandler;
@@ -640,10 +605,10 @@ impl DirectionalProjectionContract for DirectionalHandler {
     async fn directional(
         &self,
         value: DirectionalPayload,
-    ) -> Result<RpcResponse<DirectionalPayload>, RpcError> {
+    ) -> Result<Response<DirectionalPayload>, Error> {
         assert!(value.public_value.is_empty());
         assert_eq!(value.secret_value, "client-visible");
-        Ok(RpcResponse::new(DirectionalPayload {
+        Ok(Response::new(DirectionalPayload {
             public_value: value.secret_value,
             secret_value: "server-secret".to_owned(),
         }))
@@ -661,8 +626,8 @@ struct DirectionalObservations {
 #[derive(Clone)]
 struct DirectionalProjectionCapture(Arc<Mutex<DirectionalObservations>>);
 
-impl Middleware for DirectionalProjectionCapture {
-    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for DirectionalProjectionCapture {
+    fn intercept<'a>(&'a self, context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
         let side = context.side();
         let method = context.method();
         let arguments = observed_value(context.sanitized_arguments(&PolicySanitizer::default()));
@@ -672,15 +637,15 @@ impl Middleware for DirectionalProjectionCapture {
             let body = observed_value(response.sanitized_body(method, &PolicySanitizer::default()));
             let mut observed = observations.lock().unwrap();
             match side {
-                RpcSide::Client => {
+                Side::Client => {
                     observed.client_arguments.push(arguments);
                     observed.client_responses.push(body);
                 }
-                RpcSide::Server => {
+                Side::Server => {
                     observed.server_arguments.push(arguments);
                     observed.server_responses.push(body);
                 }
-                _ => panic!("unexpected RPC side"),
+                _ => panic!("unexpected service invocation side"),
             }
             Ok(response)
         })
@@ -689,72 +654,63 @@ impl Middleware for DirectionalProjectionCapture {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn directional_schemas_protect_all_four_projection_paths() {
-    for protocol in [WireProtocol::FusenV1, WireProtocol::SpringCloudV1] {
-        let observations = Arc::new(Mutex::new(DirectionalObservations::default()));
-        let server = Server::builder("127.0.0.1:0")
-            .config(
-                ServerConfig::builder()
-                    .protocols(ProtocolSet::ALL)
-                    .build()
-                    .unwrap(),
-            )
-            .middleware(DirectionalProjectionCapture(observations.clone()))
-            .interface(DirectionalProjectionContractServer::new(DirectionalHandler))
-            .build()
-            .unwrap()
-            .start()
-            .await
-            .unwrap();
-        let runtime = ClientRuntime::builder().build().unwrap();
-        let client = DirectionalProjectionContractClient::builder(&runtime)
-            .direct(format!("http://{}", server.local_addr()))
-            .protocol(protocol)
-            .middleware(DirectionalProjectionCapture(observations.clone()))
-            .connect()
-            .await
-            .unwrap();
+    let observations = Arc::new(Mutex::new(DirectionalObservations::default()));
+    let server = Server::builder("127.0.0.1:0")
+        .interceptor(DirectionalProjectionCapture(observations.clone()))
+        .interface(DirectionalProjectionContractServer::new(DirectionalHandler))
+        .build()
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = DirectionalProjectionContractClient::builder(&runtime)
+        .direct(format!("http://{}", server.local_addr()))
+        .interceptor(DirectionalProjectionCapture(observations.clone()))
+        .connect()
+        .await
+        .unwrap();
 
-        let response = client
-            .directional(DirectionalPayload {
-                public_value: "client-visible".to_owned(),
-                secret_value: "client-secret".to_owned(),
-            })
-            .await
-            .unwrap()
-            .into_body();
-        assert!(response.public_value.is_empty());
-        assert_eq!(response.secret_value, "client-visible");
+    let response = client
+        .directional(DirectionalPayload {
+            public_value: "client-visible".to_owned(),
+            secret_value: "client-secret".to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_body();
+    assert!(response.public_value.is_empty());
+    assert_eq!(response.secret_value, "client-visible");
 
-        {
-            let observed = observations.lock().unwrap();
-            assert_eq!(
-                observed.client_arguments,
-                [Some(json!({
-                    "value": {
-                        "display": "client-visible",
-                        "password": "<redacted>"
-                    }
-                }))]
-            );
-            assert_eq!(
-                observed.server_arguments,
-                [Some(json!({"value": {"display": "<redacted>"}}))]
-            );
-            assert_eq!(
-                observed.server_responses,
-                [Some(json!({
+    {
+        let observed = observations.lock().unwrap();
+        assert_eq!(
+            observed.client_arguments,
+            [Some(json!({
+                "value": {
                     "display": "client-visible",
                     "password": "<redacted>"
-                }))]
-            );
-            assert_eq!(
-                observed.client_responses,
-                [Some(json!({"display": "<redacted>"}))]
-            );
-        }
-
-        drop(client);
-        runtime.shutdown().await.unwrap();
-        server.shutdown().await.unwrap();
+                }
+            }))]
+        );
+        assert_eq!(
+            observed.server_arguments,
+            [Some(json!({"value": {"display": "<redacted>"}}))]
+        );
+        assert_eq!(
+            observed.server_responses,
+            [Some(json!({
+                "display": "client-visible",
+                "password": "<redacted>"
+            }))]
+        );
+        assert_eq!(
+            observed.client_responses,
+            [Some(json!({"display": "<redacted>"}))]
+        );
     }
+
+    drop(client);
+    runtime.shutdown().await.unwrap();
+    server.shutdown().await.unwrap();
 }

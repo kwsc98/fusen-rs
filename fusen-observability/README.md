@@ -20,8 +20,8 @@ impl MetricsRecorder for Recorder {
 ```
 
 Recorders must be synchronous and non-blocking. `fusen-rs` isolates recorder
-panics and disables a recorder after its first panic so metrics cannot break an
-RPC or runtime lifecycle.
+panics and disables a recorder after its first panic so metrics cannot break a
+service invocation or runtime lifecycle.
 
 Events cover logical invocations, transport attempts, admission rejection,
 registry operations, directory and circuit state changes, and shutdown. They

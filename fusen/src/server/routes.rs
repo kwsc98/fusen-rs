@@ -1,14 +1,9 @@
-use crate::{
-    Middleware, RpcArguments, RpcCategory, RpcError,
-    service::ErasedDispatch,
-    wire::{SERVICE_GROUP, SERVICE_VERSION},
-};
+use crate::{Arguments, Error, ErrorCategory, Interceptor, service::ErasedDispatch};
 use fusen_contract::{
-    MethodDescriptor, ServiceDescriptor, SpringCloudParameterCardinality,
-    SpringCloudParameterSource, WireProtocol,
+    HttpParameterCardinality, HttpParameterSource, MethodDescriptor, ServiceDescriptor,
 };
-use http::{HeaderMap, Method};
-use serde_json::Value;
+use http::{HeaderMap, Method, header::COOKIE};
+use serde_json::{Map, Value};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
@@ -16,24 +11,23 @@ use std::{
 
 #[derive(Clone)]
 pub(crate) struct Route {
-    pub protocol: WireProtocol,
     pub service: &'static ServiceDescriptor,
     pub method: &'static MethodDescriptor,
     pub dispatch: Arc<dyn ErasedDispatch>,
-    pub head_middleware: Arc<[Arc<dyn Middleware>]>,
-    pub middleware: Arc<[Arc<dyn Middleware>]>,
+    pub head_interceptor: Arc<[Arc<dyn Interceptor>]>,
+    pub interceptor: Arc<[Arc<dyn Interceptor>]>,
 }
 
-struct SpringRouteLeaf {
+struct HttpRouteLeaf {
     route: Arc<Route>,
     parameter_names: Vec<String>,
 }
 
 #[derive(Default)]
-struct SpringRouteTrie {
-    literals: BTreeMap<String, SpringRouteTrie>,
-    parameter: Option<Box<SpringRouteTrie>>,
-    leaf: Option<SpringRouteLeaf>,
+struct HttpRouteTrie {
+    literals: BTreeMap<String, HttpRouteTrie>,
+    parameter: Option<Box<HttpRouteTrie>>,
+    leaf: Option<HttpRouteLeaf>,
 }
 
 enum Segment {
@@ -47,88 +41,35 @@ pub(crate) struct MatchedRoute {
 }
 
 pub(crate) struct RouteTable {
-    fusen: HashMap<(String, Option<String>, Option<String>), Arc<Route>>,
-    spring: HashMap<Method, SpringRouteTrie>,
+    http: HashMap<Method, HttpRouteTrie>,
 }
 
 impl RouteTable {
     pub(crate) fn build(routes: Vec<Route>) -> Result<Self, String> {
-        let mut fusen = HashMap::new();
-        let mut spring = HashMap::new();
+        let mut http = HashMap::new();
         for route in routes {
             let route = Arc::new(route);
-            match route.protocol {
-                WireProtocol::FusenV1 => {
-                    let path = format!(
-                        "/_fusen/v1/{}/{}",
-                        route.service.selector().service_id(),
-                        route.method.fusen_identity()
-                    );
-                    let key = (
-                        path,
-                        route.service.selector().group().map(str::to_owned),
-                        route.service.selector().version().map(str::to_owned),
-                    );
-                    if fusen.insert(key, route).is_some() {
-                        return Err("duplicate FusenV1 service/method route".into());
-                    }
-                }
-                WireProtocol::SpringCloudV1 => {
-                    let mapping = route.method.spring_cloud().ok_or_else(|| {
-                        format!(
-                            "service {} method {} has no SpringCloudV1 mapping",
-                            route.service.identity(),
-                            route.method.fusen_identity()
-                        )
-                    })?;
-                    if mapping.path().starts_with("/_fusen/v1/") {
-                        return Err(
-                            "SpringCloudV1 routes may not use the reserved /_fusen/v1 prefix"
-                                .into(),
-                        );
-                    }
-                    let segments = parse_template(mapping.path())?;
-                    let method = mapping.method().clone();
-                    let path = mapping.path().to_owned();
-                    if !spring
-                        .entry(method.clone())
-                        .or_insert_with(SpringRouteTrie::default)
-                        .insert(&segments, route)
-                    {
-                        return Err(format!(
-                            "duplicate or ambiguous SpringCloudV1 route {} {}",
-                            method, path
-                        ));
-                    }
-                }
-                _ => return Err("unsupported wire protocol in route table".into()),
+            let mapping = route.method.http_operation();
+            let segments = parse_template(mapping.path())?;
+            let method = mapping.method().clone();
+            let path = mapping.path().to_owned();
+            if !http
+                .entry(method.clone())
+                .or_insert_with(HttpRouteTrie::default)
+                .insert(&segments, route)
+            {
+                return Err(format!(
+                    "duplicate or ambiguous HTTP route {} {}",
+                    method, path
+                ));
             }
         }
-        Ok(Self { fusen, spring })
+        Ok(Self { http })
     }
 
-    pub(crate) fn match_fusen(
-        &self,
-        path: &str,
-        headers: &HeaderMap,
-    ) -> Result<MatchedRoute, RpcError> {
-        let group = single_header(headers, &SERVICE_GROUP)?;
-        let version = single_header(headers, &SERVICE_VERSION)?;
-        let key = (path.to_owned(), group, version);
-        let route = self.fusen.get(&key).cloned().ok_or_else(not_found)?;
-        Ok(MatchedRoute {
-            route,
-            path_arguments: HashMap::new(),
-        })
-    }
-
-    pub(crate) fn match_spring(
-        &self,
-        method: &Method,
-        path: &str,
-    ) -> Result<MatchedRoute, RpcError> {
+    pub(crate) fn match_http(&self, method: &Method, path: &str) -> Result<MatchedRoute, Error> {
         let request_segments = split_path(path)?;
-        let trie = self.spring.get(method).ok_or_else(not_found)?;
+        let trie = self.http.get(method).ok_or_else(not_found)?;
         let mut parameter_values = Vec::new();
         let leaf = trie
             .match_segments(&request_segments, &mut parameter_values)
@@ -147,7 +88,7 @@ impl RouteTable {
     }
 }
 
-impl SpringRouteTrie {
+impl HttpRouteTrie {
     fn insert(&mut self, segments: &[Segment], route: Arc<Route>) -> bool {
         let mut node = self;
         let mut parameter_names = Vec::new();
@@ -164,7 +105,7 @@ impl SpringRouteTrie {
         if node.leaf.is_some() {
             return false;
         }
-        node.leaf = Some(SpringRouteLeaf {
+        node.leaf = Some(HttpRouteLeaf {
             route,
             parameter_names,
         });
@@ -175,7 +116,7 @@ impl SpringRouteTrie {
         &'a self,
         segments: &[String],
         parameter_values: &mut Vec<String>,
-    ) -> Option<&'a SpringRouteLeaf> {
+    ) -> Option<&'a HttpRouteLeaf> {
         let Some((segment, remaining)) = segments.split_first() else {
             return self.leaf.as_ref();
         };
@@ -197,24 +138,21 @@ impl SpringRouteTrie {
 }
 
 impl MatchedRoute {
-    pub(crate) fn spring_arguments(
+    pub(crate) fn http_arguments(
         &self,
         query: Option<&str>,
+        headers: &HeaderMap,
         body: Option<Value>,
         max_query_pairs: usize,
-    ) -> Result<RpcArguments, RpcError> {
-        let mapping = self
-            .route
-            .method
-            .spring_cloud()
-            .expect("Spring route always has Spring metadata");
+    ) -> Result<Arguments, Error> {
+        let mapping = self.route.method.http_operation();
         let mut query_values: HashMap<String, Vec<String>> = HashMap::new();
         for (index, (name, value)) in
             url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()).enumerate()
         {
             if index >= max_query_pairs {
-                return Err(RpcError::framework(
-                    RpcCategory::InvalidArgument,
+                return Err(Error::framework(
+                    ErrorCategory::InvalidArgument,
                     "too_many_query_pairs",
                     "request query contains too many pairs",
                 ));
@@ -224,24 +162,37 @@ impl MatchedRoute {
                 .or_default()
                 .push(value.into_owned());
         }
-        let mut arguments = RpcArguments::new();
+        let cookies = parse_cookies(headers)?;
+        let explicit_query = mapping
+            .parameters()
+            .iter()
+            .filter(|parameter| parameter.source() == HttpParameterSource::Query)
+            .map(|parameter| parameter.name())
+            .collect::<std::collections::HashSet<_>>();
+        let explicit_headers = mapping
+            .parameters()
+            .iter()
+            .filter(|parameter| parameter.source() == HttpParameterSource::Header)
+            .map(|parameter| parameter.name().to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        let mut arguments = Arguments::new();
         for parameter in mapping.parameters() {
             let value = match parameter.source() {
-                SpringCloudParameterSource::Path => self
+                HttpParameterSource::Path => self
                     .path_arguments
                     .get(parameter.name())
                     .cloned()
                     .map(Value::String)
                     .unwrap_or(Value::Null),
-                SpringCloudParameterSource::Query => {
+                HttpParameterSource::Query => {
                     let values = query_values.remove(parameter.name()).unwrap_or_default();
                     match parameter.cardinality() {
-                        SpringCloudParameterCardinality::Scalar => match values.as_slice() {
+                        HttpParameterCardinality::Scalar => match values.as_slice() {
                             [] => Value::Null,
                             [value] => Value::String(value.clone()),
                             _ => {
-                                return Err(RpcError::framework(
-                                    RpcCategory::InvalidArgument,
+                                return Err(Error::framework(
+                                    ErrorCategory::InvalidArgument,
                                     "duplicate_query_parameter",
                                     format!(
                                         "scalar query parameter {} must appear at most once",
@@ -250,37 +201,49 @@ impl MatchedRoute {
                                 ));
                             }
                         },
-                        SpringCloudParameterCardinality::Repeated => {
+                        HttpParameterCardinality::Repeated => {
                             Value::Array(values.into_iter().map(Value::String).collect())
                         }
                         _ => {
-                            return Err(RpcError::framework(
-                                RpcCategory::Unimplemented,
-                                "unsupported_spring_parameter_cardinality",
-                                "SpringCloudV1 parameter cardinality is not supported",
+                            return Err(Error::framework(
+                                ErrorCategory::Unimplemented,
+                                "unsupported_http_parameter_cardinality",
+                                "HTTP parameter cardinality is not supported",
                             ));
                         }
                     }
                 }
-                SpringCloudParameterSource::BodyField => match body.as_ref() {
+                HttpParameterSource::Header => header_value(headers, parameter.name())?,
+                HttpParameterSource::Cookie => cookies
+                    .get(parameter.name())
+                    .cloned()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+                HttpParameterSource::BodyField => match body.as_ref() {
                     Some(Value::Object(fields)) => {
                         fields.get(parameter.name()).cloned().unwrap_or(Value::Null)
                     }
                     Some(_) => {
-                        return Err(RpcError::framework(
-                            RpcCategory::InvalidArgument,
+                        return Err(Error::framework(
+                            ErrorCategory::InvalidArgument,
                             "invalid_json_body",
                             "request body must be a JSON object",
                         ));
                     }
                     None => Value::Null,
                 },
-                SpringCloudParameterSource::Body => body.clone().unwrap_or(Value::Null),
+                HttpParameterSource::Body => body.clone().unwrap_or(Value::Null),
+                HttpParameterSource::QueryMap => {
+                    Value::Object(query_map(&query_values, &explicit_query))
+                }
+                HttpParameterSource::HeaderMap => {
+                    Value::Object(header_map(headers, &explicit_headers)?)
+                }
                 _ => {
-                    return Err(RpcError::framework(
-                        RpcCategory::Unimplemented,
-                        "unsupported_spring_parameter_source",
-                        "SpringCloudV1 parameter source is not supported",
+                    return Err(Error::framework(
+                        ErrorCategory::Unimplemented,
+                        "unsupported_http_parameter_source",
+                        "HTTP parameter source is not supported",
                     ));
                 }
             };
@@ -289,29 +252,137 @@ impl MatchedRoute {
         Ok(arguments)
     }
 
-    pub(crate) fn spring_has_body(&self) -> bool {
-        self.route.method.spring_cloud().is_some_and(|mapping| {
-            mapping.parameters().iter().any(|parameter| {
+    pub(crate) fn has_body(&self) -> bool {
+        self.route
+            .method
+            .http_operation()
+            .parameters()
+            .iter()
+            .any(|parameter| {
                 matches!(
                     parameter.source(),
-                    SpringCloudParameterSource::Body | SpringCloudParameterSource::BodyField
+                    HttpParameterSource::Body | HttpParameterSource::BodyField
+                )
+            })
+    }
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Result<Value, Error> {
+    let values = headers
+        .get_all(name)
+        .iter()
+        .map(|value| {
+            value.to_str().map(str::to_owned).map_err(|_| {
+                Error::framework(
+                    ErrorCategory::InvalidArgument,
+                    "invalid_header_parameter",
+                    format!("HTTP header parameter {name} is not valid text"),
                 )
             })
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    match values.as_slice() {
+        [] => Ok(Value::Null),
+        [value] => Ok(Value::String(value.clone())),
+        _ => Err(Error::framework(
+            ErrorCategory::InvalidArgument,
+            "duplicate_header_parameter",
+            format!("scalar HTTP header parameter {name} must appear at most once"),
+        )),
     }
+}
+
+fn parse_cookies(headers: &HeaderMap) -> Result<HashMap<String, String>, Error> {
+    let mut cookies = HashMap::new();
+    for header in headers.get_all(COOKIE) {
+        let value = header.to_str().map_err(|_| {
+            Error::framework(
+                ErrorCategory::InvalidArgument,
+                "invalid_cookie_header",
+                "Cookie header is not valid text",
+            )
+        })?;
+        for pair in value.split(';') {
+            let Some((name, value)) = pair.trim().split_once('=') else {
+                return Err(Error::framework(
+                    ErrorCategory::InvalidArgument,
+                    "invalid_cookie_header",
+                    "Cookie header contains an invalid pair",
+                ));
+            };
+            if cookies.insert(name.to_owned(), value.to_owned()).is_some() {
+                return Err(Error::framework(
+                    ErrorCategory::InvalidArgument,
+                    "duplicate_cookie_parameter",
+                    format!("cookie {name} must appear at most once"),
+                ));
+            }
+        }
+    }
+    Ok(cookies)
+}
+
+fn query_map(
+    values: &HashMap<String, Vec<String>>,
+    explicit: &std::collections::HashSet<&str>,
+) -> Map<String, Value> {
+    values
+        .iter()
+        .filter(|(name, _)| !explicit.contains(name.as_str()))
+        .map(|(name, values)| {
+            let value = match values.as_slice() {
+                [value] => Value::String(value.clone()),
+                values => Value::Array(values.iter().cloned().map(Value::String).collect()),
+            };
+            (name.clone(), value)
+        })
+        .collect()
+}
+
+fn header_map(
+    headers: &HeaderMap,
+    explicit: &std::collections::HashSet<String>,
+) -> Result<Map<String, Value>, Error> {
+    let mut values: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, value) in headers {
+        if explicit.contains(name.as_str()) || name == COOKIE {
+            continue;
+        }
+        let value = value.to_str().map_err(|_| {
+            Error::framework(
+                ErrorCategory::InvalidArgument,
+                "invalid_header_map",
+                "header_map contains a non-text header value",
+            )
+        })?;
+        values
+            .entry(name.as_str().to_owned())
+            .or_default()
+            .push(value.to_owned());
+    }
+    Ok(values
+        .into_iter()
+        .map(|(name, values)| {
+            let value = match values.as_slice() {
+                [value] => Value::String(value.clone()),
+                values => Value::Array(values.iter().cloned().map(Value::String).collect()),
+            };
+            (name, value)
+        })
+        .collect())
 }
 
 pub(crate) fn validate_query_pairs(
     query: Option<&str>,
     max_query_pairs: usize,
-) -> Result<(), RpcError> {
+) -> Result<(), Error> {
     if url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
         .take(max_query_pairs.saturating_add(1))
         .count()
         > max_query_pairs
     {
-        Err(RpcError::framework(
-            RpcCategory::InvalidArgument,
+        Err(Error::framework(
+            ErrorCategory::InvalidArgument,
             "too_many_query_pairs",
             "request query contains too many pairs",
         ))
@@ -333,8 +404,7 @@ fn parse_template(path: &str) -> Result<Vec<Segment>, String> {
                         urlencoding::decode(segment)
                             .map(|value| Segment::Literal(value.into_owned()))
                             .map_err(|_| {
-                                "validated SpringCloudV1 route contains invalid percent encoding"
-                                    .to_owned()
+                                "validated HTTP route contains invalid percent encoding".to_owned()
                             })
                     },
                     |name| Ok(Segment::Parameter(name.to_owned())),
@@ -343,7 +413,7 @@ fn parse_template(path: &str) -> Result<Vec<Segment>, String> {
         .collect()
 }
 
-fn split_path(path: &str) -> Result<Vec<String>, RpcError> {
+fn split_path(path: &str) -> Result<Vec<String>, Error> {
     if path != "/" && (path.ends_with('/') || path.contains("//")) {
         return Err(not_found());
     }
@@ -354,8 +424,8 @@ fn split_path(path: &str) -> Result<Vec<String>, RpcError> {
             urlencoding::decode(segment)
                 .map(|value| value.into_owned())
                 .map_err(|_| {
-                    RpcError::framework(
-                        RpcCategory::InvalidArgument,
+                    Error::framework(
+                        ErrorCategory::InvalidArgument,
                         "invalid_path_encoding",
                         "request path contains invalid percent encoding",
                     )
@@ -364,78 +434,55 @@ fn split_path(path: &str) -> Result<Vec<String>, RpcError> {
         .collect()
 }
 
-fn single_header(headers: &HeaderMap, name: &http::HeaderName) -> Result<Option<String>, RpcError> {
-    let mut values = headers.get_all(name).iter();
-    let value = values.next();
-    if values.next().is_some() {
-        return Err(RpcError::framework(
-            RpcCategory::InvalidArgument,
-            "duplicate_service_header",
-            format!("service identity header {name} must appear at most once"),
-        ));
-    }
-    value
-        .map(|value| {
-            value.to_str().map(str::to_owned).map_err(|_| {
-                RpcError::framework(
-                    RpcCategory::InvalidArgument,
-                    "invalid_service_header",
-                    format!("service identity header {name} is invalid"),
-                )
-            })
-        })
-        .transpose()
-}
-
-fn not_found() -> RpcError {
-    RpcError::framework(
-        RpcCategory::NotFound,
+fn not_found() -> Error {
+    Error::framework(
+        ErrorCategory::NotFound,
         "route_not_found",
-        "RPC route was not found",
+        "service invocation route was not found",
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MiddlewareFuture, service::ServerInvocation};
+    use crate::{InterceptorFuture, service::ServerInvocation};
     use fusen_contract::{
-        MethodId, ServiceSelector, SpringCloudMethod, SpringCloudParameter,
-        SpringCloudParameterCardinality,
+        HttpOperation, HttpParameter, HttpParameterCardinality, HttpParameterSource, MethodId,
+        ServiceSelector,
     };
 
     struct UnusedDispatch;
 
     impl ErasedDispatch for UnusedDispatch {
-        fn call<'a>(&'a self, _invocation: ServerInvocation) -> MiddlewareFuture<'a> {
+        fn call<'a>(&'a self, _invocation: ServerInvocation) -> InterceptorFuture<'a> {
             Box::pin(async { unreachable!("route matching tests never dispatch") })
         }
     }
 
-    fn spring_route(service_id: &str, method: Method, path: &str) -> Route {
+    fn http_route(service_id: &str, method: Method, path: &str) -> Route {
         let parameters = parse_template(path)
             .expect("test route is valid")
             .into_iter()
             .filter_map(|segment| match segment {
                 Segment::Literal(_) => None,
                 Segment::Parameter(name) => Some(
-                    SpringCloudParameter::new(
+                    HttpParameter::new(
                         name,
-                        SpringCloudParameterSource::Path,
-                        SpringCloudParameterCardinality::Scalar,
+                        HttpParameterSource::Path,
+                        HttpParameterCardinality::Scalar,
                     )
                     .unwrap(),
                 ),
             })
             .collect();
-        spring_route_with_parameters(service_id, method, path, parameters)
+        http_route_with_parameters(service_id, method, path, parameters)
     }
 
-    fn spring_route_with_parameters(
+    fn http_route_with_parameters(
         service_id: &str,
         method: Method,
         path: &str,
-        parameters: Vec<SpringCloudParameter>,
+        parameters: Vec<HttpParameter>,
     ) -> Route {
         let descriptor: &'static ServiceDescriptor = Box::leak(Box::new(
             ServiceDescriptor::new(
@@ -444,7 +491,14 @@ mod tests {
                     MethodDescriptor::new(
                         MethodId::new(0),
                         service_id,
-                        Some(SpringCloudMethod::new(method, path, parameters).unwrap()),
+                        HttpOperation::new(
+                            method,
+                            path,
+                            parameters,
+                            "application/json",
+                            "application/json",
+                        )
+                        .unwrap(),
                     )
                     .unwrap(),
                 ],
@@ -452,24 +506,23 @@ mod tests {
             .unwrap(),
         ));
         Route {
-            protocol: WireProtocol::SpringCloudV1,
             service: descriptor,
             method: &descriptor.methods()[0],
             dispatch: Arc::new(UnusedDispatch),
-            head_middleware: Arc::from(Vec::<Arc<dyn Middleware>>::new()),
-            middleware: Arc::from(Vec::<Arc<dyn Middleware>>::new()),
+            head_interceptor: Arc::from(Vec::<Arc<dyn Interceptor>>::new()),
+            interceptor: Arc::from(Vec::<Arc<dyn Interceptor>>::new()),
         }
     }
 
     #[test]
-    fn spring_routes_use_per_segment_precedence_independent_of_insertion_order() {
+    fn http_routes_use_per_segment_precedence_independent_of_insertion_order() {
         for parameter_first in [false, true] {
-            let literal_prefix = spring_route(
+            let literal_prefix = http_route(
                 "literal-prefix",
                 Method::GET,
                 "/files/special/{kind}/{value}",
             );
-            let more_total_literals = spring_route(
+            let more_total_literals = http_route(
                 "more-total-literals",
                 Method::GET,
                 "/files/{id}/details/static",
@@ -482,9 +535,9 @@ mod tests {
             let table = RouteTable::build(routes).unwrap();
 
             let matched = table
-                .match_spring(&Method::GET, "/files/special/details/static")
+                .match_http(&Method::GET, "/files/special/details/static")
                 .unwrap();
-            assert_eq!(matched.route.method.fusen_identity(), "literal-prefix");
+            assert_eq!(matched.route.method.invocation_name(), "literal-prefix");
             assert_eq!(
                 matched.path_arguments.get("kind").map(String::as_str),
                 Some("details")
@@ -497,17 +550,17 @@ mod tests {
     }
 
     #[test]
-    fn spring_routes_fall_back_to_a_parameter_after_a_literal_dead_end() {
+    fn http_routes_fall_back_to_a_parameter_after_a_literal_dead_end() {
         let table = RouteTable::build(vec![
-            spring_route("literal-dead-end", Method::GET, "/catalog/special/details"),
-            spring_route("parameter-fallback", Method::GET, "/catalog/{id}/summary"),
+            http_route("literal-dead-end", Method::GET, "/catalog/special/details"),
+            http_route("parameter-fallback", Method::GET, "/catalog/{id}/summary"),
         ])
         .unwrap();
 
         let matched = table
-            .match_spring(&Method::GET, "/catalog/special/summary")
+            .match_http(&Method::GET, "/catalog/special/summary")
             .unwrap();
-        assert_eq!(matched.route.method.fusen_identity(), "parameter-fallback");
+        assert_eq!(matched.route.method.invocation_name(), "parameter-fallback");
         assert_eq!(
             matched.path_arguments.get("id").map(String::as_str),
             Some("special")
@@ -515,25 +568,25 @@ mod tests {
     }
 
     #[test]
-    fn spring_routes_match_decoded_literal_and_parameter_segments() {
+    fn http_routes_match_decoded_literal_and_parameter_segments() {
         let table = RouteTable::build(vec![
-            spring_route("encoded-literal", Method::GET, "/encoded/special"),
-            spring_route("unicode-literal", Method::GET, "/encoded/%E7%94%A8"),
-            spring_route("encoded-parameter", Method::GET, "/encoded/{value}"),
+            http_route("encoded-literal", Method::GET, "/encoded/special"),
+            http_route("unicode-literal", Method::GET, "/encoded/%E7%94%A8"),
+            http_route("encoded-parameter", Method::GET, "/encoded/{value}"),
         ])
         .unwrap();
 
         let literal = table
-            .match_spring(&Method::GET, "/encoded/%73pecial")
+            .match_http(&Method::GET, "/encoded/%73pecial")
             .unwrap();
-        assert_eq!(literal.route.method.fusen_identity(), "encoded-literal");
+        assert_eq!(literal.route.method.invocation_name(), "encoded-literal");
 
         let unicode = table
-            .match_spring(&Method::GET, "/encoded/%E7%94%A8")
+            .match_http(&Method::GET, "/encoded/%E7%94%A8")
             .unwrap();
-        assert_eq!(unicode.route.method.fusen_identity(), "unicode-literal");
+        assert_eq!(unicode.route.method.invocation_name(), "unicode-literal");
 
-        let parameter = table.match_spring(&Method::GET, "/encoded/a%2Fb").unwrap();
+        let parameter = table.match_http(&Method::GET, "/encoded/a%2Fb").unwrap();
         assert_eq!(
             parameter.path_arguments.get("value").map(String::as_str),
             Some("a/b")
@@ -541,112 +594,164 @@ mod tests {
     }
 
     #[test]
-    fn spring_routes_reject_equivalent_dynamic_shapes_across_services() {
+    fn http_routes_reject_equivalent_dynamic_shapes_across_services() {
         let result = RouteTable::build(vec![
-            spring_route("route-by-id", Method::GET, "/users/{id}"),
-            spring_route("route-by-name", Method::GET, "/users/{name}"),
+            http_route("route-by-id", Method::GET, "/users/{id}"),
+            http_route("route-by-name", Method::GET, "/users/{name}"),
         ]);
 
         let error = match result {
             Ok(_) => panic!("equivalent dynamic route shapes must be rejected"),
             Err(error) => error,
         };
-        assert!(error.contains("duplicate or ambiguous SpringCloudV1 route GET /users/{name}"));
+        assert!(error.contains("duplicate or ambiguous HTTP route GET /users/{name}"));
     }
 
     #[test]
-    fn spring_route_tries_are_isolated_by_http_method() {
+    fn http_route_tries_are_isolated_by_http_method() {
         let table = RouteTable::build(vec![
-            spring_route("get-route", Method::GET, "/method/{id}"),
-            spring_route("post-route", Method::POST, "/method/{name}"),
+            http_route("get-route", Method::GET, "/method/{id}"),
+            http_route("post-route", Method::POST, "/method/{name}"),
         ])
         .unwrap();
 
-        let get = table.match_spring(&Method::GET, "/method/value").unwrap();
-        let post = table.match_spring(&Method::POST, "/method/value").unwrap();
-        assert_eq!(get.route.method.fusen_identity(), "get-route");
-        assert_eq!(post.route.method.fusen_identity(), "post-route");
+        let get = table.match_http(&Method::GET, "/method/value").unwrap();
+        let post = table.match_http(&Method::POST, "/method/value").unwrap();
+        assert_eq!(get.route.method.invocation_name(), "get-route");
+        assert_eq!(post.route.method.invocation_name(), "post-route");
     }
 
     #[test]
-    fn fusen_routes_remain_exact() {
-        let mut route = spring_route("fusen-exact", Method::GET, "/unused");
-        route.protocol = WireProtocol::FusenV1;
-        let table = RouteTable::build(vec![route]).unwrap();
-
-        let matched = table
-            .match_fusen("/_fusen/v1/fusen-exact/fusen-exact", &HeaderMap::new())
-            .unwrap();
-        assert_eq!(matched.route.method.fusen_identity(), "fusen-exact");
-        assert!(
-            table
-                .match_fusen("/_fusen/v1/fusen-exact/missing", &HeaderMap::new())
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn spring_query_cardinality_has_stable_missing_single_and_duplicate_semantics() {
-        let route = spring_route_with_parameters(
+    fn http_query_cardinality_has_stable_missing_single_and_duplicate_semantics() {
+        let route = http_route_with_parameters(
             "query-cardinality",
             Method::GET,
             "/query",
             vec![
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "enabled",
-                    SpringCloudParameterSource::Query,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Query,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "tag",
-                    SpringCloudParameterSource::Query,
-                    SpringCloudParameterCardinality::Repeated,
+                    HttpParameterSource::Query,
+                    HttpParameterCardinality::Repeated,
                 )
                 .unwrap(),
             ],
         );
         let table = RouteTable::build(vec![route]).unwrap();
-        let matched = table.match_spring(&Method::GET, "/query").unwrap();
+        let matched = table.match_http(&Method::GET, "/query").unwrap();
 
-        let missing = matched.spring_arguments(None, None, 8).unwrap();
+        let missing = matched
+            .http_arguments(None, &HeaderMap::new(), None, 8)
+            .unwrap();
         assert_eq!(missing.get("enabled"), Some(&Value::Null));
         assert_eq!(missing.get("tag"), Some(&Value::Array(Vec::new())));
 
         let present = matched
-            .spring_arguments(Some("enabled=true&tag=one&tag=two"), None, 8)
+            .http_arguments(
+                Some("enabled=true&tag=one&tag=two"),
+                &HeaderMap::new(),
+                None,
+                8,
+            )
             .unwrap();
         assert_eq!(present.get("enabled"), Some(&Value::String("true".into())));
         assert_eq!(present.get("tag"), Some(&serde_json::json!(["one", "two"])));
 
         let duplicate = matched
-            .spring_arguments(Some("enabled=true&enabled=false"), None, 8)
+            .http_arguments(
+                Some("enabled=true&enabled=false"),
+                &HeaderMap::new(),
+                None,
+                8,
+            )
             .unwrap_err();
-        assert_eq!(duplicate.category(), RpcCategory::InvalidArgument);
+        assert_eq!(duplicate.category(), ErrorCategory::InvalidArgument);
         assert_eq!(duplicate.code().as_str(), "duplicate_query_parameter");
     }
 
     #[test]
-    fn spring_body_fields_are_extracted_from_one_json_object() {
+    fn parameter_maps_restore_unclaimed_query_and_header_values() {
+        let route = http_route_with_parameters(
+            "parameter-maps",
+            Method::GET,
+            "/maps",
+            vec![
+                HttpParameter::new(
+                    "page",
+                    HttpParameterSource::Query,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                HttpParameter::new(
+                    "query",
+                    HttpParameterSource::QueryMap,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                HttpParameter::new(
+                    "x-tenant",
+                    HttpParameterSource::Header,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                HttpParameter::new(
+                    "headers",
+                    HttpParameterSource::HeaderMap,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+            ],
+        );
+        let table = RouteTable::build(vec![route]).unwrap();
+        let matched = table.match_http(&Method::GET, "/maps").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tenant", "acme".parse().unwrap());
+        headers.append("x-feature", "one".parse().unwrap());
+        headers.append("x-feature", "two".parse().unwrap());
+        headers.insert(COOKIE, "session=private".parse().unwrap());
+
+        let arguments = matched
+            .http_arguments(Some("page=1&tag=one&tag=two"), &headers, None, 8)
+            .unwrap();
+        assert_eq!(arguments.get("page"), Some(&serde_json::json!("1")));
+        assert_eq!(
+            arguments.get("query"),
+            Some(&serde_json::json!({"tag": ["one", "two"]}))
+        );
+        assert_eq!(arguments.get("x-tenant"), Some(&serde_json::json!("acme")));
+        assert_eq!(
+            arguments.get("headers"),
+            Some(&serde_json::json!({"x-feature": ["one", "two"]}))
+        );
+    }
+
+    #[test]
+    fn http_body_fields_are_extracted_from_one_json_object() {
         let parameters = ["name", "audit"]
             .into_iter()
             .map(|name| {
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     name,
-                    SpringCloudParameterSource::BodyField,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::BodyField,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap()
             })
             .collect();
-        let route = spring_route_with_parameters("body-fields", Method::POST, "/users", parameters);
+        let route = http_route_with_parameters("body-fields", Method::POST, "/users", parameters);
         let table = RouteTable::build(vec![route]).unwrap();
-        let matched = table.match_spring(&Method::POST, "/users").unwrap();
-        assert!(matched.spring_has_body());
+        let matched = table.match_http(&Method::POST, "/users").unwrap();
+        assert!(matched.has_body());
 
         let arguments = matched
-            .spring_arguments(
+            .http_arguments(
                 None,
+                &HeaderMap::new(),
                 Some(serde_json::json!({"name": "Ada", "audit": true})),
                 0,
             )
@@ -655,7 +760,12 @@ mod tests {
         assert_eq!(arguments.get("audit"), Some(&serde_json::json!(true)));
 
         let error = matched
-            .spring_arguments(None, Some(serde_json::json!(["not", "an", "object"])), 0)
+            .http_arguments(
+                None,
+                &HeaderMap::new(),
+                Some(serde_json::json!(["not", "an", "object"])),
+                0,
+            )
             .unwrap_err();
         assert_eq!(error.code().as_str(), "invalid_json_body");
     }

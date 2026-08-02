@@ -3,5 +3,5 @@ error: #[param(context)] parameters cannot declare sensitivity metadata
    |
 12 | /         #[param(context)]
 13 | |         #[sensitive(kind = "identifier")]
-14 | |         call: RpcCall,
-   | |_____________________^
+14 | |         call: Call,
+   | |__________________^

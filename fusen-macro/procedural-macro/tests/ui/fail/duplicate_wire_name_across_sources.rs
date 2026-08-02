@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "duplicate-wire-name")]
 trait DuplicateWireNameAcrossSources {
@@ -10,7 +10,7 @@ trait DuplicateWireNameAcrossSources {
         &self,
         #[param(path, name = "user_id")] path_user_id: String,
         #[param(query, name = "user_id")] query_user_id: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

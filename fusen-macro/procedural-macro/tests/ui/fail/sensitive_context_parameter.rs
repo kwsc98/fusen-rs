@@ -1,8 +1,8 @@
 use fusen_procedural_macro::interface;
 
-struct RpcCall;
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Call;
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "sensitive-context")]
 trait SensitiveContext {
@@ -11,8 +11,8 @@ trait SensitiveContext {
         &self,
         #[param(context)]
         #[sensitive(kind = "identifier")]
-        call: RpcCall,
-    ) -> Result<RpcResponse<()>, RpcError>;
+        call: Call,
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

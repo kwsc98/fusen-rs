@@ -7,7 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-rpc = { package = "fusen-rs", path = "../../../fusen", version = "0.9.0" }
+runtime = { package = "fusen-rs", path = "../../../fusen", version = "0.9.0" }
 serde.workspace = true
 
 [dev-dependencies]

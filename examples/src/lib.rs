@@ -1,9 +1,9 @@
 //! Shared clean-slate interface contracts and DTOs used by every example binary.
 
-use fusen_rs::{RpcResponse, SensitiveFields, interface};
+use fusen_rs::{Response, SensitiveFields, interface};
 use serde::{Deserialize, Serialize};
-/// Reusable middleware and extension examples.
-pub mod middleware;
+/// Reusable runtime extension examples.
+pub mod extensions;
 /// Interface implementations shared by direct and registry-backed servers.
 pub mod service;
 
@@ -21,23 +21,23 @@ pub struct ResponseDto {
     pub str: String,
 }
 
-/// Primary demonstration interface available through both versioned wire protocols.
+/// Primary demonstration interface exposed through the `http-json-v1` binding.
 #[interface(name = "demo")]
 pub trait DemoService {
     /// Returns a static greeting.
     #[fusen_rs::method(method = "GET", path = "/hello/v4")]
-    async fn say_hello_v4(&self) -> Result<RpcResponse<String>, fusen_rs::RpcError>;
+    async fn say_hello_v4(&self) -> Result<Response<String>, fusen_rs::Error>;
 
     /// Greets one caller by name.
     #[fusen_rs::method(method = "GET", path = "/hello/{name}")]
-    async fn say_hello(&self, name: String) -> Result<RpcResponse<String>, fusen_rs::RpcError>;
+    async fn say_hello(&self, name: String) -> Result<Response<String>, fusen_rs::Error>;
 
     /// Demonstrates a JSON request and response body.
     #[fusen_rs::method(method = "POST", path = "/hello/v2")]
     async fn say_hello_v2(
         &self,
         #[param(body)] request: RequestDto,
-    ) -> Result<RpcResponse<ResponseDto>, fusen_rs::RpcError>;
+    ) -> Result<Response<ResponseDto>, fusen_rs::Error>;
 
     /// Divides two integers or returns a typed invalid-argument error.
     #[fusen_rs::method(method = "GET", path = "/divide")]
@@ -45,7 +45,7 @@ pub trait DemoService {
         &self,
         #[param(query)] a: i32,
         #[param(query)] b: i32,
-    ) -> Result<RpcResponse<String>, fusen_rs::RpcError>;
+    ) -> Result<Response<String>, fusen_rs::Error>;
 }
 
 /// Versioned secondary interface used to demonstrate discovery identities.
@@ -56,5 +56,5 @@ pub trait DemoServiceV2 {
     async fn say_hello_v3(
         &self,
         #[param(body)] request: RequestDto,
-    ) -> Result<RpcResponse<ResponseDto>, fusen_rs::RpcError>;
+    ) -> Result<Response<ResponseDto>, fusen_rs::Error>;
 }

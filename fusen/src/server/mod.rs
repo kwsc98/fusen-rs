@@ -4,8 +4,8 @@ mod routes;
 mod transport;
 
 use crate::{
-    Middleware, ServerError, ServerErrorKind,
-    middleware::erase_middleware,
+    Interceptor, ServerError, ServerErrorKind,
+    interceptor::erase_interceptor,
     runtime::metrics::SafeMetrics,
     server::{
         http::{HttpApp, HttpAppConfig},
@@ -15,8 +15,8 @@ use crate::{
     service::{IntoServerService, PreparedService},
 };
 use fusen_contract::{
-    InstanceId, ProtocolSet, ServiceDescriptor, ServiceEndpoint, ServiceRegistration,
-    ServiceWeight, WireProtocol,
+    ContractError, InstanceId, ServiceDescriptor, ServiceEndpoint, ServiceRegistration,
+    ServiceWeight,
 };
 use fusen_observability::{
     MetricEvent, MetricOutcome, MetricsRecorder, RegistryOperationEvent, ShutdownFinishedEvent,
@@ -25,7 +25,7 @@ use fusen_register::{RegistrationHandle, RegistrationRequest, Registry};
 use futures_util::{StreamExt, future::join_all, stream};
 use std::{
     collections::HashSet,
-    net::SocketAddr,
+    net::{AddrParseError, SocketAddr},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
@@ -61,7 +61,7 @@ pub enum ServerState {
     AcceptingNotReady,
     /// Registration handles are activating.
     Registering,
-    /// The server accepts RPC work.
+    /// The server accepts service invocation work.
     Ready,
     /// Admission and the listener are closed while existing work drains.
     Draining,
@@ -127,12 +127,12 @@ pub struct Server {
 
 /// Builder for a clean-slate [`Server`].
 pub struct ServerBuilder {
-    address: Result<SocketAddr, String>,
-    advertised_endpoint: Option<Result<ServiceEndpoint, String>>,
+    address: Result<SocketAddr, AddrParseError>,
+    advertised_endpoint: Option<Result<ServiceEndpoint, ContractError>>,
     config: ServerConfig,
     registries: Vec<NamedRegistry>,
-    head_middleware: Vec<Arc<dyn Middleware>>,
-    middleware: Vec<Arc<dyn Middleware>>,
+    head_interceptor: Vec<Arc<dyn Interceptor>>,
+    interceptor: Vec<Arc<dyn Interceptor>>,
     services: Vec<PreparedService>,
     metrics: Option<Arc<dyn MetricsRecorder>>,
 }
@@ -141,15 +141,12 @@ impl Server {
     /// Creates a server builder for an IPv4 or IPv6 socket address.
     pub fn builder(address: impl AsRef<str>) -> ServerBuilder {
         ServerBuilder {
-            address: address
-                .as_ref()
-                .parse::<SocketAddr>()
-                .map_err(|error| error.to_string()),
+            address: address.as_ref().parse::<SocketAddr>(),
             advertised_endpoint: None,
             config: ServerConfig::default(),
             registries: Vec::new(),
-            head_middleware: Vec::new(),
-            middleware: Vec::new(),
+            head_interceptor: Vec::new(),
+            interceptor: Vec::new(),
             services: Vec::new(),
             metrics: None,
         }
@@ -210,7 +207,8 @@ impl Server {
             self.routes,
             readiness.clone(),
             HttpAppConfig {
-                protocols: self.config.protocols(),
+                http_versions: self.config.capabilities().http_versions(),
+                invocation_controls: self.config.capabilities().invocation_controls(),
                 request_timeout: request.timeout(),
                 max_uri_bytes: http_config.max_uri_bytes(),
                 max_query_pairs: http_config.max_query_pairs(),
@@ -285,12 +283,7 @@ impl ServerBuilder {
     ///
     /// HTTPS describes an external TLS terminator and does not enable TLS on the local listener.
     pub fn advertised_endpoint(mut self, endpoint: impl AsRef<str>) -> Self {
-        self.advertised_endpoint = Some(
-            endpoint
-                .as_ref()
-                .parse::<ServiceEndpoint>()
-                .map_err(|error| error.to_string()),
-        );
+        self.advertised_endpoint = Some(endpoint.as_ref().parse::<ServiceEndpoint>());
         self
     }
 
@@ -306,15 +299,15 @@ impl ServerBuilder {
         self
     }
 
-    /// Appends global server middleware in execution order.
-    pub fn middleware(mut self, middleware: impl Middleware) -> Self {
-        self.middleware.push(erase_middleware(middleware));
+    /// Appends global server interceptor in execution order.
+    pub fn interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.interceptor.push(erase_interceptor(interceptor));
         self
     }
 
-    /// Appends global middleware that runs before an accepted request body is polled.
-    pub fn head_middleware(mut self, middleware: impl Middleware) -> Self {
-        self.head_middleware.push(erase_middleware(middleware));
+    /// Appends global interceptor that runs before an accepted request body is polled.
+    pub fn head_interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.head_interceptor.push(erase_interceptor(interceptor));
         self
     }
 
@@ -333,15 +326,19 @@ impl ServerBuilder {
     /// Validates routes, resources, and extension identities without performing network I/O.
     pub fn build(self) -> Result<Server, ServerError> {
         let address = self.address.map_err(|error| {
-            ServerError::message(
+            ServerError::with_source(
                 ServerErrorKind::Validation,
-                format!("invalid server socket address: {error}"),
+                "invalid server socket address",
+                error,
             )
         })?;
-        let advertised_endpoint = self
-            .advertised_endpoint
-            .transpose()
-            .map_err(|error| ServerError::message(ServerErrorKind::Validation, error))?;
+        let advertised_endpoint = self.advertised_endpoint.transpose().map_err(|error| {
+            ServerError::with_source(
+                ServerErrorKind::Validation,
+                "invalid advertised service endpoint",
+                error,
+            )
+        })?;
         self.config.validate().map_err(|error| {
             ServerError::with_source(
                 ServerErrorKind::Validation,
@@ -351,7 +348,7 @@ impl ServerBuilder {
         })?;
         validate_registry_names(&self.registries)?;
         if self.services.is_empty() {
-            return Err(ServerError::message(
+            return Err(ServerError::from_message(
                 ServerErrorKind::Validation,
                 "server must contain at least one service",
             ));
@@ -361,63 +358,47 @@ impl ServerBuilder {
         let mut descriptor_list = Vec::new();
         for prepared in self.services {
             let descriptor = prepared.descriptor().map_err(|reason| {
-                ServerError::message(
+                ServerError::from_message(
                     ServerErrorKind::Validation,
                     format!("invalid interface schema: {reason}"),
                 )
             })?;
             if !descriptors.insert(descriptor.identity()) {
-                return Err(ServerError::message(
+                return Err(ServerError::from_message(
                     ServerErrorKind::Validation,
                     format!("duplicate service identity {}", descriptor.identity()),
                 ));
             }
-            if !self
-                .config
-                .protocols()
-                .is_subset_of(descriptor.supported_protocols())
-            {
-                return Err(ServerError::message(
-                    ServerErrorKind::Validation,
-                    format!(
-                        "service {} does not implement every enabled wire protocol",
-                        descriptor.identity()
-                    ),
-                ));
-            }
-            let mut middleware = Vec::with_capacity(
-                self.middleware
+            let mut interceptor = Vec::with_capacity(
+                self.interceptor
                     .len()
-                    .saturating_add(prepared.middleware.len()),
+                    .saturating_add(prepared.interceptor.len()),
             );
-            middleware.extend(self.middleware.iter().cloned());
-            middleware.extend(prepared.middleware.iter().cloned());
-            let middleware: Arc<[Arc<dyn Middleware>]> = Arc::from(middleware);
-            let mut head_middleware = Vec::with_capacity(
-                self.head_middleware
+            interceptor.extend(self.interceptor.iter().cloned());
+            interceptor.extend(prepared.interceptor.iter().cloned());
+            let interceptor: Arc<[Arc<dyn Interceptor>]> = Arc::from(interceptor);
+            let mut head_interceptor = Vec::with_capacity(
+                self.head_interceptor
                     .len()
-                    .saturating_add(prepared.head_middleware.len()),
+                    .saturating_add(prepared.head_interceptor.len()),
             );
-            head_middleware.extend(self.head_middleware.iter().cloned());
-            head_middleware.extend(prepared.head_middleware.iter().cloned());
-            let head_middleware: Arc<[Arc<dyn Middleware>]> = Arc::from(head_middleware);
-            for protocol in self.config.protocols().iter() {
-                for method in descriptor.methods() {
-                    routes.push(Route {
-                        protocol,
-                        service: descriptor,
-                        method,
-                        dispatch: prepared.dispatch.clone(),
-                        head_middleware: head_middleware.clone(),
-                        middleware: middleware.clone(),
-                    });
-                }
+            head_interceptor.extend(self.head_interceptor.iter().cloned());
+            head_interceptor.extend(prepared.head_interceptor.iter().cloned());
+            let head_interceptor: Arc<[Arc<dyn Interceptor>]> = Arc::from(head_interceptor);
+            for method in descriptor.methods() {
+                routes.push(Route {
+                    service: descriptor,
+                    method,
+                    dispatch: prepared.dispatch.clone(),
+                    head_interceptor: head_interceptor.clone(),
+                    interceptor: interceptor.clone(),
+                });
             }
             descriptor_list.push(descriptor);
         }
         descriptor_list.sort_by(|left, right| left.identity().cmp(right.identity()));
         let routes = RouteTable::build(routes)
-            .map_err(|error| ServerError::message(ServerErrorKind::Validation, error))?;
+            .map_err(|error| ServerError::from_message(ServerErrorKind::Validation, error))?;
         Ok(Server {
             address,
             advertised_endpoint,
@@ -530,7 +511,6 @@ struct PlannedRegistration {
     name: Arc<str>,
     registry: Arc<dyn Registry>,
     registration: Arc<ServiceRegistration>,
-    protocol: WireProtocol,
 }
 
 #[derive(Clone)]
@@ -600,20 +580,20 @@ async fn coordinate(mut coordinator: Coordinator) {
     let mut startup_fatal = None;
     let startup_result = tokio::select! {
         biased;
-        () = startup_cancelled => Err(ServerError::message(
+        () = startup_cancelled => Err(ServerError::from_message(
             ServerErrorKind::Startup,
             "server startup was cancelled",
         )),
         error = fatal_receiver.recv() => {
             startup_fatal = error;
-            Err(ServerError::message(
+            Err(ServerError::from_message(
                 ServerErrorKind::Accept,
                 "HTTP accept supervisor failed before the server reached Ready",
             ))
         },
         result = tokio::time::timeout_at(startup_deadline, activation) => match result {
             Ok(result) => result,
-            Err(_) => Err(ServerError::message(
+            Err(_) => Err(ServerError::from_message(
                 ServerErrorKind::Startup,
                 "server did not reach Ready before the startup deadline",
             )),
@@ -719,7 +699,7 @@ async fn drain_runtime(
     let result = match tokio::time::timeout_at(deadline, work).await {
         Err(_) => {
             force_cancel.cancel();
-            Err(ServerError::message(
+            Err(ServerError::from_message(
                 ServerErrorKind::Timeout,
                 "server graceful shutdown deadline elapsed",
             ))
@@ -774,10 +754,8 @@ fn prepare_registrations(
 ) -> Result<(), ServerError> {
     for item in plan {
         let prepared = catch_unwind(AssertUnwindSafe(|| {
-            item.registry.prepare_registration(RegistrationRequest::new(
-                item.registration.clone(),
-                item.protocol,
-            ))
+            item.registry
+                .prepare_registration(RegistrationRequest::new(item.registration.clone()))
         }));
         let handle = match prepared {
             Ok(Ok(handle)) => handle,
@@ -789,7 +767,7 @@ fn prepare_registrations(
                 ));
             }
             Err(_) => {
-                return Err(ServerError::message(
+                return Err(ServerError::from_message(
                     ServerErrorKind::Registry,
                     format!(
                         "registry {} panicked while preparing registration",
@@ -838,7 +816,7 @@ async fn activate_registrations(
                     format!("registry {name} failed to activate registration"),
                     error,
                 )),
-                Err(_) => Err(ServerError::message(
+                Err(_) => Err(ServerError::from_message(
                     ServerErrorKind::Registry,
                     format!("registry {name} registration activation timed out"),
                 )),
@@ -888,7 +866,7 @@ fn resolve_shutdown_result(
                 "listener closure error was overridden by shutdown timeout"
             );
         }
-        return Err(ServerError::message(
+        return Err(ServerError::from_message(
             ServerErrorKind::Timeout,
             "server graceful shutdown deadline elapsed",
         ));
@@ -1018,29 +996,19 @@ fn build_registration_plan(
 ) -> Result<Vec<PlannedRegistration>, ServerError> {
     let mut plan = Vec::new();
     for registry in registries {
-        for protocol in config.protocols().iter() {
-            for descriptor in descriptors {
-                let registration = ServiceRegistration::new(
-                    instance_id.clone(),
-                    descriptor,
-                    endpoint.clone(),
-                    ProtocolSet::from_protocol(protocol),
-                    ServiceWeight::default(),
-                )
-                .map_err(|error| {
-                    ServerError::with_source(
-                        ServerErrorKind::Validation,
-                        "failed to create service registration",
-                        error,
-                    )
-                })?;
-                plan.push(PlannedRegistration {
-                    name: registry.name.clone(),
-                    registry: registry.registry.clone(),
-                    registration: Arc::new(registration),
-                    protocol,
-                });
-            }
+        for descriptor in descriptors {
+            let registration = ServiceRegistration::new(
+                instance_id.clone(),
+                descriptor,
+                endpoint.clone(),
+                config.capabilities().clone(),
+                ServiceWeight::default(),
+            );
+            plan.push(PlannedRegistration {
+                name: registry.name.clone(),
+                registry: registry.registry.clone(),
+                registration: Arc::new(registration),
+            });
         }
     }
     Ok(plan)
@@ -1056,7 +1024,7 @@ fn validate_registry_names(registries: &[NamedRegistry]) -> Result<(), ServerErr
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
         if !valid || !seen.insert(name) {
-            return Err(ServerError::message(
+            return Err(ServerError::from_message(
                 ServerErrorKind::Validation,
                 format!("invalid or duplicate registry name {name:?}"),
             ));
@@ -1154,12 +1122,12 @@ mod tests {
                 timed_out: true,
                 first_error: Some(registry_failure()),
             },
-            Err(ServerError::message(
+            Err(ServerError::from_message(
                 ServerErrorKind::Accept,
                 "accept completion missing",
             )),
             Some(std::io::Error::other("fatal accept")),
-            Some(ServerError::message(
+            Some(ServerError::from_message(
                 ServerErrorKind::Accept,
                 "listener closure missing",
             )),
@@ -1191,19 +1159,19 @@ mod tests {
                 timed_out: false,
                 first_error: Some(registry_failure()),
             },
-            Err(ServerError::message(
+            Err(ServerError::from_message(
                 ServerErrorKind::Accept,
                 "accept completion missing",
             )),
             None,
-            Some(ServerError::message(
+            Some(ServerError::from_message(
                 ServerErrorKind::Accept,
                 "listener closure missing",
             )),
         );
         let error = result.unwrap_err();
         assert_eq!(error.kind(), ServerErrorKind::Accept);
-        assert_eq!(error.message_ref(), "listener closure missing");
+        assert_eq!(error.message(), "listener closure missing");
     }
 
     #[test]

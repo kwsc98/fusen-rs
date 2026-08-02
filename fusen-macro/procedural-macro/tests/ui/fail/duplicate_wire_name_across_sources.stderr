@@ -1,4 +1,4 @@
-error: duplicate RPC wire parameter name `user_id`
+error: duplicate service invocation wire argument name `user_id`
   --> tests/ui/fail/duplicate_wire_name_across_sources.rs:12:31
    |
 12 |         #[param(query, name = "user_id")] query_user_id: String,

@@ -4,7 +4,7 @@ const MAX_SENSITIVITY_KIND_BYTES: usize = 64;
 
 /// A validated classification attached to a value that may enter diagnostics.
 ///
-/// Classifications are process-local policy metadata. They are never encoded into RPC traffic or
+/// Classifications are process-local policy metadata. They are never encoded into invocation traffic or
 /// registry records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SensitivityKind(&'static str);
@@ -127,7 +127,7 @@ pub trait SensitiveFields {
     fn sensitive_shape() -> SensitiveShape;
 }
 
-/// Lazily resolved sensitivity metadata for one named RPC argument.
+/// Lazily resolved sensitivity metadata for one named invocation argument.
 #[derive(Clone, Copy)]
 pub struct SensitiveArgument {
     name: &'static str,
@@ -135,7 +135,7 @@ pub struct SensitiveArgument {
 }
 
 impl SensitiveArgument {
-    /// Creates metadata for one statically named RPC argument.
+    /// Creates metadata for one statically named invocation argument.
     pub const fn new(name: &'static str, resolver: SensitiveShapeResolver) -> Self {
         Self { name, resolver }
     }
@@ -160,7 +160,7 @@ impl std::fmt::Debug for SensitiveArgument {
     }
 }
 
-/// Process-local sensitivity metadata for one RPC method.
+/// Process-local sensitivity metadata for one service method.
 ///
 /// This value does not participate in method identity, protocol support, discovery, or
 /// registration.

@@ -4,6 +4,9 @@
 - 日期：2026-07-26
 - 决策者：fusen-rs 维护者
 
+> Clean-slate 与首个 tag 决策继续有效；开发期旧 wire baseline 已由
+> [ADR 0009](0009-http-binding-discovery-decoupling.md) 取代。
+
 ## 背景
 
 0.9 尚未发布，已有开发实现的公开 API、宏语法、wire body 和生命周期模型彼此牵制。为这些未发布入口增加兼容层，会把过渡设计永久变成用户契约。
@@ -17,9 +20,9 @@
 - 保留 Tokio、JSON、Nacos、Rust 1.97、Edition 2024 与现有 crate 边界；
 - 每阶段直接迁移 workspace、examples、fixtures 与文档，阶段结束必须恢复绿色；
 - `v0.9.0` tag 是第一个兼容性 baseline，此前开发提交不构成兼容承诺；
-- Fusen V1 与 Spring Cloud V1 从本次重构的 golden fixtures 开始形成明确 wire 契约。
+- `http-json-v1` 从本次重构的 golden fixtures 开始形成明确 wire 契约。
 
-`v0.9.0` 发布后才以该 tag 启用 API semver 检查。后续 wire 破坏必须定义新协议版本，而不是让现有 v1 decoder 猜测格式。
+`v0.9.0` 发布后才以该 tag 启用 API semver 检查。后续 wire 破坏必须定义新 binding ID，而不是让现有 decoder 猜测格式。
 
 ## 后果
 

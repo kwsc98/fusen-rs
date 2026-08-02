@@ -1,0 +1,5 @@
+error: #[param(query_map)] and #[param(header_map)] parameters cannot be repeated
+  --> tests/ui/fail/repeated_parameter_map.rs:11:29
+   |
+11 |         #[param(header_map, repeated)] headers: Vec<String>,
+   |                             ^^^^^^^^

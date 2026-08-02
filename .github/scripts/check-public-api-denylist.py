@@ -31,7 +31,6 @@ SOURCE_DIRECTORIES = (
 # constrained: changing an old enum into a struct must not bypass the gate.
 REMOVED_ITEMS = {
     "ApplicationError",
-    "Arguments",
     "ConfigCloseFuture",
     "ConfigLifecycle",
     "ConfigManager",
@@ -40,6 +39,7 @@ REMOVED_ITEMS = {
     "FusenError",
     "FusenHttpCodec",
     "FusenRequest",
+    "FusenV1",
     "HotConfigChangeListener",
     "Http1PoolConfig",
     "Http2PoolConfig",
@@ -52,6 +52,10 @@ REMOVED_ITEMS = {
     "InvocationStart",
     "LogConfig",
     "LogWorkGroup",
+    "Middleware",
+    "MiddlewareFuture",
+    "MiddlewareResult",
+    "MiddlewareStage",
     "NacosConfiguration",
     "NacosRegister",
     "ParameterDescriptor",
@@ -63,6 +67,21 @@ REMOVED_ITEMS = {
     "RequestCodec",
     "ResponseBodyCodec",
     "ResponseCodec",
+    "ProtocolSet",
+    "RpcArguments",
+    "RpcBody",
+    "RpcCall",
+    "RpcCategory",
+    "RpcContext",
+    "RpcContextParts",
+    "RpcError",
+    "RpcErrorDetails",
+    "RpcErrorInner",
+    "RpcField",
+    "RpcFieldSource",
+    "RpcOrigin",
+    "RpcResponse",
+    "RpcSide",
     "RpcService",
     "RpcServiceInfo",
     "RpcMessage",
@@ -70,6 +89,11 @@ REMOVED_ITEMS = {
     "Router",
     "ServiceSnapshot",
     "ServiceSubscription",
+    "SpringCloudMethod",
+    "SpringCloudParameter",
+    "SpringCloudParameterCardinality",
+    "SpringCloudParameterSource",
+    "SpringCloudV1",
     "StaticBoxFuture",
     "StrategyDebug",
     "SubscriptionCleanup",
@@ -90,17 +114,22 @@ REMOVED_ITEMS = {
     "mask_str",
     "parse_ident_or_string",
     "parse_string",
+    "rpc_call",
     "subscription_cleanup",
+    "WireProtocol",
 }
+REMOVED_ITEM_PREFIXES = ("SpringCloud",)
 
 # Old public modules and root items that are too generic to reject globally.
 # Rustdoc emits an index only for an externally reachable module, so these
 # checks do not confuse today's private implementation modules with public API.
 REMOVED_PUBLIC_MODULES = {
+    "fusen_contract/protocol/index.html",
     "fusen_register/contract/index.html",
     "fusen_rs/client/index.html",
     "fusen_rs/client/cluster/index.html",
     "fusen_rs/error/index.html",
+    "fusen_rs/middleware/index.html",
 }
 REMOVED_ROOT_ITEMS = {
     ("fusen_config", "Error"),
@@ -114,11 +143,14 @@ ALLOWED_PUBLIC_TRAITS = {
     "fusen_observability": {"MetricsRecorder"},
     "fusen_register": {"Registry"},
     "fusen_rs": {
+        "ErrorDecoder",
         "InstanceRouter",
+        "Interceptor",
         "LoadBalancer",
         "MetricsRecorder",
-        "Middleware",
+        "RequestEncoder",
         "Registry",
+        "ResponseDecoder",
         "RetryPolicy",
         "Sanitizer",
         "SensitiveFields",
@@ -126,17 +158,40 @@ ALLOWED_PUBLIC_TRAITS = {
 }
 
 REMOVED_METHODS = {
+    "AttemptFinishedEvent": {"protocol"},
+    "CallInfo": {"protocol"},
+    "ClientBuilder": {"attempt_middleware", "middleware", "protocol"},
+    "ClientError": {"message_ref"},
     "ClientRuntime": {"__client_builder"},
-    "ClientRuntimeBuilder": {"http1_pool", "http2_pool", "observer"},
+    "ClientRuntimeBuilder": {
+        "attempt_middleware",
+        "http1_pool",
+        "http2_pool",
+        "middleware",
+        "observer",
+    },
+    "Context": {"__take_arguments", "protocol"},
     "Directory": {"fixed"},
+    "Error": {"new"},
+    "ErrorCategory": {"status"},
+    "InvocationFinishedEvent": {"protocol"},
+    "InvocationStartedEvent": {"protocol"},
     "MethodDescriptor": {"__new"},
     "MethodId": {"__new"},
-    "RpcContext": {"__take_arguments"},
-    "RpcResponse": {"__from_result"},
+    "Response": {"__from_result"},
     "Server": {"bind", "observer", "run", "run_with_shutdown"},
-    "ServerConfig": {"new"},
-    "ServiceDescriptor": {"__from_selector", "__new"},
-    "ServiceRegistration": {"__new"},
+    "RegistrationRequest": {"protocol"},
+    "ServerConfig": {"new", "protocols"},
+    "ServerConfigBuilder": {"protocols"},
+    "ServerError": {"message_ref"},
+    "ServerBuilder": {"head_middleware", "middleware"},
+    "ServiceDescriptor": {"__from_selector", "__new", "supported_protocols"},
+    "ServiceRegistration": {"__new", "head_middleware", "middleware", "protocols"},
+    "SubscriptionRequest": {"protocol"},
+}
+REMOVED_VARIANTS = {
+    "ErrorCategory": {"Application"},
+    "ErrorOrigin": {"Application"},
 }
 
 REMOVED_PACKAGE_PATHS = (
@@ -150,8 +205,8 @@ ITEM_FILE = re.compile(
 )
 INTERNAL_EXTENSION = re.compile(r"(?:Transport|Codec|Acceptor)")
 OLD_WIRE_VARIANTS = (
-    'id="variant.Fusen"',
-    'id="variant.SpringCloud"',
+    "FusenV1",
+    "SpringCloudV1",
 )
 REMOVED_MACROS = {"service"}
 PUBLIC_DEFINITION = re.compile(
@@ -160,7 +215,9 @@ PUBLIC_DEFINITION = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
 )
 PUBLIC_USE = re.compile(r"\bpub\s+use\s+(?P<items>[^;]+);", re.DOTALL)
-WIRE_VARIANT = re.compile(r"^\s*(?P<name>Fusen|SpringCloud)\s*(?:,|\(|\{)", re.MULTILINE)
+WIRE_VARIANT = re.compile(
+    r"^\s*(?P<name>FusenV1|SpringCloudV1)\s*(?:,|\(|\{)", re.MULTILINE
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -202,7 +259,7 @@ def main() -> int:
                 name = match.group("name")
                 if html.name.startswith("macro.") and name in REMOVED_MACROS:
                     failures.append(f"{relative}: removed public macro {name}")
-                if name in REMOVED_ITEMS:
+                if name in REMOVED_ITEMS or name.startswith(REMOVED_ITEM_PREFIXES):
                     failures.append(f"{relative}: removed public item {name}")
                 if html.name.startswith("trait.") and name not in ALLOWED_PUBLIC_TRAITS.get(
                     crate, set()
@@ -224,22 +281,32 @@ def main() -> int:
                 if "__private" in modules:
                     failures.append(f"{relative}: removed __private macro ABI is public")
 
-            if html.name == "enum.WireProtocol.html":
+            if html.name.startswith("enum."):
                 contents = html.read_text(encoding="utf-8")
-                for marker in OLD_WIRE_VARIANTS:
-                    if marker in contents:
+                for variant in OLD_WIRE_VARIANTS:
+                    if f'id="variant.{variant}"' in contents:
                         failures.append(
-                            f"{relative}: removed wire variant {marker[12:-1]} is public"
+                            f"{relative}: removed wire variant {variant} is public"
                         )
 
             type_match = re.match(r"^(?:enum|struct|trait)\.(?P<name>[^.]+)\.html$", html.name)
-            if type_match and type_match.group("name") in REMOVED_METHODS:
+            if type_match:
+                type_name = type_match.group("name")
+                removed_methods = REMOVED_METHODS.get(type_name, set())
+                removed_variants = REMOVED_VARIANTS.get(type_name, set())
+                if not removed_methods and not removed_variants:
+                    continue
                 contents = html.read_text(encoding="utf-8")
-                for method in sorted(REMOVED_METHODS[type_match.group("name")]):
+                for method in sorted(removed_methods):
                     if f'id="method.{method}"' in contents:
                         failures.append(
                             f"{relative}: removed associated method "
-                            f"{type_match.group('name')}::{method}"
+                            f"{type_name}::{method}"
+                        )
+                for variant in sorted(removed_variants):
+                    if f'id="variant.{variant}"' in contents:
+                        failures.append(
+                            f"{relative}: removed enum variant {type_name}::{variant}"
                         )
 
     if args.source_root is not None:
@@ -253,7 +320,11 @@ def main() -> int:
                 relative = source.relative_to(source_root)
                 for match in PUBLIC_DEFINITION.finditer(contents):
                     name = match.group("name")
-                    if name in REMOVED_ITEMS or name == "__private":
+                    if (
+                        name in REMOVED_ITEMS
+                        or name.startswith(REMOVED_ITEM_PREFIXES)
+                        or name == "__private"
+                    ):
                         failures.append(f"{relative}: removed public definition {name}")
                     if name == "v2":
                         failures.append(f"{relative}: public v2 compatibility module is forbidden")
@@ -263,13 +334,19 @@ def main() -> int:
                         )
                 for match in PUBLIC_USE.finditer(contents):
                     identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", match.group("items")))
-                    for name in sorted(identifiers & (REMOVED_ITEMS | {"__private"})):
+                    removed_identifiers = {
+                        name
+                        for name in identifiers
+                        if name in REMOVED_ITEMS
+                        or name.startswith(REMOVED_ITEM_PREFIXES)
+                        or name == "__private"
+                    }
+                    for name in sorted(removed_identifiers):
                         failures.append(f"{relative}: removed public re-export {name}")
                 for match in WIRE_VARIANT.finditer(contents):
                     failures.append(
                         f"{relative}: removed wire variant {match.group('name')} is defined"
                     )
-
     if failures:
         print("\n".join(failures), file=sys.stderr)
         return 1

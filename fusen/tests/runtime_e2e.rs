@@ -1,9 +1,11 @@
-//! Real-socket coverage for both wire protocols and bounded server draining.
+//! Real-socket coverage for HTTP/1.1, h2c, and bounded server draining.
 
 use fusen_rs::{
-    ClientConfig, ClientRuntime, Middleware, MiddlewareFuture, Next, RetryConfig, RpcCategory,
-    RpcContext, RpcError, RpcOrigin, RpcResponse, Server, ServerConfig, ServerErrorKind,
-    ServerState, WireProtocol, contract::ProtocolSet, interface,
+    ClientConfig, ClientRuntime, Context, Error, ErrorCategory, ErrorOrigin, Interceptor,
+    InterceptorFuture, Next, Response, RetryConfig, Server, ServerConfig, ServerErrorKind,
+    ServerState,
+    contract::{EndpointCapabilities, HttpVersionPolicy, HttpVersionSet},
+    interface,
 };
 use std::{
     sync::{
@@ -21,46 +23,42 @@ trait WireService {
         &self,
         id: String,
         #[param(query)] expanded: Option<bool>,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    ) -> Result<Response<String>, Error>;
 
     #[fusen_rs::method(method = "POST", path = "/users")]
-    async fn create(&self, name: String, audit: bool) -> Result<RpcResponse<String>, RpcError>;
+    async fn create(&self, name: String, audit: bool) -> Result<Response<String>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/tags")]
     async fn tags(
         &self,
         #[param(query, repeated)] tags: Vec<String>,
-    ) -> Result<RpcResponse<Vec<String>>, RpcError>;
+    ) -> Result<Response<Vec<String>>, Error>;
 }
 
 struct WireServiceImpl;
 
 impl WireService for WireServiceImpl {
-    async fn lookup(
-        &self,
-        id: String,
-        expanded: Option<bool>,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(format!(
+    async fn lookup(&self, id: String, expanded: Option<bool>) -> Result<Response<String>, Error> {
+        Ok(Response::new(format!(
             "{}:{}",
             id,
             expanded.unwrap_or(false)
         )))
     }
 
-    async fn create(&self, name: String, audit: bool) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(format!("{name}:{audit}")))
+    async fn create(&self, name: String, audit: bool) -> Result<Response<String>, Error> {
+        Ok(Response::new(format!("{name}:{audit}")))
     }
 
-    async fn tags(&self, tags: Vec<String>) -> Result<RpcResponse<Vec<String>>, RpcError> {
-        Ok(RpcResponse::new(tags))
+    async fn tags(&self, tags: Vec<String>) -> Result<Response<Vec<String>>, Error> {
+        Ok(Response::new(tags))
     }
 }
 
 #[interface(name = "blocking-e2e")]
 trait BlockingService {
     #[fusen_rs::method(method = "PUT", path = "/blocking/wait")]
-    async fn wait(&self, #[param(body)] value: String) -> Result<RpcResponse<String>, RpcError>;
+    async fn wait(&self, #[param(body)] value: String) -> Result<Response<String>, Error>;
 }
 
 struct BlockingServiceImpl {
@@ -78,7 +76,7 @@ impl Drop for DropProbe {
 }
 
 impl BlockingService for BlockingServiceImpl {
-    async fn wait(&self, value: String) -> Result<RpcResponse<String>, RpcError> {
+    async fn wait(&self, value: String) -> Result<Response<String>, Error> {
         let _probe = self.dropped.as_ref().map(|flag| DropProbe(flag.clone()));
         self.entered.wait().await;
         let _permit = self
@@ -86,48 +84,45 @@ impl BlockingService for BlockingServiceImpl {
             .acquire()
             .await
             .expect("test release semaphore remains open");
-        Ok(RpcResponse::new(value))
+        Ok(Response::new(value))
     }
 }
 
 #[interface(name = "panic-e2e")]
 trait PanicService {
     #[fusen_rs::method(method = "PUT", path = "/panic/execute")]
-    async fn execute(
-        &self,
-        #[param(body)] should_panic: bool,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    async fn execute(&self, #[param(body)] should_panic: bool) -> Result<Response<String>, Error>;
 }
 
 struct PanicServiceImpl;
 
 impl PanicService for PanicServiceImpl {
-    async fn execute(&self, should_panic: bool) -> Result<RpcResponse<String>, RpcError> {
+    async fn execute(&self, should_panic: bool) -> Result<Response<String>, Error> {
         assert!(!should_panic, "private panic payload");
-        Ok(RpcResponse::new("healthy".to_owned()))
+        Ok(Response::new("healthy".to_owned()))
     }
 }
 
-#[interface(name = "logical-middleware-e2e")]
-trait LogicalMiddlewareService {
-    #[fusen_rs::method(method = "GET", path = "/logical-middleware")]
-    async fn execute(&self) -> Result<RpcResponse<String>, RpcError>;
+#[interface(name = "logical-interceptor-e2e")]
+trait LogicalInterceptorService {
+    #[fusen_rs::method(method = "GET", path = "/logical-interceptor")]
+    async fn execute(&self) -> Result<Response<String>, Error>;
 }
 
 struct RetryOnceService {
     attempts: Arc<AtomicUsize>,
 }
 
-impl LogicalMiddlewareService for RetryOnceService {
-    async fn execute(&self) -> Result<RpcResponse<String>, RpcError> {
+impl LogicalInterceptorService for RetryOnceService {
+    async fn execute(&self) -> Result<Response<String>, Error> {
         match self.attempts.fetch_add(1, Ordering::AcqRel) {
-            0 => Err(RpcError::new(
-                RpcCategory::Unavailable,
+            0 => Err(Error::local(
+                ErrorCategory::Unavailable,
                 "retry_once",
                 "retry this safe request once",
             )
             .unwrap()),
-            1 => Ok(RpcResponse::new("complete".to_owned())),
+            1 => Ok(Response::new("complete".to_owned())),
             attempt => panic!("unexpected physical attempt {}", attempt + 1),
         }
     }
@@ -135,12 +130,12 @@ impl LogicalMiddlewareService for RetryOnceService {
 
 struct InvocationCounter(Arc<AtomicUsize>);
 
-impl Middleware for InvocationCounter {
-    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for InvocationCounter {
+    fn intercept<'a>(&'a self, context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
         assert_eq!(
             context.attempt(),
             None,
-            "logical middleware is not attempt-scoped"
+            "logical interceptor is not attempt-scoped"
         );
         self.0.fetch_add(1, Ordering::AcqRel);
         Box::pin(async move { next.run(context).await })
@@ -149,12 +144,7 @@ impl Middleware for InvocationCounter {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_h2c_and_http1_slices_round_trip() {
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .unwrap();
     let server = Server::builder("127.0.0.1:0")
-        .config(config)
         .interface(WireServiceServer::new(WireServiceImpl))
         .build()
         .unwrap()
@@ -163,29 +153,32 @@ async fn real_h2c_and_http1_slices_round_trip() {
         .unwrap();
     let endpoint = format!("http://{}", server.local_addr());
     let runtime = ClientRuntime::builder().build().unwrap();
-    let fusen = WireServiceClient::builder(&runtime)
+    let http1 = WireServiceClient::builder(&runtime)
         .direct(&endpoint)
-        .protocol(WireProtocol::FusenV1)
+        .http_version_policy(HttpVersionPolicy::Http1)
         .connect()
         .await
         .unwrap();
-    let spring = WireServiceClient::builder(&runtime)
+    let h2c = WireServiceClient::builder(&runtime)
         .direct(&endpoint)
-        .protocol(WireProtocol::SpringCloudV1)
+        .http_version_policy(HttpVersionPolicy::H2c)
+        .direct_capabilities(
+            EndpointCapabilities::new(HttpVersionSet::ALL, [Default::default()], true).unwrap(),
+        )
         .connect()
         .await
         .unwrap();
 
     assert_eq!(
-        fusen
-            .lookup("fusen".into(), Some(true))
+        http1
+            .lookup("http1".into(), Some(true))
             .await
             .unwrap()
             .into_body(),
-        "fusen:true"
+        "http1:true"
     );
     assert_eq!(
-        fusen
+        http1
             .lookup("0".into(), Some(false))
             .await
             .unwrap()
@@ -193,16 +186,14 @@ async fn real_h2c_and_http1_slices_round_trip() {
         "0:false"
     );
     assert_eq!(
-        spring
-            .lookup("spring cloud".into(), Some(false))
+        h2c.lookup("h2c value".into(), Some(false))
             .await
             .unwrap()
             .into_body(),
-        "spring cloud:false"
+        "h2c value:false"
     );
     assert_eq!(
-        spring
-            .lookup("missing".into(), None)
+        h2c.lookup("missing".into(), None)
             .await
             .unwrap()
             .into_body(),
@@ -213,41 +204,34 @@ async fn real_h2c_and_http1_slices_round_trip() {
         vec!["one".to_owned()],
         vec!["one".to_owned(), "two words".to_owned(), "three".to_owned()],
     ] {
-        assert_eq!(spring.tags(tags.clone()).await.unwrap().into_body(), tags);
+        assert_eq!(h2c.tags(tags.clone()).await.unwrap().into_body(), tags);
     }
     assert_eq!(
-        fusen
-            .create("fusen-created".into(), true)
+        http1
+            .create("http1-created".into(), true)
             .await
             .unwrap()
             .into_body(),
-        "fusen-created:true"
+        "http1-created:true"
     );
     assert_eq!(
-        spring
-            .create("created".into(), false)
+        h2c.create("created".into(), false)
             .await
             .unwrap()
             .into_body(),
         "created:false"
     );
 
-    drop((fusen, spring));
+    drop((http1, h2c));
     runtime.shutdown().await.unwrap();
     server.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn client_middleware_runs_once_around_two_physical_attempts() {
+async fn client_interceptor_runs_once_around_two_physical_attempts() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let server = Server::builder("127.0.0.1:0")
-        .config(
-            ServerConfig::builder()
-                .protocols(ProtocolSet::ALL)
-                .build()
-                .unwrap(),
-        )
-        .interface(LogicalMiddlewareServiceServer::new(RetryOnceService {
+        .interface(LogicalInterceptorServiceServer::new(RetryOnceService {
             attempts: attempts.clone(),
         }))
         .build()
@@ -270,13 +254,12 @@ async fn client_middleware_runs_once_around_two_physical_attempts() {
         .unwrap();
     let runtime = ClientRuntime::builder()
         .config(config)
-        .middleware(InvocationCounter(global_calls.clone()))
+        .interceptor(InvocationCounter(global_calls.clone()))
         .build()
         .unwrap();
-    let client = LogicalMiddlewareServiceClient::builder(&runtime)
+    let client = LogicalInterceptorServiceClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
-        .protocol(WireProtocol::SpringCloudV1)
-        .middleware(InvocationCounter(local_calls.clone()))
+        .interceptor(InvocationCounter(local_calls.clone()))
         .connect()
         .await
         .unwrap();
@@ -403,9 +386,9 @@ async fn a_panicking_h2_stream_does_not_poison_other_streams() {
         .unwrap();
 
     let (failed, healthy) = tokio::join!(client.execute(true), client.execute(false),);
-    let failed = failed.expect_err("panic must become a sanitized RPC error");
-    assert_eq!(failed.category(), RpcCategory::Internal);
-    assert_eq!(failed.origin(), RpcOrigin::Remote);
+    let failed = failed.expect_err("panic must become a sanitized invocation error");
+    assert_eq!(failed.category(), ErrorCategory::Internal);
+    assert_eq!(failed.origin(), ErrorOrigin::Remote);
     assert!(!failed.message().contains("private panic payload"));
     assert_eq!(healthy.unwrap().into_body(), "healthy");
     assert_eq!(client.execute(false).await.unwrap().into_body(), "healthy");

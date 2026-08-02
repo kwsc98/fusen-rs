@@ -1,7 +1,7 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "status": "calibration-required",
-  "benchmark_suite": "direct-invocation-matrix-v1",
-  "reason": "The legacy baseline covered only Fusen c1/small and cannot be used for the 0.9 release matrix.",
+  "benchmark_suite": "http-json-transport-matrix-v1",
+  "reason": "The binding/transport matrix changed to compare HTTP/1.1 and h2c under http-json-v1, so prior protocol-keyed samples are not comparable.",
   "required_action": "Commit the matrix implementation, then run Release Benchmark Gate in calibrate mode on fusen-benchmark-0-9-reference and commit the generated artifact."
 }

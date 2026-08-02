@@ -1,5 +1,5 @@
 use crate::{ConfigValidationError, ConfigValidationErrorKind};
-use fusen_contract::ProtocolSet;
+use fusen_contract::{EndpointCapabilities, HttpBindingId, HttpVersionSet};
 use std::time::Duration;
 
 const MIB: usize = 1024 * 1024;
@@ -360,7 +360,7 @@ impl ServerRegistryConfigBuilder {
 /// Immutable production server configuration.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
-    protocols: ProtocolSet,
+    capabilities: EndpointCapabilities,
     request: ServerRequestConfig,
     http: HttpServerConfig,
     registry: ServerRegistryConfig,
@@ -370,7 +370,12 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            protocols: ProtocolSet::FUSEN_V1,
+            capabilities: EndpointCapabilities::new(
+                HttpVersionSet::ALL,
+                [HttpBindingId::default()],
+                true,
+            )
+            .expect("built-in server capabilities are valid"),
             request: ServerRequestConfig::default(),
             http: HttpServerConfig::default(),
             registry: ServerRegistryConfig::default(),
@@ -385,9 +390,9 @@ impl ServerConfig {
         ServerConfigBuilder(Self::default())
     }
 
-    /// Returns enabled protocols.
-    pub const fn protocols(&self) -> ProtocolSet {
-        self.protocols
+    /// Returns HTTP endpoint capabilities advertised by the built-in server.
+    pub const fn capabilities(&self) -> &EndpointCapabilities {
+        &self.capabilities
     }
 
     /// Returns request limits.
@@ -411,6 +416,12 @@ impl ServerConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.capabilities.bindings() != [HttpBindingId::default()] {
+            return Err(inconsistent(
+                "server.capabilities.bindings",
+                "built-in server supports only http-json-v1",
+            ));
+        }
         validate_request(&self.request)?;
         validate_http(&self.http)?;
         validate_registry(&self.registry)?;
@@ -426,9 +437,9 @@ impl ServerConfig {
 pub struct ServerConfigBuilder(ServerConfig);
 
 impl ServerConfigBuilder {
-    /// Replaces enabled protocols.
-    pub const fn protocols(mut self, value: ProtocolSet) -> Self {
-        self.0.protocols = value;
+    /// Replaces the endpoint capabilities published by the built-in server.
+    pub fn capabilities(mut self, value: EndpointCapabilities) -> Self {
+        self.0.capabilities = value;
         self
     }
 
@@ -575,7 +586,12 @@ mod tests {
     #[test]
     fn default_getters_match_the_runtime_contract() {
         let config = ServerConfig::default();
-        assert_eq!(config.protocols(), ProtocolSet::FUSEN_V1);
+        assert_eq!(
+            config.capabilities().bindings(),
+            &[HttpBindingId::default()]
+        );
+        assert_eq!(config.capabilities().http_versions(), HttpVersionSet::ALL);
+        assert!(config.capabilities().invocation_controls());
         assert_eq!(config.request().timeout(), Duration::from_secs(30));
         assert_eq!(config.request().max_concurrent_requests(), 1024);
         assert_eq!(config.http().max_connections(), 2048);

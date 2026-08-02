@@ -86,12 +86,13 @@ impl fmt::Display for ConfigErrorKind {
 }
 
 /// Cloneable configuration failure with stable operation and kind metadata.
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Clone)]
 #[non_exhaustive]
-#[error("configuration {operation} failed ({kind}): {source}")]
+#[error("configuration {operation} failed ({kind}): {message}")]
 pub struct ConfigError {
     operation: ConfigOperation,
     kind: ConfigErrorKind,
+    message: Arc<str>,
     #[source]
     source: Arc<dyn std::error::Error + Send + Sync + 'static>,
 }
@@ -105,17 +106,26 @@ impl ConfigError {
         Self {
             operation,
             kind,
+            message: Arc::from(default_message(kind)),
             source: Arc::new(source),
         }
     }
 
-    /// Creates a classified error from an owned diagnostic message.
+    /// Creates a classified error from a safe public diagnostic message.
+    ///
+    /// The message is included in [`Debug`](fmt::Debug) and [`Display`](fmt::Display) output.
     pub fn message(
         operation: ConfigOperation,
         kind: ConfigErrorKind,
         message: impl Into<String>,
     ) -> Self {
-        Self::new(operation, kind, ConfigMessage(message.into()))
+        let message = message.into();
+        Self {
+            operation,
+            kind,
+            message: Arc::from(message.as_str()),
+            source: Arc::new(ConfigMessage(message)),
+        }
     }
 
     /// Returns the operation that failed.
@@ -128,6 +138,11 @@ impl ConfigError {
         self.kind
     }
 
+    /// Returns the safe public diagnostic message.
+    pub fn safe_message(&self) -> &str {
+        &self.message
+    }
+
     /// Returns whether a fresh provider operation may succeed without changing its input.
     pub const fn is_retryable(&self) -> bool {
         self.kind.is_retryable()
@@ -136,6 +151,32 @@ impl ConfigError {
     /// Returns the retained provider or parser source.
     pub fn source_ref(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
         self.source.as_ref()
+    }
+}
+
+impl fmt::Debug for ConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfigError")
+            .field("operation", &self.operation)
+            .field("kind", &self.kind)
+            .field("message", &self.message)
+            .finish_non_exhaustive()
+    }
+}
+
+const fn default_message(kind: ConfigErrorKind) -> &'static str {
+    match kind {
+        ConfigErrorKind::InvalidInput => "configuration input is invalid",
+        ConfigErrorKind::UnsupportedFormat => "configuration format is unsupported",
+        ConfigErrorKind::Io => "configuration input could not be read",
+        ConfigErrorKind::InvalidData => "configuration data is invalid",
+        ConfigErrorKind::Unavailable => "configuration provider is unavailable",
+        ConfigErrorKind::Unauthorized => "configuration provider rejected the operation",
+        ConfigErrorKind::Timeout => "configuration operation timed out",
+        ConfigErrorKind::Cancelled => "configuration operation was cancelled",
+        ConfigErrorKind::CleanupAborted => "configuration cleanup did not complete",
+        ConfigErrorKind::Internal => "configuration operation failed internally",
     }
 }
 
@@ -165,6 +206,55 @@ mod tests {
         assert_eq!(error.operation(), ConfigOperation::Activate);
         assert_eq!(error.kind(), ConfigErrorKind::Unavailable);
         assert!(error.is_retryable());
-        assert!(error.to_string().contains("provider offline"));
+        assert_eq!(
+            error.safe_message(),
+            "configuration provider is unavailable"
+        );
+        assert!(error.source_ref().to_string().contains("provider offline"));
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .to_string()
+                .contains("provider offline")
+        );
+    }
+
+    #[test]
+    fn formatting_shows_safe_message_without_exposing_provider_source() {
+        let error = ConfigError::new(
+            ConfigOperation::Activate,
+            ConfigErrorKind::Unavailable,
+            std::io::Error::other("provider-token=secret"),
+        );
+
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        assert!(debug.contains("Activate"));
+        assert!(debug.contains("Unavailable"));
+        assert!(debug.contains("configuration provider is unavailable"));
+        assert!(display.contains("configuration provider is unavailable"));
+        assert!(!debug.contains("provider-token=secret"));
+        assert!(!display.contains("provider-token=secret"));
+    }
+
+    #[test]
+    fn explicit_public_message_is_preserved() {
+        let error = ConfigError::message(
+            ConfigOperation::Parse,
+            ConfigErrorKind::InvalidData,
+            "configuration document is invalid",
+        );
+
+        assert_eq!(error.safe_message(), "configuration document is invalid");
+        assert!(format!("{error:?}").contains("configuration document is invalid"));
+        assert!(
+            error
+                .to_string()
+                .contains("configuration document is invalid")
+        );
+        assert_eq!(
+            error.source_ref().to_string(),
+            "configuration document is invalid"
+        );
     }
 }

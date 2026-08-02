@@ -16,14 +16,14 @@ cargo run -p examples --bin host-server
 cargo run -p examples --bin host-client
 ```
 
-压测使用独立的无日志服务端，避免逐请求日志和 tracing 影响结果。默认使用 HTTP/2，分别执行并发 1 和 100，每组运行 5 轮，每个任务请求 10,000 次：
+压测使用独立的无日志服务端，避免逐请求日志和 tracing 影响结果。默认使用 h2c，分别执行并发 1 和 100，每组运行 5 轮，每个任务请求 10,000 次：
 
 ```bash
 cargo run --release -p examples --bin host-server-pt
 cargo run --release -p examples --bin host-client-pt
 ```
 
-设置 `PT_PROTOCOL=both` 会在相同并发和请求体下依次运行 HTTP/1.1 与 HTTP/2，并打印两者的 QPS、JSON 吞吐和倍率对比：
+设置 `PT_PROTOCOL=both` 会在同一个 `http-json-v1` binding、相同并发和请求体下依次运行 HTTP/1.1 与 h2c，并打印两种 transport 的 QPS、JSON 吞吐和倍率对比：
 
 ```bash
 PT_PROTOCOL=both \
@@ -46,18 +46,18 @@ PT_REQUESTS_PER_TASK=5000 \
 cargo run --release -p examples --bin host-client-pt
 ```
 
-结果会逐轮输出完成数、成功/失败数、总耗时、总 QPS、成功 QPS、请求与响应 JSON 值的序列化字节数及吞吐率，并汇总 QPS 与吞吐中位数。字节统计不包含 HTTP framing 或 TCP/IP；两个 transport 都是明文。每种协议在计时前都会按配置并发度完成一轮预热，预热请求不计入结果。`PT_CONCURRENCY` 接受逗号分隔的多个正整数，`PT_ROUNDS` 默认 5。
+结果会逐轮输出完成数、成功/失败数、总耗时、总 QPS、成功 QPS、请求与响应 JSON 值的序列化字节数及吞吐率，并汇总 QPS 与吞吐中位数。字节统计不包含 HTTP framing 或 TCP/IP；两个 transport 都是明文。每种 transport 在计时前都会按配置并发度完成一轮预热，预热请求不计入结果。`PT_CONCURRENCY` 接受逗号分隔的多个正整数，`PT_ROUNDS` 默认 5。
 
-`PT_PROTOCOL` 支持 `h1`、`h2` 和 `both`，默认值为 `h2`。在这个框架中，H1 使用 `WireProtocol::SpringCloudV1` 的 HTTP/1.1 transport，H2 使用 `WireProtocol::FusenV1` 的 h2c transport。
+`PT_PROTOCOL` 是保留的压测环境变量名，支持 `h1`、`h2`/`h2c` 和 `both`，默认值为 `h2`。它只选择 `HttpVersionPolicy::Http1` 或 `HttpVersionPolicy::H2c`；两种 transport 都使用同一个 `http-json-v1` binding 和相同 raw JSON body。
 
-| 对比项 | HTTP/1.1 | HTTP/2 |
+| 对比项 | HTTP/1.1 | h2c |
 | --- | --- | --- |
 | 并发模型 | 一个连接同一时刻处理一个请求，连接池通过增加连接承载并发 | 一个连接可多路复用多个 stream |
 | Header | 文本 header，每个请求重复发送 | 二进制帧并使用 HPACK 压缩 |
 | 队头阻塞 | 同一连接上的后续请求需要等待前一个响应 | stream 之间独立，但底层 TCP 丢包仍会影响同一连接 |
-| 典型场景 | 低并发、传统代理或 Spring Cloud 兼容 | 高并发、连接数受限、长连接 RPC |
+| 典型场景 | 低并发或传统代理 | 高并发、连接数受限、长连接服务调用 |
 
-两种协议的 wire envelope 不同，因此这里的 JSON 字节数只能描述各协议实际应用层 payload，不能作为线速流量或编码效率的等价比较。如需比较真实线速字节，应使用独立 instrumentation 或抓包工具。
+两种 transport 的 binding bytes 相同，因此 JSON 字节数可比较相同应用层 payload，但仍不包含 HTTP framing、HPACK 或 TCP/IP，不能作为线速流量比较。如需比较真实线速字节，应使用独立 instrumentation 或抓包工具。
 
 ## Nacos 注册发现
 
@@ -93,9 +93,12 @@ cargo run -p examples --bin nacos-hot-config
 
 ```text
 src/
-├── lib.rs                 # DTO 与共享 RPC trait
+├── lib.rs                 # DTO 与共享 service interface trait
 ├── service.rs             # Host/Nacos 共用的服务实现
-├── middleware/            # Middleware、MetricsRecorder 与负载均衡扩展示例
+├── extensions/            # 可替换的 runtime 扩展示例
+│   ├── interceptor/       # tracing 与 timing Interceptor
+│   ├── load_balancer.rs   # 自定义 LoadBalancer
+│   └── metrics.rs         # 应用持有的 tracing 与 MetricsRecorder
 ├── host/
 │   ├── server.rs          # 无注册中心的服务端
 │   ├── client.rs          # 生成 Builder 的 direct 模式

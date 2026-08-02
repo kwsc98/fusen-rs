@@ -1,0 +1,5 @@
+error: service invocation success type must be the fusen-rs Response<T>
+  --> tests/ui/lookalike_response.rs:10:36
+   |
+10 |     async fn call(&self) -> Result<lookalike::Response<String>, runtime::Error>;
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^

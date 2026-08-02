@@ -5,8 +5,8 @@ use fusen_register::{
     error::RegistryError, provider,
 };
 use fusen_rs::{
-    ClientRuntime, RpcError, RpcResponse, Server, ServerConfig, ServerErrorKind,
-    ServerRegistryConfig, ServerState, contract::ProtocolSet, interface,
+    ClientRuntime, Error, Response, Server, ServerConfig, ServerErrorKind, ServerRegistryConfig,
+    ServerState, interface,
 };
 use std::{
     future::pending,
@@ -18,13 +18,13 @@ use tokio::sync::{Barrier, Semaphore, oneshot};
 #[interface(name = "alpha-registry-e2e")]
 trait AlphaRegistryService {
     #[fusen_rs::method(method = "GET", path = "/registry/alpha")]
-    async fn call(&self) -> Result<RpcResponse<String>, RpcError>;
+    async fn call(&self) -> Result<Response<String>, Error>;
 }
 
 #[interface(name = "zeta-registry-e2e")]
 trait ZetaRegistryService {
     #[fusen_rs::method(method = "GET", path = "/registry/zeta")]
-    async fn call(&self) -> Result<RpcResponse<String>, RpcError>;
+    async fn call(&self) -> Result<Response<String>, Error>;
 }
 
 struct RegistryServiceImpl;
@@ -35,26 +35,26 @@ struct BlockingRegistryServiceImpl {
 }
 
 impl AlphaRegistryService for RegistryServiceImpl {
-    async fn call(&self) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new("alpha".into()))
+    async fn call(&self) -> Result<Response<String>, Error> {
+        Ok(Response::new("alpha".into()))
     }
 }
 
 impl ZetaRegistryService for RegistryServiceImpl {
-    async fn call(&self) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new("zeta".into()))
+    async fn call(&self) -> Result<Response<String>, Error> {
+        Ok(Response::new("zeta".into()))
     }
 }
 
 impl AlphaRegistryService for BlockingRegistryServiceImpl {
-    async fn call(&self) -> Result<RpcResponse<String>, RpcError> {
+    async fn call(&self) -> Result<Response<String>, Error> {
         self.entered.wait().await;
         let _permit = self
             .release
             .acquire()
             .await
             .expect("test service release remains open");
-        Ok(RpcResponse::new("drained".into()))
+        Ok(Response::new("drained".into()))
     }
 }
 
@@ -130,9 +130,9 @@ impl Registry for FakeRegistry {
         &self,
         request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError> {
-        let (registration, protocol) = request.into_parts();
+        let registration = request.into_registration();
         let identity: Arc<str> = Arc::from(registration.selector().identity());
-        let key = format!("{}:{}:{}", self.name, protocol.as_str(), identity);
+        let key = format!("{}:{}", self.name, identity);
         push(&self.events, format!("prepare:{key}"));
 
         let activation_events = self.events.clone();
@@ -181,7 +181,7 @@ impl Registry for FakeRegistry {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn registrations_follow_stable_order_and_close_in_reverse() {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let config = server_config(ProtocolSet::ALL, Duration::from_secs(1));
+    let config = server_config(Duration::from_secs(1));
     let server = Server::builder("127.0.0.1:0")
         .config(config)
         .registry(
@@ -202,7 +202,7 @@ async fn registrations_follow_stable_order_and_close_in_reverse() {
 
     server.shutdown().await.unwrap();
     let events = snapshot(&events);
-    let keys = expected_keys(&["first", "second"], &["fusen-v1", "spring-cloud-v1"]);
+    let keys = expected_keys(&["first", "second"]);
     let expected = keys
         .iter()
         .map(|key| format!("prepare:{key}"))
@@ -286,7 +286,7 @@ async fn activation_failure_rolls_back_every_started_handle_in_reverse() {
         ..FakeBehavior::default()
     };
     let result = Server::builder("127.0.0.1:0")
-        .config(server_config(ProtocolSet::FUSEN_V1, Duration::from_secs(1)))
+        .config(server_config(Duration::from_secs(1)))
         .registry(
             "registry",
             FakeRegistry::new("registry", events.clone(), behavior),
@@ -306,12 +306,12 @@ async fn activation_failure_rolls_back_every_started_handle_in_reverse() {
     assert_eq!(
         snapshot(&events),
         [
-            "prepare:registry:fusen-v1:alpha-registry-e2e",
-            "prepare:registry:fusen-v1:zeta-registry-e2e",
-            "activate:registry:fusen-v1:alpha-registry-e2e",
-            "activate:registry:fusen-v1:zeta-registry-e2e",
-            "close:registry:fusen-v1:zeta-registry-e2e",
-            "close:registry:fusen-v1:alpha-registry-e2e",
+            "prepare:registry:alpha-registry-e2e",
+            "prepare:registry:zeta-registry-e2e",
+            "activate:registry:alpha-registry-e2e",
+            "activate:registry:zeta-registry-e2e",
+            "close:registry:zeta-registry-e2e",
+            "close:registry:alpha-registry-e2e",
         ]
     );
 }
@@ -325,7 +325,7 @@ async fn rollback_provider_error_does_not_replace_the_startup_failure() {
         ..FakeBehavior::default()
     };
     let result = Server::builder("127.0.0.1:0")
-        .config(server_config(ProtocolSet::FUSEN_V1, Duration::from_secs(1)))
+        .config(server_config(Duration::from_secs(1)))
         .registry(
             "registry",
             FakeRegistry::new("registry", events.clone(), behavior),
@@ -342,14 +342,14 @@ async fn rollback_provider_error_does_not_replace_the_startup_failure() {
     };
     assert_eq!(error.kind(), ServerErrorKind::Registry);
     assert!(
-        error.message_ref().contains("activate registration"),
+        error.message().contains("activate registration"),
         "the original activation failure must remain observable: {error}"
     );
     assert_eq!(
         close_events(&events),
         [
-            "close:registry:fusen-v1:zeta-registry-e2e",
-            "close:registry:fusen-v1:alpha-registry-e2e",
+            "close:registry:zeta-registry-e2e",
+            "close:registry:alpha-registry-e2e",
         ]
     );
 }
@@ -367,8 +367,8 @@ async fn close_provider_error_does_not_skip_remaining_handles() {
     assert_eq!(
         close_events(&events),
         [
-            "close:registry:fusen-v1:zeta-registry-e2e",
-            "close:registry:fusen-v1:alpha-registry-e2e",
+            "close:registry:zeta-registry-e2e",
+            "close:registry:alpha-registry-e2e",
         ]
     );
 }
@@ -389,8 +389,8 @@ async fn one_close_operation_timeout_has_timeout_priority_and_continues_cleanup(
     assert_eq!(
         close_events(&events),
         [
-            "close:registry:fusen-v1:zeta-registry-e2e",
-            "close:registry:fusen-v1:alpha-registry-e2e",
+            "close:registry:zeta-registry-e2e",
+            "close:registry:alpha-registry-e2e",
         ]
     );
 }
@@ -401,7 +401,7 @@ async fn one_registry_server(
     operation_timeout: Duration,
 ) -> fusen_rs::RunningServer {
     Server::builder("127.0.0.1:0")
-        .config(server_config(ProtocolSet::FUSEN_V1, operation_timeout))
+        .config(server_config(operation_timeout))
         .registry("registry", FakeRegistry::new("registry", events, behavior))
         .interface(ZetaRegistryServiceServer::new(RegistryServiceImpl))
         .interface(AlphaRegistryServiceServer::new(RegistryServiceImpl))
@@ -412,9 +412,8 @@ async fn one_registry_server(
         .unwrap()
 }
 
-fn server_config(protocols: ProtocolSet, operation_timeout: Duration) -> ServerConfig {
+fn server_config(operation_timeout: Duration) -> ServerConfig {
     ServerConfig::builder()
-        .protocols(protocols)
         .registry(
             ServerRegistryConfig::builder()
                 .startup_timeout(Duration::from_secs(1))
@@ -428,13 +427,11 @@ fn server_config(protocols: ProtocolSet, operation_timeout: Duration) -> ServerC
         .unwrap()
 }
 
-fn expected_keys(registries: &[&str], protocols: &[&str]) -> Vec<String> {
+fn expected_keys(registries: &[&str]) -> Vec<String> {
     let mut keys = Vec::new();
     for registry in registries {
-        for protocol in protocols {
-            for service in ["alpha-registry-e2e", "zeta-registry-e2e"] {
-                keys.push(format!("{registry}:{protocol}:{service}"));
-            }
+        for service in ["alpha-registry-e2e", "zeta-registry-e2e"] {
+            keys.push(format!("{registry}:{service}"));
         }
     }
     keys

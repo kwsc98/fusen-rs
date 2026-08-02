@@ -20,20 +20,24 @@ pub mod __macro {
         }
 
         #[derive(Clone, Copy)]
-        pub enum RpcFieldSource {
+        pub enum ArgumentSource {
             Path,
             Query,
+            Header,
+            Cookie,
             BodyField,
             Body,
+            QueryMap,
+            HeaderMap,
         }
 
         #[derive(Clone, Copy)]
-        pub struct RpcField;
+        pub struct ArgumentField;
 
-        impl RpcField {
+        impl ArgumentField {
             pub const fn new(
                 _name: &'static str,
-                _source: RpcFieldSource,
+                _source: ArgumentSource,
                 _repeated: bool,
             ) -> Self {
                 Self
@@ -64,14 +68,16 @@ pub mod __macro {
             }
         }
 
-        pub struct SpringCloudMethod;
+        pub struct HttpOperation;
 
         pub fn http_method(
             _method: http::Method,
             _path: &str,
-            _fields: &[RpcField],
-        ) -> Result<SpringCloudMethod, String> {
-            Ok(SpringCloudMethod)
+            _consumes: &str,
+            _produces: &str,
+            _fields: &[ArgumentField],
+        ) -> Result<HttpOperation, String> {
+            Ok(HttpOperation)
         }
 
         pub struct MethodDescriptor;
@@ -80,7 +86,7 @@ pub mod __macro {
             pub fn new(
                 _id: MethodId,
                 _identity: impl Into<String>,
-                _spring: Option<SpringCloudMethod>,
+                _http: HttpOperation,
             ) -> Result<Self, DescriptorError> {
                 Ok(Self)
             }
@@ -176,17 +182,17 @@ pub mod __macro {
             }
         }
 
-        pub struct RpcCall;
+        pub struct Call;
 
-        impl RpcCall {
+        impl Call {
             pub fn new() -> Self {
                 Self
             }
         }
 
-        pub struct RpcArguments;
+        pub struct Arguments;
 
-        impl RpcArguments {
+        impl Arguments {
             pub fn new() -> Self {
                 Self
             }
@@ -194,20 +200,20 @@ pub mod __macro {
             pub fn insert(&mut self, _name: String, _value: ()) {}
         }
 
-        pub fn encode_argument<T>(_value: &T) -> Result<(), RpcError> {
+        pub fn encode_argument<T>(_value: &T) -> Result<(), Error> {
             Ok(())
         }
 
-        pub struct RpcResponse<T>(T);
+        pub struct Response<T>(T);
 
-        impl<T> RpcResponse<T> {
+        impl<T> Response<T> {
             pub fn new(body: T) -> Self {
                 Self(body)
             }
         }
 
         #[derive(Debug)]
-        pub struct RpcError;
+        pub struct Error;
 
         #[derive(Clone)]
         pub struct ServiceClient;
@@ -216,11 +222,11 @@ pub mod __macro {
             pub async fn invoke<T, F>(
                 &self,
                 _method: MethodId,
-                _call: RpcCall,
+                _call: Call,
                 _encode: F,
-            ) -> Result<RpcResponse<T>, RpcError>
+            ) -> Result<Response<T>, Error>
             where
-                F: FnOnce() -> Result<RpcArguments, RpcError>,
+                F: FnOnce() -> Result<Arguments, Error>,
             {
                 unimplemented!()
             }
@@ -240,10 +246,10 @@ pub mod __macro {
             }
         }
 
-        pub trait Middleware: Send + Sync + 'static {}
+        pub trait Interceptor: Send + Sync + 'static {}
 
-        pub type MiddlewareResult = Result<RpcResponse<Vec<u8>>, RpcError>;
-        pub type MiddlewareFuture<'a> = Pin<Box<dyn Future<Output = MiddlewareResult> + Send + 'a>>;
+        pub type InterceptorResult = Result<Response<Vec<u8>>, Error>;
+        pub type InterceptorFuture<'a> = Pin<Box<dyn Future<Output = InterceptorResult> + Send + 'a>>;
 
         pub struct ServerInvocation;
 
@@ -252,32 +258,32 @@ pub mod __macro {
                 MethodId::new(0)
             }
 
-            pub fn rpc_call(&self) -> RpcCall {
-                RpcCall
+            pub fn call(&self) -> Call {
+                Call
             }
 
             pub fn decode_argument<T>(
                 &mut self,
                 _name: &str,
-                _spring_text: bool,
-            ) -> Result<T, RpcError> {
+                _text_encoded: bool,
+            ) -> Result<T, Error> {
                 unimplemented!()
             }
 
-            pub fn finish_arguments(&self) -> Result<(), RpcError> {
+            pub fn finish_arguments(&self) -> Result<(), Error> {
                 Ok(())
             }
 
-            pub fn encode_response<T>(self, _response: RpcResponse<T>) -> MiddlewareResult {
+            pub fn encode_response<T>(self, _response: Response<T>) -> InterceptorResult {
                 unimplemented!()
             }
         }
 
-        pub fn method_not_found(_method: MethodId) -> RpcError {
-            RpcError
+        pub fn method_not_found(_method: MethodId) -> Error {
+            Error
         }
 
-        type Dispatch<T> = for<'a> fn(&'a T, ServerInvocation) -> MiddlewareFuture<'a>;
+        type Dispatch<T> = for<'a> fn(&'a T, ServerInvocation) -> InterceptorFuture<'a>;
 
         pub struct ServerService<T>(T);
 
@@ -290,11 +296,11 @@ pub mod __macro {
                 Self(handler)
             }
 
-            pub fn head_middleware(self, _middleware: impl Middleware) -> Self {
+            pub fn head_interceptor(self, _interceptor: impl Interceptor) -> Self {
                 self
             }
 
-            pub fn middleware(self, _middleware: impl Middleware) -> Self {
+            pub fn interceptor(self, _interceptor: impl Interceptor) -> Self {
                 self
             }
 
@@ -311,7 +317,7 @@ pub mod __macro {
     }
 }
 
-pub use __macro::v1::{RpcCall, RpcError, RpcResponse};
+pub use __macro::v1::{Call, Error, Response};
 
 struct User(String);
 
@@ -326,19 +332,19 @@ trait UserApi {
     #[fusen_procedural_macro::method(method = "GET", path = "/users/{user_id}")]
     async fn get(
         &self,
-        #[param(context)] call: RpcCall,
+        #[param(context)] call: Call,
         #[sensitive(kind = "identifier")]
         #[param(path, name = "user_id")]
         id: String,
         #[param(query)] expand: Option<bool>,
-    ) -> Result<RpcResponse<User>, RpcError>;
+    ) -> Result<Response<User>, Error>;
 
     #[fusen_procedural_macro::method(method = "POST", path = "/users/batch")]
     async fn batch(
         &self,
         #[sensitive(opaque)] names: Vec<String>,
         notify: bool,
-    ) -> Result<RpcResponse<User>, RpcError>;
+    ) -> Result<Response<User>, Error>;
 
     #[fusen_procedural_macro::method(method = "POST", path = "/users/bindings")]
     async fn bindings(
@@ -348,19 +354,33 @@ trait UserApi {
         invocation: String,
         method_id: String,
         response: String,
-    ) -> Result<RpcResponse<User>, RpcError>;
+    ) -> Result<Response<User>, Error>;
 
     #[fusen_procedural_macro::method(method = "GET", path = "/users/labels")]
     async fn labels(
         &self,
         #[param(query, repeated)] labels: Vec<String>,
-    ) -> Result<RpcResponse<User>, RpcError>;
+    ) -> Result<Response<User>, Error>;
+
+    #[fusen_procedural_macro::method(
+        method = "GET",
+        path = "/users/metadata",
+        consumes = "application/vnd.fusen.request+json",
+        produces = "application/vnd.fusen.response+json"
+    )]
+    async fn metadata(
+        &self,
+        #[param(header, name = "x-tenant-id")] tenant: String,
+        #[param(cookie, name = "session-id")] session: String,
+        #[param(query_map)] query: String,
+        #[param(header_map)] headers: String,
+    ) -> Result<Response<User>, Error>;
 
     #[fusen_procedural_macro::method(method = "GET", path = "/users/raw/{type}")]
     async fn r#match(
         &self,
         #[param(path)] r#type: String,
-    ) -> Result<RpcResponse<User>, RpcError>;
+    ) -> Result<Response<User>, Error>;
 }
 
 struct Handler;
@@ -368,15 +388,15 @@ struct Handler;
 impl UserApi for Handler {
     async fn get(
         &self,
-        _call: RpcCall,
+        _call: Call,
         id: String,
         _expand: Option<bool>,
-    ) -> Result<RpcResponse<User>, RpcError> {
-        Ok(RpcResponse::new(User(id)))
+    ) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(id)))
     }
 
-    async fn batch(&self, names: Vec<String>, notify: bool) -> Result<RpcResponse<User>, RpcError> {
-        Ok(RpcResponse::new(User(format!(
+    async fn batch(&self, names: Vec<String>, notify: bool) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(format!(
             "{}:{notify}",
             names.join(",")
         ))))
@@ -389,18 +409,30 @@ impl UserApi for Handler {
         invocation: String,
         method_id: String,
         response: String,
-    ) -> Result<RpcResponse<User>, RpcError> {
-        Ok(RpcResponse::new(User(format!(
+    ) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(format!(
             "{arguments}:{handler}:{invocation}:{method_id}:{response}"
         ))))
     }
 
-    async fn labels(&self, labels: Vec<String>) -> Result<RpcResponse<User>, RpcError> {
-        Ok(RpcResponse::new(User(labels.join(","))))
+    async fn labels(&self, labels: Vec<String>) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(labels.join(","))))
     }
 
-    async fn r#match(&self, r#type: String) -> Result<RpcResponse<User>, RpcError> {
-        Ok(RpcResponse::new(User(r#type)))
+    async fn metadata(
+        &self,
+        tenant: String,
+        session: String,
+        query: String,
+        headers: String,
+    ) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(format!(
+            "{tenant}:{session}:{query}:{headers}"
+        ))))
+    }
+
+    async fn r#match(&self, r#type: String) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(r#type)))
     }
 }
 

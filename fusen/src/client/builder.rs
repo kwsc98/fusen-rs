@@ -3,15 +3,18 @@ use super::{
     runtime::ClientRuntime,
 };
 use crate::{
-    ClientError, ClientErrorKind, InstanceRouter, LoadBalancer, Middleware, WeightedRandom,
-    middleware::erase_middleware,
+    ClientError, ClientErrorKind, InstanceRouter, Interceptor, LoadBalancer, WeightedRandom,
+    interceptor::erase_interceptor,
 };
-use fusen_contract::{ServiceDescriptor, ServiceEndpoint, WireProtocol};
+use fusen_contract::{
+    ContractError, EndpointCapabilities, HttpBindingId, HttpVersionPolicy, ServiceDescriptor,
+    ServiceEndpoint,
+};
 use std::{marker::PhantomData, sync::Arc, sync::atomic::Ordering};
 
 enum EndpointMode {
     Unset,
-    Direct(Result<ServiceEndpoint, String>),
+    Direct(Result<ServiceEndpoint, ContractError>),
     Discovery,
 }
 
@@ -23,9 +26,11 @@ pub struct ClientBuilder<C> {
     descriptor: DescriptorFn,
     create: fn(ServiceClient) -> C,
     endpoint: EndpointMode,
-    protocol: WireProtocol,
-    middleware: Vec<Arc<dyn Middleware>>,
-    attempt_middleware: Vec<Arc<dyn Middleware>>,
+    binding_id: HttpBindingId,
+    http_version_policy: HttpVersionPolicy,
+    direct_capabilities: Option<EndpointCapabilities>,
+    interceptor: Vec<Arc<dyn Interceptor>>,
+    attempt_interceptor: Vec<Arc<dyn Interceptor>>,
     routers: Vec<Arc<dyn InstanceRouter>>,
     load_balancer: Arc<dyn LoadBalancer>,
     marker: PhantomData<fn() -> C>,
@@ -44,9 +49,11 @@ impl<C> ClientBuilder<C> {
             descriptor,
             create,
             endpoint: EndpointMode::Unset,
-            protocol: WireProtocol::FusenV1,
-            middleware: Vec::new(),
-            attempt_middleware: Vec::new(),
+            binding_id: HttpBindingId::default(),
+            http_version_policy: HttpVersionPolicy::Auto,
+            direct_capabilities: None,
+            interceptor: Vec::new(),
+            attempt_interceptor: Vec::new(),
             routers: Vec::new(),
             load_balancer: Arc::new(WeightedRandom),
             marker: PhantomData,
@@ -55,12 +62,7 @@ impl<C> ClientBuilder<C> {
 
     /// Uses one explicitly configured HTTP or HTTPS endpoint.
     pub fn direct(mut self, endpoint: impl AsRef<str>) -> Self {
-        self.endpoint = EndpointMode::Direct(
-            endpoint
-                .as_ref()
-                .parse::<ServiceEndpoint>()
-                .map_err(|error| error.to_string()),
-        );
+        self.endpoint = EndpointMode::Direct(endpoint.as_ref().parse::<ServiceEndpoint>());
         self
     }
 
@@ -70,21 +72,34 @@ impl<C> ClientBuilder<C> {
         self
     }
 
-    /// Selects the versioned wire protocol.
-    pub fn protocol(mut self, protocol: WireProtocol) -> Self {
-        self.protocol = protocol;
+    /// Selects a registered HTTP request and response binding.
+    pub fn binding(mut self, binding_id: HttpBindingId) -> Self {
+        self.binding_id = binding_id;
         self
     }
 
-    /// Appends interface-local logical-call middleware.
-    pub fn middleware(mut self, middleware: impl Middleware) -> Self {
-        self.middleware.push(erase_middleware(middleware));
+    /// Selects an HTTP transport-version policy independently from the binding.
+    pub fn http_version_policy(mut self, policy: HttpVersionPolicy) -> Self {
+        self.http_version_policy = policy;
         self
     }
 
-    /// Appends interface-local physical-attempt middleware.
-    pub fn attempt_middleware(mut self, middleware: impl Middleware) -> Self {
-        self.attempt_middleware.push(erase_middleware(middleware));
+    /// Attaches known capabilities to a direct endpoint, enabling negotiated controls.
+    pub fn direct_capabilities(mut self, capabilities: EndpointCapabilities) -> Self {
+        self.direct_capabilities = Some(capabilities);
+        self
+    }
+
+    /// Appends interface-local logical-call interceptor.
+    pub fn interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.interceptor.push(erase_interceptor(interceptor));
+        self
+    }
+
+    /// Appends interface-local physical-attempt interceptor.
+    pub fn attempt_interceptor(mut self, interceptor: impl Interceptor) -> Self {
+        self.attempt_interceptor
+            .push(erase_interceptor(interceptor));
         self
     }
 
@@ -103,67 +118,91 @@ impl<C> ClientBuilder<C> {
     /// Validates the interface before activating discovery or returning a ready client.
     pub async fn connect(self) -> Result<C, ClientError> {
         if self.runtime.inner.state.load(Ordering::Acquire) != super::runtime::CLIENT_RUNNING {
-            return Err(ClientError::message(
+            return Err(ClientError::from_message(
                 ClientErrorKind::Closed,
                 "client runtime is draining or closed",
             ));
         }
         let interface = (self.descriptor)().map_err(|reason| {
-            ClientError::message(
+            ClientError::from_message(
                 ClientErrorKind::Connect,
                 format!("invalid interface schema: {reason}"),
             )
         })?;
-        if !interface.supported_protocols().contains(self.protocol) {
-            return Err(ClientError::message(
-                ClientErrorKind::Connect,
-                format!(
-                    "interface {} does not implement {}",
-                    interface.identity(),
-                    self.protocol
-                ),
-            ));
-        }
+        let binding = self
+            .runtime
+            .inner
+            .http_bindings
+            .get(&self.binding_id)
+            .cloned()
+            .ok_or_else(|| {
+                ClientError::from_message(
+                    ClientErrorKind::Connect,
+                    format!("HTTP binding {} is not registered", self.binding_id),
+                )
+            })?;
         let source = match self.endpoint {
-            EndpointMode::Direct(endpoint) => EndpointSource::Direct(
-                endpoint.map_err(|error| ClientError::message(ClientErrorKind::Connect, error))?,
-            ),
+            EndpointMode::Direct(endpoint) => {
+                if self
+                    .direct_capabilities
+                    .as_ref()
+                    .is_some_and(|capabilities| !capabilities.supports_binding(&self.binding_id))
+                {
+                    return Err(ClientError::from_message(
+                        ClientErrorKind::Connect,
+                        format!(
+                            "direct endpoint does not support HTTP binding {}",
+                            self.binding_id
+                        ),
+                    ));
+                }
+                EndpointSource::Direct {
+                    endpoint: endpoint.map_err(|error| {
+                        ClientError::with_source(
+                            ClientErrorKind::Connect,
+                            "invalid direct service endpoint",
+                            error,
+                        )
+                    })?,
+                    capabilities: self.direct_capabilities,
+                }
+            }
             EndpointMode::Discovery => {
                 let manager = self.runtime.inner.subscriptions.as_ref().ok_or_else(|| {
-                    ClientError::message(
+                    ClientError::from_message(
                         ClientErrorKind::Discovery,
                         "discover() requires a registry on ClientRuntime",
                     )
                 })?;
-                let directory = manager
-                    .acquire(interface.selector().clone(), self.protocol)
-                    .await?;
+                let directory = manager.acquire(interface.selector().clone()).await?;
                 EndpointSource::Discovery(directory)
             }
             EndpointMode::Unset => {
-                return Err(ClientError::message(
+                return Err(ClientError::from_message(
                     ClientErrorKind::Connect,
                     "client must select direct() or discover()",
                 ));
             }
         };
-        let mut middleware =
-            Vec::with_capacity(self.runtime.inner.middleware.len() + self.middleware.len());
-        middleware.extend(self.runtime.inner.middleware.iter().cloned());
-        middleware.extend(self.middleware);
-        let mut attempt_middleware = Vec::with_capacity(
-            self.runtime.inner.attempt_middleware.len() + self.attempt_middleware.len(),
+        let mut interceptor =
+            Vec::with_capacity(self.runtime.inner.interceptor.len() + self.interceptor.len());
+        interceptor.extend(self.runtime.inner.interceptor.iter().cloned());
+        interceptor.extend(self.interceptor);
+        let mut attempt_interceptor = Vec::with_capacity(
+            self.runtime.inner.attempt_interceptor.len() + self.attempt_interceptor.len(),
         );
-        attempt_middleware.extend(self.runtime.inner.attempt_middleware.iter().cloned());
-        attempt_middleware.extend(self.attempt_middleware);
+        attempt_interceptor.extend(self.runtime.inner.attempt_interceptor.iter().cloned());
+        attempt_interceptor.extend(self.attempt_interceptor);
         let client = ServiceClient {
             inner: Arc::new(ServiceClientInner {
                 runtime: self.runtime.inner,
                 service: interface,
-                protocol: self.protocol,
+                binding_id: self.binding_id,
+                binding,
+                http_version_policy: self.http_version_policy,
                 source,
-                middleware: Arc::from(middleware),
-                attempt_middleware: Arc::from(attempt_middleware),
+                interceptor: Arc::from(interceptor),
+                attempt_interceptor: Arc::from(attempt_interceptor),
                 routers: Arc::from(self.routers),
                 load_balancer: self.load_balancer,
             }),

@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "removed-rpc-parameter")]
 trait RemovedRpcParameter {
@@ -9,7 +9,7 @@ trait RemovedRpcParameter {
     async fn get(
         &self,
         #[rpc(path)] id: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

@@ -1,7 +1,7 @@
 use crate::resilience::breaker::{
     BreakerConfig, BreakerPhase, CircuitBreaker, EndpointBreakerStore,
 };
-use fusen_contract::{ServiceInstance, ServiceSelector, WireProtocol};
+use fusen_contract::{HttpBindingId, ServiceInstance, ServiceSelector};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
@@ -20,7 +20,7 @@ pub(crate) enum EndpointBreakerSource {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct EndpointBreakerKey {
     service: String,
-    protocol: WireProtocol,
+    binding_id: HttpBindingId,
     source: EndpointBreakerSource,
     endpoint: String,
 }
@@ -28,38 +28,27 @@ struct EndpointBreakerKey {
 impl EndpointBreakerKey {
     fn new(
         service: &str,
-        protocol: WireProtocol,
+        binding_id: &HttpBindingId,
         source: EndpointBreakerSource,
         endpoint: &str,
     ) -> Self {
         Self {
             service: service.to_owned(),
-            protocol,
+            binding_id: binding_id.clone(),
             source,
             endpoint: endpoint.to_owned(),
         }
-    }
-
-    fn discovery(member: &DiscoveryEndpoint) -> Self {
-        Self::new(
-            &member.service,
-            member.protocol,
-            EndpointBreakerSource::Discovery,
-            &member.endpoint,
-        )
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DiscoveryOwner {
     selector: ServiceSelector,
-    protocol: WireProtocol,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct DiscoveryEndpoint {
     service: String,
-    protocol: WireProtocol,
     endpoint: String,
 }
 
@@ -98,12 +87,12 @@ impl EndpointBreakers {
     pub(crate) fn get_or_insert_observed(
         &self,
         service: &str,
-        protocol: WireProtocol,
+        binding_id: &HttpBindingId,
         source: EndpointBreakerSource,
         endpoint: &str,
         observer: TransitionObserver,
     ) -> Arc<CircuitBreaker> {
-        let key = EndpointBreakerKey::new(service, protocol, source, endpoint);
+        let key = EndpointBreakerKey::new(service, binding_id, source, endpoint);
         if source == EndpointBreakerSource::Direct {
             return self.inner.store.get_or_insert_observed(key, observer);
         }
@@ -115,7 +104,6 @@ impl EndpointBreakers {
             .unwrap_or_else(|error| error.into_inner());
         let member = DiscoveryEndpoint {
             service: service.to_owned(),
-            protocol,
             endpoint: endpoint.to_owned(),
         };
         if memberships.references.contains_key(&member) {
@@ -128,18 +116,15 @@ impl EndpointBreakers {
     pub(crate) fn replace_discovery(
         &self,
         selector: &ServiceSelector,
-        protocol: WireProtocol,
         instances: &[ServiceInstance],
     ) {
         let owner = DiscoveryOwner {
             selector: selector.clone(),
-            protocol,
         };
         let current = instances
             .iter()
             .map(|instance| DiscoveryEndpoint {
                 service: selector.identity().to_owned(),
-                protocol,
                 endpoint: instance.endpoint().as_str().to_owned(),
             })
             .collect::<HashSet<_>>();
@@ -156,10 +141,9 @@ impl EndpointBreakers {
         self.remove_cached(evicted);
     }
 
-    pub(crate) fn remove_discovery(&self, selector: &ServiceSelector, protocol: WireProtocol) {
+    pub(crate) fn remove_discovery(&self, selector: &ServiceSelector) {
         let owner = DiscoveryOwner {
             selector: selector.clone(),
-            protocol,
         };
         let mut memberships = self
             .inner
@@ -172,11 +156,14 @@ impl EndpointBreakers {
     }
 
     fn remove_cached(&self, endpoints: Vec<DiscoveryEndpoint>) {
-        for endpoint in endpoints {
-            self.inner
-                .store
-                .remove(&EndpointBreakerKey::discovery(&endpoint));
-        }
+        let endpoints = endpoints.into_iter().collect::<HashSet<_>>();
+        self.inner.store.retain(|key| {
+            key.source != EndpointBreakerSource::Discovery
+                || !endpoints.contains(&DiscoveryEndpoint {
+                    service: key.service.clone(),
+                    endpoint: key.endpoint.clone(),
+                })
+        });
     }
 }
 
@@ -216,7 +203,9 @@ fn decrement_references<'a>(
 mod tests {
     use super::*;
     use crate::resilience::breaker::DEFAULT_ENDPOINT_IDLE_EVICTION;
-    use fusen_contract::{InstanceId, ServiceEndpoint, ServiceWeight};
+    use fusen_contract::{
+        EndpointCapabilities, HttpBindingId, InstanceId, ServiceEndpoint, ServiceWeight,
+    };
 
     fn breakers() -> EndpointBreakers {
         EndpointBreakers::new(
@@ -245,6 +234,7 @@ mod tests {
             format!("http://127.0.0.1:{port}")
                 .parse::<ServiceEndpoint>()
                 .unwrap(),
+            EndpointCapabilities::default(),
             ServiceWeight::default(),
         )
     }
@@ -257,44 +247,37 @@ mod tests {
     fn snapshot_removal_evicts_only_the_missing_discovery_entry() {
         let breakers = breakers();
         let selector = selector();
+        let binding = HttpBindingId::default();
         let first = instance("first", 8001);
         let second = instance("second", 8002);
-        breakers.replace_discovery(
-            &selector,
-            WireProtocol::FusenV1,
-            &[first.clone(), second.clone()],
-        );
+        breakers.replace_discovery(&selector, &[first.clone(), second.clone()]);
         let removed = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Discovery,
             first.endpoint().as_str(),
             observer(),
         );
         let retained = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Discovery,
             second.endpoint().as_str(),
             observer(),
         );
 
-        breakers.replace_discovery(
-            &selector,
-            WireProtocol::FusenV1,
-            std::slice::from_ref(&second),
-        );
+        breakers.replace_discovery(&selector, std::slice::from_ref(&second));
 
         let removed_replacement = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Discovery,
             first.endpoint().as_str(),
             observer(),
         );
         let retained_again = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Discovery,
             second.endpoint().as_str(),
             observer(),
@@ -307,56 +290,49 @@ mod tests {
     fn discovery_cleanup_does_not_prune_direct_or_other_owner_entries() {
         let breakers = breakers();
         let selector = selector();
+        let binding = HttpBindingId::default();
         let endpoint = instance("shared", 8001);
         let mut metadata = fusen_contract::Metadata::new();
         metadata.insert("zone".to_owned(), "east".to_owned());
         let filtered_selector = selector.clone().with_metadata(metadata).unwrap();
-        breakers.replace_discovery(
-            &selector,
-            WireProtocol::FusenV1,
-            std::slice::from_ref(&endpoint),
-        );
-        breakers.replace_discovery(
-            &filtered_selector,
-            WireProtocol::FusenV1,
-            std::slice::from_ref(&endpoint),
-        );
+        breakers.replace_discovery(&selector, std::slice::from_ref(&endpoint));
+        breakers.replace_discovery(&filtered_selector, std::slice::from_ref(&endpoint));
         let discovered = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Discovery,
             endpoint.endpoint().as_str(),
             observer(),
         );
         let direct = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Direct,
             endpoint.endpoint().as_str(),
             observer(),
         );
 
-        breakers.remove_discovery(&selector, WireProtocol::FusenV1);
+        breakers.remove_discovery(&selector);
         let still_discovered = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Discovery,
             endpoint.endpoint().as_str(),
             observer(),
         );
         assert!(Arc::ptr_eq(&discovered, &still_discovered));
 
-        breakers.remove_discovery(&filtered_selector, WireProtocol::FusenV1);
+        breakers.remove_discovery(&filtered_selector);
         let uncached_discovery = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Discovery,
             endpoint.endpoint().as_str(),
             observer(),
         );
         let direct_again = breakers.get_or_insert_observed(
             selector.identity(),
-            WireProtocol::FusenV1,
+            &binding,
             EndpointBreakerSource::Direct,
             endpoint.endpoint().as_str(),
             observer(),

@@ -65,6 +65,8 @@ impl Parse for ServiceArgs {
 pub(crate) struct MethodArgs {
     pub(crate) method: Option<LitStr>,
     pub(crate) path: Option<LitStr>,
+    pub(crate) consumes: Option<LitStr>,
+    pub(crate) produces: Option<LitStr>,
 }
 
 impl MethodArgs {
@@ -102,10 +104,24 @@ impl MethodArgs {
                     &field,
                     "path",
                 )?,
+                "consumes" => set_once(
+                    &mut args.consumes,
+                    parse_string(field.value.clone(), "consumes")?,
+                    &field,
+                    "consumes",
+                )?,
+                "produces" => set_once(
+                    &mut args.produces,
+                    parse_string(field.value.clone(), "produces")?,
+                    &field,
+                    "produces",
+                )?,
                 unknown => {
                     return Err(syn::Error::new_spanned(
                         field,
-                        format!("unknown method field `{unknown}`; expected `method` or `path`"),
+                        format!(
+                            "unknown method field `{unknown}`; expected `method`, `path`, `consumes`, or `produces`"
+                        ),
                     ));
                 }
             }
@@ -166,9 +182,17 @@ mod tests {
 
     #[test]
     fn parses_method_contract() {
-        let args = MethodArgs::parse_tokens(quote!(method = "GET", path = "/users/{id}")).unwrap();
+        let args = MethodArgs::parse_tokens(quote!(
+            method = "GET",
+            path = "/users/{id}",
+            consumes = "application/json",
+            produces = "application/problem+json"
+        ))
+        .unwrap();
         assert_eq!(args.method.unwrap().value(), "GET");
         assert_eq!(args.path.unwrap().value(), "/users/{id}");
+        assert_eq!(args.consumes.unwrap().value(), "application/json");
+        assert_eq!(args.produces.unwrap().value(), "application/problem+json");
     }
 
     #[test]

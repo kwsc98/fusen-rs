@@ -1,0 +1,5 @@
+error: invalid consumes media type "not a media type": expected a MIME media type
+ --> tests/ui/fail/invalid_consumes_media_type.rs:8:20
+  |
+8 |         consumes = "not a media type"
+  |                    ^^^^^^^^^^^^^^^^^^

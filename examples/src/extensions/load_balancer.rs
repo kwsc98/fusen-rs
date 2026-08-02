@@ -1,6 +1,6 @@
 //! Custom load balancer example.
 
-use fusen_rs::{InstanceSnapshot, LoadBalancer, RpcCategory, RpcContext, RpcError};
+use fusen_rs::{Context, Error, ErrorCategory, InstanceSnapshot, LoadBalancer};
 use rand::RngExt;
 use tracing::debug;
 
@@ -8,20 +8,16 @@ use tracing::debug;
 pub struct RandomLoadBalancer;
 
 impl LoadBalancer for RandomLoadBalancer {
-    fn select(
-        &self,
-        context: &RpcContext,
-        instances: &InstanceSnapshot,
-    ) -> Result<usize, RpcError> {
+    fn select(&self, context: &Context, instances: &InstanceSnapshot) -> Result<usize, Error> {
         debug!(
             request_id = %context.request_id(),
             service = context.interface().identity(),
-            method = context.method().fusen_identity(),
+            method = context.method().invocation_name(),
             "load balancing request"
         );
         if instances.is_empty() {
-            return Err(RpcError::new(
-                RpcCategory::Unavailable,
+            return Err(Error::local(
+                ErrorCategory::Unavailable,
                 "no_instances",
                 "no healthy service instances",
             )

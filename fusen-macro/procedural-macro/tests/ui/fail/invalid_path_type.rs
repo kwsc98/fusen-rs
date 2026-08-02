@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "invalid-path-type")]
 trait InvalidPathType {
@@ -11,7 +11,7 @@ trait InvalidPathType {
     async fn get(
         &self,
         id: Option<String>,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

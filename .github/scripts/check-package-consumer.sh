@@ -68,22 +68,77 @@ fusen-procedural-macro = { path = "$work_dir/unpacked/fusen-procedural-macro-0.9
 fusen-register = { path = "$work_dir/unpacked/fusen-register-0.9.0" }
 EOF
 
-    if [[ "$package" == "fusen-rs" ]]; then
+    if [[ "$package" == "fusen-contract" ]]; then
         cat >"$consumer_dir/src/lib.rs" <<'EOF'
-use fusen_rs::{ClientBuilder, ClientRuntime, RpcError, RpcResponse, interface};
+use fusen_contract::{
+    ContractError, EndpointCapabilities, HTTP_JSON_V1, HttpBindingId, HttpOperation,
+    HttpParameter, HttpParameterCardinality, HttpParameterSource, HttpVersionPolicy,
+    HttpVersionSet,
+};
+
+pub fn default_http_capabilities() -> Result<EndpointCapabilities, ContractError> {
+    let binding = HttpBindingId::new(HTTP_JSON_V1)?;
+    let capabilities = EndpointCapabilities::new(
+        HttpVersionSet::ALL,
+        [binding.clone()],
+        true,
+    )?;
+    assert!(capabilities.supports_binding(&binding));
+    assert_eq!(binding.as_str(), HTTP_JSON_V1);
+    let _policy = HttpVersionPolicy::Auto;
+    Ok(capabilities)
+}
+
+pub fn assert_http_operation_types(
+    operation: HttpOperation,
+    parameter: HttpParameter,
+    source: HttpParameterSource,
+    cardinality: HttpParameterCardinality,
+) -> (HttpOperation, HttpParameter, HttpParameterSource, HttpParameterCardinality) {
+    (operation, parameter, source, cardinality)
+}
+EOF
+    elif [[ "$package" == "fusen-nacos" ]]; then
+        cat >"$consumer_dir/src/lib.rs" <<'EOF'
+use fusen_nacos::{NacosConvention, NacosRegistry};
+
+pub fn use_spring_cloud_convention(registry: NacosRegistry) -> NacosRegistry {
+    registry.with_convention(NacosConvention::SpringCloud)
+}
+EOF
+    elif [[ "$package" == "fusen-rs" ]]; then
+        cat >"$consumer_dir/src/lib.rs" <<'EOF'
+use fusen_rs::{
+    ClientBuilder, ClientRuntime, ClientRuntimeBuilder, EndpointCapabilities, Error, ErrorCategory,
+    ConfigValidationError, ErrorConstructionError, ErrorDecoder, ErrorKind, ErrorOrigin,
+    HTTP_JSON_V1, HttpBindingId,
+    HttpOperation, HttpParameter, HttpParameterCardinality, HttpParameterSource,
+    HttpVersionPolicy, HttpVersionSet, RequestEncoder, Response, ResponseDecoder, ServerConfig,
+    interface,
+};
 
 #[interface(name = "package-consumer")]
 pub trait PackageConsumerApi {
     #[fusen_rs::method(method = "GET", path = "/ping")]
-    async fn ping(&self) -> Result<RpcResponse<String>, RpcError>;
+    async fn ping(&self) -> Result<Response<String>, Error>;
 }
 
 pub struct PackageConsumerHandler;
 
 impl PackageConsumerApi for PackageConsumerHandler {
-    async fn ping(&self) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new("pong".to_owned()))
+    async fn ping(&self) -> Result<Response<String>, Error> {
+        Ok(Response::new("pong".to_owned()))
     }
+}
+
+pub fn application_error_contract() -> Result<(ErrorKind, ErrorOrigin), ErrorConstructionError> {
+    let error = Error::application(
+        ErrorCategory::InvalidArgument,
+        "invalid_ping",
+        "ping input is invalid",
+    )?;
+    let _ = error.category().canonical_status();
+    Ok((error.kind(), error.origin()))
 }
 
 pub fn packaged_server() -> PackageConsumerApiServer<PackageConsumerHandler> {
@@ -92,6 +147,47 @@ pub fn packaged_server() -> PackageConsumerApiServer<PackageConsumerHandler> {
 
 pub fn packaged_client(runtime: &ClientRuntime) -> ClientBuilder<PackageConsumerApiClient> {
     PackageConsumerApiClient::builder(runtime)
+        .binding(HttpBindingId::default())
+        .http_version_policy(HttpVersionPolicy::Auto)
+        .direct_capabilities(EndpointCapabilities::default())
+}
+
+pub fn assert_http_contract(
+    operation: HttpOperation,
+    parameter: HttpParameter,
+    source: HttpParameterSource,
+    cardinality: HttpParameterCardinality,
+) -> (HttpOperation, HttpParameter, HttpParameterSource, HttpParameterCardinality) {
+    assert_eq!(HttpBindingId::default().as_str(), HTTP_JSON_V1);
+    assert_eq!(EndpointCapabilities::default().http_versions(), HttpVersionSet::HTTP_1_1);
+    (operation, parameter, source, cardinality)
+}
+
+pub fn assert_client_codec_traits<E, R, D>(_encoder: &E, _response: &R, _error: &D)
+where
+    E: RequestEncoder,
+    R: ResponseDecoder,
+    D: ErrorDecoder,
+{}
+
+pub fn runtime_with_http_binding<E, R, D>(
+    id: HttpBindingId,
+    encoder: E,
+    response: R,
+    error: D,
+) -> ClientRuntimeBuilder
+where
+    E: RequestEncoder,
+    R: ResponseDecoder,
+    D: ErrorDecoder,
+{
+    ClientRuntime::builder().http_binding(id, encoder, response, error)
+}
+
+pub fn server_capabilities() -> Result<ServerConfig, ConfigValidationError> {
+    ServerConfig::builder()
+        .capabilities(EndpointCapabilities::default())
+        .build()
 }
 
 pub fn assert_client_implements_interface(client: &PackageConsumerApiClient) {

@@ -1,11 +1,16 @@
-//! Golden contract coverage for the two versioned JSON wire protocols.
+//! Golden contract coverage for the built-in HTTP JSON binding.
 
 use bytes::Bytes;
 use fusen_rs::{
-    ClientRuntime, RpcCategory, RpcError, RpcErrorDetails, RpcResponse, SensitiveFields, Server,
-    ServerConfig, WireProtocol, contract::ProtocolSet, interface,
+    ClientRuntime, Error, ErrorCategory, ErrorDetails, ErrorKind, ErrorOrigin, Response,
+    SensitiveFields, Server,
+    contract::{EndpointCapabilities, HttpBindingId, HttpVersionPolicy, HttpVersionSet},
+    interface,
 };
-use http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version, header::CONTENT_TYPE};
+use http::{
+    HeaderMap, Method, Request, Response as HttpResponse, StatusCode, Uri, Version,
+    header::CONTENT_TYPE,
+};
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -14,7 +19,6 @@ use serde_json::json;
 use std::{convert::Infallible, net::SocketAddr, time::Duration};
 use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
 
-const FUSEN_CONTENT_TYPE: &str = "application/fusen+json;version=1";
 const JSON_CONTENT_TYPE: &str = "application/json";
 const PROBLEM_CONTENT_TYPE: &str = "application/problem+json";
 
@@ -26,7 +30,7 @@ struct WireProblemDetails {
     detail: Option<String>,
     instance: Option<String>,
     code: String,
-    request_id: String,
+    request_id: Option<String>,
     retryable: bool,
     details: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -46,7 +50,7 @@ struct CountAlias(u64);
 #[interface(name = "wire-contract", group = "prod", version = "1")]
 trait WireContract {
     #[fusen_rs::method(method = "GET", path = "/echo/{name}")]
-    async fn echo(&self, #[param(path)] name: String) -> Result<RpcResponse<String>, RpcError>;
+    async fn echo(&self, #[param(path)] name: String) -> Result<Response<String>, Error>;
 
     #[fusen_rs::method(method = "POST", path = "/users/{id}")]
     async fn create(
@@ -54,62 +58,62 @@ trait WireContract {
         id: String,
         #[param(query)] expand: Option<bool>,
         #[param(body)] request: CreateUser,
-    ) -> Result<RpcResponse<String>, RpcError>;
+    ) -> Result<Response<String>, Error>;
 
     #[fusen_rs::method(method = "HEAD", path = "/health")]
-    async fn health(&self) -> Result<RpcResponse<()>, RpcError>;
+    async fn health(&self) -> Result<Response<()>, Error>;
 
     #[fusen_rs::method(method = "HEAD", path = "/unhealthy")]
-    async fn unhealthy(&self) -> Result<RpcResponse<()>, RpcError>;
+    async fn unhealthy(&self) -> Result<Response<()>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/filters")]
     async fn filter(
         &self,
         #[param(query)] enabled: Option<bool>,
-    ) -> Result<RpcResponse<Option<bool>>, RpcError>;
+    ) -> Result<Response<Option<bool>>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/labels")]
     async fn labels(
         &self,
         #[param(query, repeated)] label: Vec<String>,
-    ) -> Result<RpcResponse<Vec<String>>, RpcError>;
+    ) -> Result<Response<Vec<String>>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/aliases/count/{count}")]
     async fn alias_count(
         &self,
         #[param(path)] count: CountAlias,
-    ) -> Result<RpcResponse<CountAlias>, RpcError>;
+    ) -> Result<Response<CountAlias>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/aliases/filter")]
     async fn alias_filter(
         &self,
         #[param(query)] enabled: EnabledAlias,
-    ) -> Result<RpcResponse<EnabledAlias>, RpcError>;
+    ) -> Result<Response<EnabledAlias>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/aliases/labels")]
     async fn alias_labels(
         &self,
         #[param(query, repeated)] label: LabelsAlias,
-    ) -> Result<RpcResponse<LabelsAlias>, RpcError>;
+    ) -> Result<Response<LabelsAlias>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/aliases/scalar-labels")]
     async fn alias_labels_declared_scalar(
         &self,
         #[param(query)] label: LabelsAlias,
-    ) -> Result<RpcResponse<LabelsAlias>, RpcError>;
+    ) -> Result<Response<LabelsAlias>, Error>;
 
     #[fusen_rs::method(method = "GET", path = "/aliases/repeated-filter")]
     async fn alias_filter_declared_repeated(
         &self,
         #[param(query, repeated)] enabled: EnabledAlias,
-    ) -> Result<RpcResponse<EnabledAlias>, RpcError>;
+    ) -> Result<Response<EnabledAlias>, Error>;
 }
 
 struct FailingWireContract;
 
 impl WireContract for FailingWireContract {
-    async fn echo(&self, name: String) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new(name))
+    async fn echo(&self, name: String) -> Result<Response<String>, Error> {
+        Ok(Response::new(name))
     }
 
     async fn create(
@@ -117,12 +121,12 @@ impl WireContract for FailingWireContract {
         _id: String,
         _expand: Option<bool>,
         _request: CreateUser,
-    ) -> Result<RpcResponse<String>, RpcError> {
-        let mut details = RpcErrorDetails::new();
+    ) -> Result<Response<String>, Error> {
+        let mut details = ErrorDetails::new();
         details.insert("field", json!("id"));
         details.insert("constraint", json!("unique"));
-        let mut error = RpcError::application(
-            StatusCode::CONFLICT,
+        let mut error = Error::application(
+            ErrorCategory::Conflict,
             "user_conflict",
             "the user already exists",
         )
@@ -134,52 +138,49 @@ impl WireContract for FailingWireContract {
         Err(error)
     }
 
-    async fn health(&self) -> Result<RpcResponse<()>, RpcError> {
-        Ok(RpcResponse::new(()))
+    async fn health(&self) -> Result<Response<()>, Error> {
+        Ok(Response::new(()))
     }
 
-    async fn unhealthy(&self) -> Result<RpcResponse<()>, RpcError> {
+    async fn unhealthy(&self) -> Result<Response<()>, Error> {
         Err(
-            RpcError::application(StatusCode::CONFLICT, "unhealthy", "health check failed")
+            Error::application(ErrorCategory::Conflict, "unhealthy", "health check failed")
                 .unwrap(),
         )
     }
 
-    async fn filter(&self, enabled: Option<bool>) -> Result<RpcResponse<Option<bool>>, RpcError> {
-        Ok(RpcResponse::new(enabled))
+    async fn filter(&self, enabled: Option<bool>) -> Result<Response<Option<bool>>, Error> {
+        Ok(Response::new(enabled))
     }
 
-    async fn labels(&self, label: Vec<String>) -> Result<RpcResponse<Vec<String>>, RpcError> {
-        Ok(RpcResponse::new(label))
+    async fn labels(&self, label: Vec<String>) -> Result<Response<Vec<String>>, Error> {
+        Ok(Response::new(label))
     }
 
-    async fn alias_count(&self, count: CountAlias) -> Result<RpcResponse<CountAlias>, RpcError> {
-        Ok(RpcResponse::new(count))
+    async fn alias_count(&self, count: CountAlias) -> Result<Response<CountAlias>, Error> {
+        Ok(Response::new(count))
     }
 
-    async fn alias_filter(
-        &self,
-        enabled: EnabledAlias,
-    ) -> Result<RpcResponse<EnabledAlias>, RpcError> {
-        Ok(RpcResponse::new(enabled))
+    async fn alias_filter(&self, enabled: EnabledAlias) -> Result<Response<EnabledAlias>, Error> {
+        Ok(Response::new(enabled))
     }
 
-    async fn alias_labels(&self, label: LabelsAlias) -> Result<RpcResponse<LabelsAlias>, RpcError> {
-        Ok(RpcResponse::new(label))
+    async fn alias_labels(&self, label: LabelsAlias) -> Result<Response<LabelsAlias>, Error> {
+        Ok(Response::new(label))
     }
 
     async fn alias_labels_declared_scalar(
         &self,
         label: LabelsAlias,
-    ) -> Result<RpcResponse<LabelsAlias>, RpcError> {
-        Ok(RpcResponse::new(label))
+    ) -> Result<Response<LabelsAlias>, Error> {
+        Ok(Response::new(label))
     }
 
     async fn alias_filter_declared_repeated(
         &self,
         enabled: EnabledAlias,
-    ) -> Result<RpcResponse<EnabledAlias>, RpcError> {
-        Ok(RpcResponse::new(enabled))
+    ) -> Result<Response<EnabledAlias>, Error> {
+        Ok(Response::new(enabled))
     }
 }
 
@@ -193,13 +194,15 @@ struct CapturedRequest {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fusen_v1_named_parameters_and_envelopes_match_the_contract() {
+async fn h2c_path_query_body_and_invocation_controls_match_the_contract() {
     let (addr, mut captured, fixture) =
-        spawn_h2_fixture(FUSEN_CONTENT_TYPE, br#"{"result":"fusen-response"}"#).await;
+        spawn_h2_fixture(JSON_CONTENT_TYPE, br#""h2c-response""#).await;
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{addr}"))
-        .protocol(WireProtocol::FusenV1)
+        .binding(HttpBindingId::default())
+        .http_version_policy(HttpVersionPolicy::H2c)
+        .direct_capabilities(endpoint_capabilities(HttpVersionSet::HTTP_2))
         .connect()
         .await
         .unwrap();
@@ -216,7 +219,7 @@ async fn fusen_v1_named_parameters_and_envelopes_match_the_contract() {
             .await
             .unwrap()
             .into_body(),
-        "fusen-response"
+        "h2c-response"
     );
     let request = captured.recv().await.expect("fixture captured one request");
 
@@ -224,12 +227,12 @@ async fn fusen_v1_named_parameters_and_envelopes_match_the_contract() {
     assert_eq!(request.version, Version::HTTP_2);
     assert_eq!(
         request.uri.path_and_query().unwrap().as_str(),
-        "/_fusen/v1/wire-contract/create"
+        "/users/user-7?expand=true"
     );
     assert_eq!(request.uri.scheme_str(), Some("http"));
     assert_eq!(
         request.headers.get(CONTENT_TYPE).unwrap(),
-        FUSEN_CONTENT_TYPE
+        JSON_CONTENT_TYPE
     );
     assert_eq!(
         request.headers.get("x-fusen-service-group").unwrap(),
@@ -241,13 +244,7 @@ async fn fusen_v1_named_parameters_and_envelopes_match_the_contract() {
     assert_valid_timeout(&request.headers);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&request.body).unwrap(),
-        json!({
-            "arguments": {
-                "expand": true,
-                "id": "user-7",
-                "request": {"name": "Ada Lovelace"}
-            }
-        })
+        json!({"name": "Ada Lovelace"})
     );
 
     fixture.abort();
@@ -257,13 +254,13 @@ async fn fusen_v1_named_parameters_and_envelopes_match_the_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_path_query_body_and_raw_success_match_the_contract() {
+async fn http1_path_query_body_and_raw_success_match_the_contract() {
     let (addr, mut captured, fixture) =
-        spawn_h1_fixture(JSON_CONTENT_TYPE, br#""spring-response""#).await;
+        spawn_h1_fixture(JSON_CONTENT_TYPE, br#""http1-response""#).await;
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{addr}"))
-        .protocol(WireProtocol::SpringCloudV1)
+        .http_version_policy(HttpVersionPolicy::Http1)
         .connect()
         .await
         .unwrap();
@@ -278,7 +275,7 @@ async fn spring_cloud_v1_path_query_body_and_raw_success_match_the_contract() {
         )
         .await
         .unwrap();
-    assert_eq!(response.into_body(), "spring-response");
+    assert_eq!(response.into_body(), "http1-response");
     let request = captured.recv().await.expect("fixture captured one request");
 
     assert_eq!(request.method, Method::POST);
@@ -292,11 +289,11 @@ async fn spring_cloud_v1_path_query_body_and_raw_success_match_the_contract() {
         request.headers.get(CONTENT_TYPE).unwrap(),
         JSON_CONTENT_TYPE
     );
-    assert_eq!(request.headers.get("x-fusen-attempt").unwrap(), "1");
+    assert!(request.headers.get("x-fusen-attempt").is_none());
     assert!(request.headers.get("x-fusen-service-group").is_none());
     assert!(request.headers.get("x-fusen-service-version").is_none());
-    assert_valid_request_id(&request.headers);
-    assert_valid_timeout(&request.headers);
+    assert!(request.headers.get("x-request-id").is_none());
+    assert!(request.headers.get("x-fusen-timeout-ms").is_none());
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&request.body).unwrap(),
         json!({"name": "Charles Babbage"})
@@ -308,13 +305,12 @@ async fn spring_cloud_v1_path_query_body_and_raw_success_match_the_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_repeated_query_uses_one_key_per_value() {
+async fn repeated_query_uses_one_key_per_value() {
     let (addr, mut captured, fixture) =
         spawn_h1_fixture(JSON_CONTENT_TYPE, br#"["one","two words"]"#).await;
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{addr}"))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
@@ -338,12 +334,11 @@ async fn spring_cloud_v1_repeated_query_uses_one_key_per_value() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_single_repeated_query_keeps_the_array_contract() {
+async fn single_repeated_query_keeps_the_array_contract() {
     let (addr, mut captured, fixture) = spawn_h1_fixture(JSON_CONTENT_TYPE, br#"["one"]"#).await;
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{addr}"))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
@@ -366,12 +361,11 @@ async fn spring_cloud_v1_single_repeated_query_keeps_the_array_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_empty_repeated_query_omits_the_key() {
+async fn empty_repeated_query_omits_the_key() {
     let (addr, mut captured, fixture) = spawn_h1_fixture(JSON_CONTENT_TYPE, br#"[]"#).await;
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{addr}"))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
@@ -399,7 +393,6 @@ async fn client_rejects_duplicate_response_content_type() {
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{addr}"))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
@@ -408,7 +401,7 @@ async fn client_rejects_duplicate_response_content_type() {
         .echo("duplicate-content-type".into())
         .await
         .unwrap_err();
-    assert_eq!(error.category(), RpcCategory::DataLoss);
+    assert_eq!(error.category(), ErrorCategory::DataLoss);
     assert_eq!(error.code().as_str(), "invalid_content_type");
 
     fixture.await.unwrap();
@@ -417,13 +410,8 @@ async fn client_rejects_duplicate_response_content_type() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_head_uses_a_unit_success_contract() {
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .unwrap();
+async fn head_uses_a_unit_success_contract() {
     let server = Server::builder("127.0.0.1:0")
-        .config(config)
         .interface(WireContractServer::new(FailingWireContract))
         .build()
         .unwrap()
@@ -433,7 +421,6 @@ async fn spring_cloud_v1_head_uses_a_unit_success_contract() {
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
@@ -449,13 +436,8 @@ async fn spring_cloud_v1_head_uses_a_unit_success_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_rejects_duplicate_scalar_query_parameters() {
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .unwrap();
+async fn duplicate_scalar_query_parameters_are_rejected() {
     let server = Server::builder("127.0.0.1:0")
-        .config(config)
         .interface(WireContractServer::new(FailingWireContract))
         .build()
         .unwrap()
@@ -483,13 +465,8 @@ async fn spring_cloud_v1_rejects_duplicate_scalar_query_parameters() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_decodes_scalars_using_the_declared_dto_type() {
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .unwrap();
+async fn scalars_are_decoded_using_the_declared_dto_type() {
     let server = Server::builder("127.0.0.1:0")
-        .config(config)
         .interface(WireContractServer::new(FailingWireContract))
         .build()
         .unwrap()
@@ -526,7 +503,6 @@ async fn spring_cloud_v1_decodes_scalars_using_the_declared_dto_type() {
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
@@ -554,12 +530,11 @@ async fn spring_cloud_v1_decodes_scalars_using_the_declared_dto_type() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spring_cloud_v1_rejects_descriptor_shape_mismatches_before_network_io() {
+async fn descriptor_shape_mismatches_are_rejected_before_network_io() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{}", listener.local_addr().unwrap()))
-        .protocol(WireProtocol::SpringCloudV1)
         .connect()
         .await
         .unwrap();
@@ -568,8 +543,8 @@ async fn spring_cloud_v1_rejects_descriptor_shape_mismatches_before_network_io()
         .alias_labels_declared_scalar(vec!["one".to_owned()])
         .await
         .unwrap_err();
-    assert_eq!(scalar_array.category(), RpcCategory::InvalidArgument);
-    assert_eq!(scalar_array.code().as_str(), "invalid_spring_parameter");
+    assert_eq!(scalar_array.category(), ErrorCategory::InvalidArgument);
+    assert_eq!(scalar_array.code().as_str(), "invalid_http_parameter");
     assert!(scalar_array.message().contains("label"));
     assert!(scalar_array.message().contains("#[param(query, repeated)]"));
 
@@ -577,8 +552,8 @@ async fn spring_cloud_v1_rejects_descriptor_shape_mismatches_before_network_io()
         .alias_filter_declared_repeated(true)
         .await
         .unwrap_err();
-    assert_eq!(repeated_scalar.category(), RpcCategory::InvalidArgument);
-    assert_eq!(repeated_scalar.code().as_str(), "invalid_spring_parameter");
+    assert_eq!(repeated_scalar.category(), ErrorCategory::InvalidArgument);
+    assert_eq!(repeated_scalar.code().as_str(), "invalid_http_parameter");
     assert!(repeated_scalar.message().contains("enabled"));
     assert!(repeated_scalar.message().contains("remove `repeated`"));
 
@@ -586,7 +561,7 @@ async fn spring_cloud_v1_rejects_descriptor_shape_mismatches_before_network_io()
         tokio::time::timeout(Duration::from_millis(100), listener.accept())
             .await
             .is_err(),
-        "invalid Spring parameter shapes must fail before opening a connection"
+        "invalid HTTP parameter shapes must fail before opening a connection"
     );
 
     drop(client);
@@ -595,12 +570,7 @@ async fn spring_cloud_v1_rejects_descriptor_shape_mismatches_before_network_io()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn problem_details_preserve_category_code_request_id_and_retryability() {
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .unwrap();
     let server = Server::builder("127.0.0.1:0")
-        .config(config)
         .interface(WireContractServer::new(FailingWireContract))
         .build()
         .unwrap()
@@ -615,6 +585,8 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
         .header("x-request-id", "problem-request-42")
         .header("x-fusen-timeout-ms", "5000")
         .header("x-fusen-attempt", "1")
+        .header("x-fusen-service-group", "prod")
+        .header("x-fusen-service-version", "1")
         .body(Full::new(Bytes::from_static(br#"{"name":"Ada"}"#)))
         .unwrap();
     let response = send_h1(server.local_addr(), request).await;
@@ -637,7 +609,7 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
     );
     assert_eq!(problem.status, StatusCode::CONFLICT.as_u16());
     assert_eq!(problem.code.as_str(), "user_conflict");
-    assert_eq!(problem.request_id, "problem-request-42");
+    assert_eq!(problem.request_id.as_deref(), Some("problem-request-42"));
     assert!(!problem.retryable);
     assert_eq!(problem.detail.as_deref(), Some("the user already exists"));
     assert_eq!(problem.instance.as_deref(), Some("/users/conflict"));
@@ -649,7 +621,7 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
     let runtime = ClientRuntime::builder().build().unwrap();
     let client = WireContractClient::builder(&runtime)
         .direct(format!("http://{}", server.local_addr()))
-        .protocol(WireProtocol::SpringCloudV1)
+        .direct_capabilities(endpoint_capabilities(HttpVersionSet::ALL))
         .connect()
         .await
         .unwrap();
@@ -661,7 +633,10 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
         )
         .await
         .expect_err("the application fixture always rejects create");
-    assert_eq!(error.category(), RpcCategory::Application);
+    assert_eq!(error.kind(), ErrorKind::Application);
+    assert_eq!(error.category(), ErrorCategory::Conflict);
+    assert_eq!(error.origin(), ErrorOrigin::Remote);
+    assert!(error.request_id().is_some());
     assert_eq!(error.code().as_str(), "user_conflict");
     assert!(!error.retry_hint().is_retryable());
     assert_eq!(error.headers().get("x-error-scope").unwrap(), "user");
@@ -670,6 +645,96 @@ async fn problem_details_preserve_category_code_request_id_and_retryability() {
     drop(client);
     runtime.shutdown().await.unwrap();
     server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invocation_controls_must_match_the_routed_service_selector() {
+    let server = Server::builder("127.0.0.1:0")
+        .interface(WireContractServer::new(FailingWireContract))
+        .build()
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let addr = server.local_addr();
+
+    let response = send_h1(
+        addr,
+        echo_request(&[
+            ("x-request-id", "selector-match"),
+            ("x-fusen-timeout-ms", "5000"),
+            ("x-fusen-attempt", "1"),
+            ("x-fusen-service-group", "prod"),
+            ("x-fusen-service-version", "1"),
+        ]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = send_h1(addr, echo_request(&[])).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    for (headers, expected_code) in [
+        (
+            vec![
+                ("x-request-id", "wrong-group"),
+                ("x-fusen-service-group", "staging"),
+                ("x-fusen-service-version", "1"),
+            ],
+            "service_group_mismatch",
+        ),
+        (
+            vec![
+                ("x-request-id", "missing-group"),
+                ("x-fusen-service-version", "1"),
+            ],
+            "service_group_mismatch",
+        ),
+        (
+            vec![
+                ("x-request-id", "wrong-version"),
+                ("x-fusen-service-group", "prod"),
+                ("x-fusen-service-version", "2"),
+            ],
+            "service_version_mismatch",
+        ),
+        (
+            vec![
+                ("x-request-id", "missing-version"),
+                ("x-fusen-service-group", "prod"),
+            ],
+            "service_version_mismatch",
+        ),
+        (
+            vec![
+                ("x-request-id", "duplicate-version"),
+                ("x-fusen-service-group", "prod"),
+                ("x-fusen-service-version", "1"),
+                ("x-fusen-service-version", "1"),
+            ],
+            "service_version_mismatch",
+        ),
+    ] {
+        let response = send_h1(addr, echo_request(&headers)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let problem: WireProblemDetails = serde_json::from_slice(&body).unwrap();
+        assert_eq!(problem.code, expected_code);
+    }
+
+    server.shutdown().await.unwrap();
+}
+
+fn endpoint_capabilities(http_versions: HttpVersionSet) -> EndpointCapabilities {
+    EndpointCapabilities::new(http_versions, [HttpBindingId::default()], true).unwrap()
+}
+
+fn echo_request(headers: &[(&str, &str)]) -> Request<Full<Bytes>> {
+    let mut request = Request::builder().method(Method::GET).uri("/echo/Ada");
+    for &(name, value) in headers {
+        request = request.header(name, value);
+    }
+    request.body(Full::new(Bytes::new())).unwrap()
 }
 
 async fn spawn_h2_fixture(
@@ -738,7 +803,7 @@ async fn spawn_h1_duplicate_content_type_fixture() -> (SocketAddr, JoinHandle<()
         let (stream, _) = listener.accept().await.unwrap();
         let service = service_fn(|request: Request<Incoming>| async move {
             let _ = request.into_body().collect().await.unwrap();
-            let mut response = Response::new(Full::new(Bytes::from_static(b"\"response\"")));
+            let mut response = HttpResponse::new(Full::new(Bytes::from_static(b"\"response\"")));
             response.headers_mut().append(
                 CONTENT_TYPE,
                 http::HeaderValue::from_static(JSON_CONTENT_TYPE),
@@ -763,8 +828,9 @@ async fn capture_and_respond(
     captured: mpsc::UnboundedSender<CapturedRequest>,
     response_content_type: &'static str,
     response_body: &'static [u8],
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<HttpResponse<Full<Bytes>>, Infallible> {
     let (parts, body) = request.into_parts();
+    let request_id = parts.headers.get("x-request-id").cloned();
     let body = body.collect().await.unwrap().to_bytes();
     captured
         .send(CapturedRequest {
@@ -775,13 +841,17 @@ async fn capture_and_respond(
             body,
         })
         .unwrap();
-    Ok(Response::builder()
+    let mut response = HttpResponse::builder()
         .header(CONTENT_TYPE, response_content_type)
         .body(Full::new(Bytes::from_static(response_body)))
-        .unwrap())
+        .unwrap();
+    if let Some(request_id) = request_id {
+        response.headers_mut().insert("x-request-id", request_id);
+    }
+    Ok(response)
 }
 
-async fn send_h1(addr: SocketAddr, request: Request<Full<Bytes>>) -> Response<Incoming> {
+async fn send_h1(addr: SocketAddr, request: Request<Full<Bytes>>) -> HttpResponse<Incoming> {
     let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await

@@ -31,14 +31,14 @@ CI 还必须通过 Linux/macOS/Windows、feature matrix、renamed-runtime macro 
 
 发布负责人必须确认：
 
-- `check-public-api-denylist.sh` 从干净 rustdoc 输出确认旧入口为零，只有 `service`/`method` 宏和约定的八个扩展 SPI；
+- `check-public-api-denylist.sh` 从干净 rustdoc 输出确认旧入口为零，只有 `interface`/`method` 宏和约定的扩展 SPI；
 - `check-security.sh` 对 root、fuzz-support 和 fuzz 的独立 manifest/lockfile 分别运行 `cargo deny` 的四类检查与 `cargo audit`，前项失败后仍执行并汇总其余结果；三者的解析后 dependency graph 只包含批准的 Rustls Ring/bundled WebPKI client TLS 栈，不含 `hyper-tls`、`native-tls`、OpenSSL TLS backend、AWS-LC、native/system root loader、platform verifier 或 PEM loader；
 - Core 不依赖 Nacos、subscriber 或 OTel backend；
-- Fusen V1/Spring Cloud V1 golden fixtures、真实明文 H1/h2c sockets、HTTPS H1/ALPN h2 sockets、证书/hostname 拒绝、Problem Details 和 macro trybuild 全部通过；
+- `http-json-v1` golden fixtures、capability/discovery filtering、真实明文 H1/h2c sockets、HTTPS H1/ALPN h2 sockets、证书/hostname 拒绝、Problem Details 和 macro trybuild 全部通过；
 - HTTPS 测试确认 Rustls Ring、TLS 1.2/1.3、bundled Mozilla WebPKI roots、无明文 fallback；Server listener 仍不加载证书或私钥；
 - 永久 pending request/registry/config cleanup 在 deadline 内有界返回；
 - lifecycle、retry、breaker 与 byte-budget tests 不依赖 correctness sleep 或预占端口；
-- 在绑定参考机器上执行 `Release Benchmark Gate`，四个 Fusen `c1/c100 × small/64 KiB` case 的 p50/p99 相对 committed baseline 回退均不超过 10%；Spring H1 同矩阵、QPS、原始五轮日志与 JSON summary 已归档。
+- 在绑定参考机器上执行 `Release Benchmark Gate`，`http-json-v1` 的 HTTP/1.1 与 h2c `c1/c100 × small/64 KiB` 共 8 个 case 的 p50/p99 相对 committed baseline 回退均不超过 10%；QPS、原始五轮日志与 JSON summary 已归档。
 
 真实 Nacos container tests 是 required release gate。CI 固定启动 Nacos `v2.4.3` standalone service container，测试同时覆盖 registration/discovery 和 config publish/listen，并在主流程失败后继续关闭 handle、注销 instance 和删除 config。资源名由 GitHub run id、进程 id 和时间戳组成，不复用共享名称。
 
@@ -54,7 +54,7 @@ bash .github/scripts/run-live-nacos-tests.sh
 
 ## Performance Gate
 
-普通托管 CI 会运行一轮缩短参数但 case 完整的 benchmark smoke，并从按 `run_id-run_attempt` 隔离的目录上传 artifact，用于确认 Fusen h2c、Spring H1、并发/大 payload 和 schema 可执行；不同托管机器之间的绝对延迟不用于 10% 判定。
+普通托管 CI 会运行一轮缩短参数但 case 完整的 benchmark smoke，并从按 `run_id-run_attempt` 隔离的目录上传 artifact，用于确认 `http-json-v1` 的 h2c/H1、并发/大 payload 和 schema 可执行；不同托管机器之间的绝对延迟不用于 10% 判定。
 
 正式比较由 [release-benchmark.yml](../.github/workflows/release-benchmark.yml) 在带有 `fusen-benchmark-0-9-reference` label 的固定 self-hosted runner 上执行。该 runner 必须是建立 [committed baseline](../.github/benchmarks/fusen-0.9-reference-macos-arm64.json) 的同一参考机器：
 
@@ -66,9 +66,9 @@ python3 .github/scripts/run-benchmark-gate.py \
   --output-dir target/release-benchmark-gate/manual-compare-001
 ```
 
-每次运行必须使用全新或空的 output directory；workflow 使用 `run_id-run_attempt` 唯一路径，防止失败 artifact 混入旧证据。比较器拒绝脏工作树，以及 host id、CPU、OS、toolchain、rustc、schema、参数、五轮原始样本不匹配，并要求 baseline `source_commit` 是当前候选 `HEAD` 的 ancestor；四个 Fusen case 的 p50 或 p99 任一中位数回退严格超过 10% 即非零退出。QPS 只记录，Spring H1 的四个 case 只归档。发布负责人必须保留 workflow artifact，并确认 checkout SHA 是待发布 commit。
+每次运行必须使用全新或空的 output directory；workflow 使用 `run_id-run_attempt` 唯一路径，防止失败 artifact 混入旧证据。比较器拒绝脏工作树，以及 host id、CPU、OS、toolchain、rustc、schema、suite、参数、五轮原始样本不匹配，并要求 baseline `source_commit` 是当前候选 `HEAD` 的 ancestor；HTTP/1.1 与 h2c 的 8 个 case 中，p50 或 p99 任一中位数回退严格超过 10% 即非零退出。QPS 只记录。发布负责人必须保留 workflow artifact，并确认 checkout SHA 是待发布 commit。
 
-首个 schema v2 baseline 必须两阶段生成：先提交 benchmark 实现为干净候选 A，再在固定 runner 上以 workflow 的 `calibrate` mode 对 A 运行五轮；审查 artifact 后将生成的 baseline 单独提交。生成文件的完整 `source_commit` 必须等于 A，且 compare 时 A 必须是当前候选 `HEAD` 的 ancestor。committed baseline 仍为 `calibration-required` 时 compare 必须失败，不能发布。完整命令与字段定义见[性能基线](performance-baseline.md)。
+首个 schema v3、suite `http-json-transport-matrix-v1` baseline 必须两阶段生成：先提交 benchmark 实现为干净候选 A，再在固定 runner 上以 workflow 的 `calibrate` mode 对 A 运行五轮；审查 artifact 后将生成的 baseline 单独提交。生成文件的完整 `source_commit` 必须等于 A，且 compare 时 A 必须是当前候选 `HEAD` 的 ancestor。committed baseline 仍为 `calibration-required` 时 compare 必须失败，不能发布。完整命令与字段定义见[性能基线](performance-baseline.md)。
 
 ## Final Candidate Freeze
 
@@ -96,7 +96,7 @@ fi
 | CI：真实 Nacos |  |  | `nacos-live-container` job 成功 |
 | CI：七个 package archive consumer |  |  | `release-contracts` 中 package consumer step 成功 |
 | Nightly：三个 fuzz target、100 轮 core E2E |  |  | 三个 target 的日志/artifact 名称与 `core-e2e-repeat-100` 结果 |
-| Release Benchmark Gate |  |  | `release-benchmark-compare-<sha>`、baseline SHA、四个 Fusen case 的 p50/p99 summary |
+| Release Benchmark Gate |  |  | `release-benchmark-compare-<sha>`、baseline SHA、HTTP/1.1 与 h2c 共 8 个 case 的 p50/p99 summary |
 
 任意代码、测试、Cargo manifest/lockfile、workflow、CHANGELOG 或发布文档改动都会产生新候选，原候选的全部证据立即失效。新的候选必须从完整 CI 开始重跑所有证据；只修改注释、日期或证据链接也不例外。Release draft、workflow summary 和已有 artifact 是候选外部记录，不提交“证据更新”来改变候选 SHA。
 
@@ -279,12 +279,12 @@ cargo +1.97.0 add --manifest-path "$registry_consumer_dir/Cargo.toml" \
   --registry crates-io 'fusen-rs@=0.9.0'
 
 cat >"$registry_consumer_dir/src/lib.rs" <<'RUST'
-use fusen_rs::{RpcError, RpcResponse, interface};
+use fusen_rs::{Error, Response, interface};
 
 #[interface(name = "registry-consumer")]
 pub trait RegistryConsumerApi {
     #[fusen_rs::method(method = "GET", path = "/ping")]
-    async fn ping(&self) -> Result<RpcResponse<String>, RpcError>;
+    async fn ping(&self) -> Result<Response<String>, Error>;
 }
 RUST
 

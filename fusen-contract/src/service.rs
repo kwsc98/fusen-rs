@@ -1,4 +1,4 @@
-use crate::{ProtocolSet, WireProtocol};
+use crate::EndpointCapabilities;
 use http::Method;
 use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
@@ -8,7 +8,7 @@ const MAX_IDENTITY_BYTES: usize = 128;
 /// Deterministically ordered provider metadata.
 pub type Metadata = BTreeMap<String, String>;
 
-/// Invalid protocol or service contract data.
+/// Invalid HTTP binding or service contract data.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ContractError {
@@ -30,23 +30,26 @@ pub enum ContractError {
     /// A service weight is zero, negative, NaN, or infinite.
     #[error("service weight must be finite and greater than zero")]
     InvalidWeight,
-    /// A protocol set contained no protocols.
-    #[error("protocol set must contain at least one protocol")]
-    EmptyProtocolSet,
+    /// An HTTP binding identifier is not a bounded lowercase segmented token.
+    #[error(
+        "invalid HTTP binding: expected 1-64 lowercase ASCII letters or digits separated by '-' or '.'"
+    )]
+    InvalidHttpBinding,
+    /// An HTTP version set contained no supported versions.
+    #[error("HTTP version set must contain at least one version")]
+    EmptyHttpVersionSet,
+    /// An HTTP version set contained an unsupported version.
+    #[error("unsupported HTTP version {0:?}")]
+    UnsupportedHttpVersion(http::Version),
+    /// Endpoint capabilities contained no invocation bindings.
+    #[error("endpoint capabilities must contain at least one HTTP binding")]
+    EmptyHttpBindings,
     /// A service descriptor contains no callable methods.
     #[error("service descriptor must contain at least one method")]
     EmptyMethods,
-    /// A method descriptor contains invalid Fusen or Spring Cloud metadata.
+    /// A method descriptor contains invalid HTTP metadata.
     #[error("invalid method descriptor: {0}")]
     InvalidMethod(String),
-    /// A registration advertised a protocol not implemented by every service method.
-    #[error("service {service} does not implement advertised protocol {protocol}")]
-    UnsupportedServiceProtocol {
-        /// Stable service identity.
-        service: String,
-        /// Protocol that cannot dispatch every method.
-        protocol: WireProtocol,
-    },
 }
 
 /// A caller-supplied stable identity for one provider instance.
@@ -152,7 +155,7 @@ impl ServiceSelector {
 
 /// Declaration-order identifier used for process-local O(1) method dispatch.
 ///
-/// This value is not a wire identity. [`MethodDescriptor::fusen_identity`] remains stable when
+/// This value is not a wire identity. [`MethodDescriptor::invocation_name`] remains stable when
 /// declaration order changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MethodId(u16);
@@ -196,7 +199,10 @@ impl ServiceEndpoint {
         if valid {
             Ok(Self(url))
         } else {
-            Err(ContractError::InvalidEndpoint(url.to_string()))
+            Err(ContractError::InvalidEndpoint(
+                "expected an absolute HTTP or HTTPS URL without userinfo, a zero port, query, or fragment"
+                    .to_owned(),
+            ))
         }
     }
 
@@ -269,47 +275,57 @@ impl TryFrom<f64> for ServiceWeight {
     }
 }
 
-/// The explicit Spring Cloud HTTP location of one ordered RPC argument.
+/// The HTTP location of one ordered invocation argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum SpringCloudParameterSource {
+pub enum HttpParameterSource {
     /// A named `{parameter}` path segment.
     Path,
     /// A URL query parameter.
     Query,
+    /// A named HTTP header.
+    Header,
+    /// A named HTTP cookie.
+    Cookie,
     /// A named field in a synthesized JSON request body object.
     BodyField,
     /// The complete JSON request body. It cannot be combined with body fields.
     Body,
+    /// All otherwise-unmapped URL query parameters as one JSON object.
+    /// An operation may contain at most one query map.
+    QueryMap,
+    /// All otherwise-unmapped HTTP headers as one JSON object.
+    /// An operation may contain at most one header map.
+    HeaderMap,
 }
 
-/// The number of values represented by one Spring Cloud V1 parameter.
+/// The number of values represented by one HTTP parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum SpringCloudParameterCardinality {
+pub enum HttpParameterCardinality {
     /// At most one scalar value is represented on the wire.
     Scalar,
     /// Zero or more query values are represented as repeated keys.
     Repeated,
 }
 
-/// Spring Cloud V1 wire metadata for one ordered RPC argument.
+/// HTTP wire metadata for one ordered invocation argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpringCloudParameter {
+pub struct HttpParameter {
     name: String,
-    source: SpringCloudParameterSource,
-    cardinality: SpringCloudParameterCardinality,
+    source: HttpParameterSource,
+    cardinality: HttpParameterCardinality,
 }
 
-impl SpringCloudParameter {
+impl HttpParameter {
     /// Creates validated parameter metadata.
     pub fn new(
         name: impl Into<String>,
-        source: SpringCloudParameterSource,
-        cardinality: SpringCloudParameterCardinality,
+        source: HttpParameterSource,
+        cardinality: HttpParameterCardinality,
     ) -> Result<Self, ContractError> {
         Ok(Self {
-            name: validate_identifier(name.into(), "Spring Cloud parameter name")?,
+            name: validate_identifier(name.into(), "HTTP parameter name")?,
             source,
             cardinality,
         })
@@ -321,37 +337,45 @@ impl SpringCloudParameter {
     }
 
     /// Returns the explicit HTTP argument location.
-    pub const fn source(&self) -> SpringCloudParameterSource {
+    pub const fn source(&self) -> HttpParameterSource {
         self.source
     }
 
     /// Returns whether the wire parameter is scalar or repeated.
-    pub const fn cardinality(&self) -> SpringCloudParameterCardinality {
+    pub const fn cardinality(&self) -> HttpParameterCardinality {
         self.cardinality
     }
 }
 
-/// Optional Spring Cloud V1 HTTP mapping for one RPC method.
+/// Required HTTP mapping for one service method.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpringCloudMethod {
+pub struct HttpOperation {
     method: Method,
     path: String,
-    parameters: Vec<SpringCloudParameter>,
+    parameters: Vec<HttpParameter>,
+    consumes: String,
+    produces: String,
 }
 
-impl SpringCloudMethod {
+impl HttpOperation {
     /// Creates and validates an HTTP method, route template, and ordered parameter mapping.
     pub fn new(
         method: Method,
         path: impl Into<String>,
-        parameters: Vec<SpringCloudParameter>,
+        parameters: Vec<HttpParameter>,
+        consumes: impl Into<String>,
+        produces: impl Into<String>,
     ) -> Result<Self, ContractError> {
         let path = path.into();
-        validate_spring_cloud_method(&method, &path, &parameters)?;
+        let consumes = canonical_media_type(consumes.into(), "consumes")?;
+        let produces = canonical_media_type(produces.into(), "produces")?;
+        validate_http_operation(&method, &path, &parameters)?;
         Ok(Self {
             method,
             path,
             parameters,
+            consumes,
+            produces,
         })
     }
 
@@ -365,43 +389,54 @@ impl SpringCloudMethod {
         &self.path
     }
 
-    /// Returns mappings in generated RPC argument order.
-    pub fn parameters(&self) -> &[SpringCloudParameter] {
+    /// Returns mappings in generated invocation argument order.
+    pub fn parameters(&self) -> &[HttpParameter] {
         &self.parameters
+    }
+
+    /// Returns the canonical request media type.
+    pub fn consumes(&self) -> &str {
+        &self.consumes
+    }
+
+    /// Returns the canonical response media type.
+    pub fn produces(&self) -> &str {
+        &self.produces
     }
 }
 
-/// Versioned wire metadata and optional process-local policy metadata for one generated RPC method.
+/// Versioned wire metadata and optional process-local policy metadata for one generated service method.
 ///
 /// Equality intentionally excludes sensitivity metadata because it does not participate in the
 /// method's wire identity or service contract.
 #[derive(Clone)]
 pub struct MethodDescriptor {
     id: MethodId,
-    fusen_identity: String,
-    spring_cloud: Option<SpringCloudMethod>,
+    invocation_name: String,
+    http: HttpOperation,
     sensitivity: Option<crate::MethodSensitivity>,
 }
 
 impl MethodDescriptor {
-    /// Creates a method descriptor with an optional Spring Cloud V1 mapping.
+    /// Creates a method descriptor with a required HTTP operation.
     pub fn new(
         id: MethodId,
-        fusen_identity: impl Into<String>,
-        spring_cloud: Option<SpringCloudMethod>,
+        invocation_name: impl Into<String>,
+        http: HttpOperation,
     ) -> Result<Self, ContractError> {
-        let fusen_identity = validate_identifier(fusen_identity.into(), "Fusen method identity")?;
+        let invocation_name =
+            validate_identifier(invocation_name.into(), "invocation method name")?;
         Ok(Self {
             id,
-            fusen_identity,
-            spring_cloud,
+            invocation_name,
+            http,
             sensitivity: None,
         })
     }
 
     /// Attaches process-local request and response sensitivity metadata.
     ///
-    /// This metadata does not affect wire identity, protocol support, discovery, or registration.
+    /// This metadata does not affect wire identity, discovery, or registration.
     pub fn with_sensitivity(mut self, sensitivity: crate::MethodSensitivity) -> Self {
         self.sensitivity = Some(sensitivity);
         self
@@ -412,26 +447,24 @@ impl MethodDescriptor {
         self.id
     }
 
-    /// Returns the stable Fusen V1 wire identity.
-    pub fn fusen_identity(&self) -> &str {
-        &self.fusen_identity
+    /// Returns the stable invocation method name.
+    pub fn invocation_name(&self) -> &str {
+        &self.invocation_name
     }
 
     /// Returns whether the standard HTTP method permits automatic replay.
     ///
-    /// Methods without an HTTP mapping and mappings using POST or PATCH are never replayed.
+    /// Mappings using POST or PATCH are never replayed.
     pub fn allows_retries(&self) -> bool {
-        self.spring_cloud.as_ref().is_some_and(|mapping| {
-            matches!(
-                *mapping.method(),
-                Method::GET | Method::HEAD | Method::OPTIONS | Method::PUT | Method::DELETE
-            )
-        })
+        matches!(
+            *self.http.method(),
+            Method::GET | Method::HEAD | Method::OPTIONS | Method::PUT | Method::DELETE
+        )
     }
 
-    /// Returns the optional Spring Cloud V1 mapping.
-    pub const fn spring_cloud(&self) -> Option<&SpringCloudMethod> {
-        self.spring_cloud.as_ref()
+    /// Returns the required HTTP operation.
+    pub const fn http_operation(&self) -> &HttpOperation {
+        &self.http
     }
 
     /// Returns optional process-local request and response sensitivity metadata.
@@ -445,8 +478,8 @@ impl std::fmt::Debug for MethodDescriptor {
         formatter
             .debug_struct("MethodDescriptor")
             .field("id", &self.id)
-            .field("fusen_identity", &self.fusen_identity)
-            .field("spring_cloud", &self.spring_cloud)
+            .field("invocation_name", &self.invocation_name)
+            .field("http", &self.http)
             .field("has_sensitivity", &self.sensitivity.is_some())
             .finish()
     }
@@ -455,8 +488,8 @@ impl std::fmt::Debug for MethodDescriptor {
 impl PartialEq for MethodDescriptor {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
-            && self.fusen_identity == other.fusen_identity
-            && self.spring_cloud == other.spring_cloud
+            && self.invocation_name == other.invocation_name
+            && self.http == other.http
     }
 }
 
@@ -500,19 +533,6 @@ impl ServiceDescriptor {
     pub fn identity(&self) -> &str {
         self.selector.identity()
     }
-
-    /// Returns protocols implemented by every method in this service.
-    pub fn supported_protocols(&self) -> ProtocolSet {
-        if self
-            .methods
-            .iter()
-            .all(|method| method.spring_cloud().is_some())
-        {
-            ProtocolSet::ALL
-        } else {
-            ProtocolSet::FUSEN_V1
-        }
-    }
 }
 
 /// A complete provider registration submitted to a registry.
@@ -521,8 +541,9 @@ pub struct ServiceRegistration {
     instance_id: InstanceId,
     descriptor: &'static ServiceDescriptor,
     endpoint: ServiceEndpoint,
-    protocols: ProtocolSet,
+    capabilities: EndpointCapabilities,
     weight: ServiceWeight,
+    metadata: Metadata,
 }
 
 impl ServiceRegistration {
@@ -531,25 +552,24 @@ impl ServiceRegistration {
         instance_id: InstanceId,
         descriptor: &'static ServiceDescriptor,
         endpoint: ServiceEndpoint,
-        protocols: ProtocolSet,
+        capabilities: EndpointCapabilities,
         weight: ServiceWeight,
-    ) -> Result<Self, ContractError> {
-        if let Some(protocol) = protocols
-            .iter()
-            .find(|protocol| !descriptor.supported_protocols().contains(*protocol))
-        {
-            return Err(ContractError::UnsupportedServiceProtocol {
-                service: descriptor.identity().to_owned(),
-                protocol,
-            });
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             instance_id,
             descriptor,
             endpoint,
-            protocols,
+            capabilities,
             weight,
-        })
+            metadata: Metadata::new(),
+        }
+    }
+
+    /// Adds provider-owned registration metadata.
+    pub fn with_metadata(mut self, metadata: Metadata) -> Result<Self, ContractError> {
+        validate_user_metadata(&metadata)?;
+        self.metadata = metadata;
+        Ok(self)
     }
 
     /// Returns the stable provider instance identity.
@@ -572,14 +592,19 @@ impl ServiceRegistration {
         &self.endpoint
     }
 
-    /// Returns the advertised wire protocols.
-    pub const fn protocols(&self) -> ProtocolSet {
-        self.protocols
+    /// Returns the endpoint's advertised capabilities.
+    pub const fn capabilities(&self) -> &EndpointCapabilities {
+        &self.capabilities
     }
 
     /// Returns the service weight.
     pub const fn weight(&self) -> ServiceWeight {
         self.weight
+    }
+
+    /// Returns provider-owned registration metadata.
+    pub fn metadata(&self) -> &Metadata {
+        &self.metadata
     }
 }
 
@@ -588,24 +613,31 @@ impl ServiceRegistration {
 pub struct ServiceInstance {
     instance_id: InstanceId,
     endpoint: ServiceEndpoint,
+    capabilities: EndpointCapabilities,
     weight: ServiceWeight,
     metadata: Metadata,
 }
 
 impl ServiceInstance {
     /// Creates a discovered instance from validated identity and endpoint values.
-    pub fn new(instance_id: InstanceId, endpoint: ServiceEndpoint, weight: ServiceWeight) -> Self {
+    pub fn new(
+        instance_id: InstanceId,
+        endpoint: ServiceEndpoint,
+        capabilities: EndpointCapabilities,
+        weight: ServiceWeight,
+    ) -> Self {
         Self {
             instance_id,
             endpoint,
+            capabilities,
             weight,
             metadata: Metadata::new(),
         }
     }
 
-    /// Adds provider-owned instance metadata.
+    /// Adds user-owned instance metadata.
     pub fn with_metadata(mut self, metadata: Metadata) -> Result<Self, ContractError> {
-        validate_metadata_keys(&metadata)?;
+        validate_user_metadata(&metadata)?;
         self.metadata = metadata;
         Ok(self)
     }
@@ -620,12 +652,17 @@ impl ServiceInstance {
         &self.endpoint
     }
 
+    /// Returns the endpoint's advertised capabilities.
+    pub const fn capabilities(&self) -> &EndpointCapabilities {
+        &self.capabilities
+    }
+
     /// Returns the selection weight.
     pub const fn weight(&self) -> ServiceWeight {
         self.weight
     }
 
-    /// Returns provider-owned metadata.
+    /// Returns user-owned metadata, excluding registry capability fields.
     pub fn metadata(&self) -> &Metadata {
         &self.metadata
     }
@@ -694,10 +731,21 @@ fn validate_user_metadata(metadata: &Metadata) -> Result<(), ContractError> {
     Ok(())
 }
 
-fn validate_spring_cloud_method(
+fn canonical_media_type(value: String, field: &str) -> Result<String, ContractError> {
+    value
+        .parse::<mime::Mime>()
+        .map(|media_type| media_type.to_string())
+        .map_err(|_| {
+            ContractError::InvalidMethod(format!(
+                "invalid {field} media type {value:?}: expected a MIME media type"
+            ))
+        })
+}
+
+fn validate_http_operation(
     method: &Method,
     path: &str,
-    parameters: &[SpringCloudParameter],
+    parameters: &[HttpParameter],
 ) -> Result<(), ContractError> {
     if !matches!(
         *method,
@@ -710,58 +758,70 @@ fn validate_spring_cloud_method(
             | Method::OPTIONS
     ) {
         return Err(ContractError::InvalidMethod(format!(
-            "unsupported Spring Cloud HTTP method {method}"
+            "unsupported HTTP method {method}"
         )));
     }
-    let placeholders = validate_spring_route(path)?;
+    let placeholders = validate_http_route(path)?;
 
     let mut names = BTreeSet::new();
     let mut path_parameters = BTreeSet::new();
     let mut body_count = 0;
     let mut body_field_count = 0;
+    let mut query_map_count = 0;
+    let mut header_map_count = 0;
     for parameter in parameters {
         if !names.insert(parameter.name()) {
             return Err(ContractError::InvalidMethod(format!(
-                "duplicate Spring Cloud parameter {}",
+                "duplicate HTTP parameter {}",
                 parameter.name()
             )));
         }
+        if parameter.cardinality() == HttpParameterCardinality::Repeated
+            && parameter.source() != HttpParameterSource::Query
+        {
+            return Err(ContractError::InvalidMethod(
+                "repeated parameters may use only the Query source".into(),
+            ));
+        }
         match parameter.source() {
-            SpringCloudParameterSource::Path => {
-                if parameter.cardinality() == SpringCloudParameterCardinality::Repeated {
-                    return Err(ContractError::InvalidMethod(
-                        "Spring Cloud repeated parameters may use only the Query source".into(),
-                    ));
-                }
+            HttpParameterSource::Path => {
                 path_parameters.insert(parameter.name().to_owned());
             }
-            SpringCloudParameterSource::Body => {
-                if parameter.cardinality() == SpringCloudParameterCardinality::Repeated {
-                    return Err(ContractError::InvalidMethod(
-                        "Spring Cloud repeated parameters may use only the Query source".into(),
-                    ));
-                }
+            HttpParameterSource::Body => {
                 body_count += 1;
             }
-            SpringCloudParameterSource::BodyField => {
-                if parameter.cardinality() == SpringCloudParameterCardinality::Repeated {
-                    return Err(ContractError::InvalidMethod(
-                        "Spring Cloud repeated parameters may use only the Query source".into(),
-                    ));
-                }
+            HttpParameterSource::BodyField => {
                 body_field_count += 1;
             }
-            SpringCloudParameterSource::Query => {}
+            HttpParameterSource::QueryMap => {
+                query_map_count += 1;
+            }
+            HttpParameterSource::HeaderMap => {
+                header_map_count += 1;
+            }
+            HttpParameterSource::Query
+            | HttpParameterSource::Header
+            | HttpParameterSource::Cookie => {}
         }
     }
     if body_count > 1 {
         return Err(ContractError::InvalidMethod(
-            "Spring Cloud V1 permits at most one body parameter".into(),
+            "an HTTP operation permits at most one body parameter".into(),
         ));
     }
     if body_count == 1 && body_field_count != 0 {
         return Err(ContractError::InvalidMethod(
             "a complete JSON body cannot be combined with synthesized body fields".into(),
+        ));
+    }
+    if query_map_count > 1 {
+        return Err(ContractError::InvalidMethod(
+            "an HTTP operation permits at most one QueryMap parameter".into(),
+        ));
+    }
+    if header_map_count > 1 {
+        return Err(ContractError::InvalidMethod(
+            "an HTTP operation permits at most one HeaderMap parameter".into(),
         ));
     }
     if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
@@ -773,15 +833,15 @@ fn validate_spring_cloud_method(
     }
     if placeholders != path_parameters {
         return Err(ContractError::InvalidMethod(
-            "Spring Cloud route placeholders do not match Path parameters".into(),
+            "HTTP route placeholders do not match Path parameters".into(),
         ));
     }
     Ok(())
 }
 
-fn validate_spring_route(path: &str) -> Result<BTreeSet<String>, ContractError> {
+fn validate_http_route(path: &str) -> Result<BTreeSet<String>, ContractError> {
     let invalid = |reason: &str| {
-        ContractError::InvalidMethod(format!("invalid Spring Cloud route {path:?}: {reason}"))
+        ContractError::InvalidMethod(format!("invalid HTTP route {path:?}: {reason}"))
     };
     if !path.starts_with('/') {
         return Err(invalid("routes must be absolute"));
@@ -900,36 +960,38 @@ fn validate_methods(methods: &[MethodDescriptor]) -> Result<(), ContractError> {
     if methods.is_empty() {
         return Err(ContractError::EmptyMethods);
     }
-    let mut fusen_identities = BTreeSet::new();
-    let mut spring_routes = BTreeSet::new();
+    let mut invocation_names = BTreeSet::new();
+    let mut http_routes = BTreeSet::new();
     for (index, method) in methods.iter().enumerate() {
         if method.id().index() != index {
             return Err(ContractError::InvalidMethod(format!(
                 "method {} has non-contiguous local id {}",
-                method.fusen_identity(),
+                method.invocation_name(),
                 method.id().get()
             )));
         }
-        if !fusen_identities.insert(method.fusen_identity()) {
+        if !invocation_names.insert(method.invocation_name()) {
             return Err(ContractError::InvalidMethod(format!(
-                "duplicate Fusen method identity {}",
-                method.fusen_identity()
+                "duplicate invocation method name {}",
+                method.invocation_name()
             )));
         }
-        if let Some(spring) = method.spring_cloud()
-            && !spring_routes.insert((spring.method().as_str(), spring_route_shape(spring.path())))
-        {
+        let operation = method.http_operation();
+        if !http_routes.insert((
+            operation.method().as_str(),
+            http_route_shape(operation.path()),
+        )) {
             return Err(ContractError::InvalidMethod(format!(
-                "duplicate Spring Cloud route {} {}",
-                spring.method(),
-                spring.path()
+                "duplicate HTTP route {} {}",
+                operation.method(),
+                operation.path()
             )));
         }
     }
     Ok(())
 }
 
-fn spring_route_shape(path: &str) -> String {
+fn http_route_shape(path: &str) -> String {
     let mut shape = String::with_capacity(path.len());
     for segment in path.split('/') {
         shape.push('/');
@@ -947,8 +1009,8 @@ fn spring_route_shape(path: &str) -> String {
 mod tests {
     use super::*;
     use crate::{
-        MethodSensitivity, ProtocolSet, SensitiveArgument, SensitiveShape, SensitivityKind,
-        WireProtocol,
+        EndpointCapabilities, HttpBindingId, HttpVersionSet, MethodSensitivity, SensitiveArgument,
+        SensitiveShape, SensitivityKind,
     };
 
     fn token_shape() -> SensitiveShape {
@@ -959,12 +1021,31 @@ mod tests {
         SensitiveShape::Kind(SensitivityKind::PUBLIC)
     }
 
-    fn spring_get(path: &str, parameters: Vec<SpringCloudParameter>) -> SpringCloudMethod {
-        SpringCloudMethod::new(Method::GET, path, parameters).unwrap()
+    fn http_operation(
+        method: Method,
+        path: &str,
+        parameters: Vec<HttpParameter>,
+    ) -> Result<HttpOperation, ContractError> {
+        HttpOperation::new(
+            method,
+            path,
+            parameters,
+            "application/json",
+            "application/json",
+        )
+    }
+
+    fn http_get(path: &str, parameters: Vec<HttpParameter>) -> HttpOperation {
+        http_operation(Method::GET, path, parameters).unwrap()
     }
 
     fn method(id: u16, identity: &str) -> MethodDescriptor {
-        MethodDescriptor::new(MethodId::new(id), identity, None).unwrap()
+        MethodDescriptor::new(
+            MethodId::new(id),
+            identity,
+            http_get(&format!("/method-{id}"), Vec::new()),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -983,6 +1064,12 @@ mod tests {
         ] {
             assert!(value.parse::<ServiceEndpoint>().is_err(), "{value}");
         }
+
+        let sensitive = "http://user:secret@example.com/rpc"
+            .parse::<ServiceEndpoint>()
+            .unwrap_err();
+        assert!(!format!("{sensitive}").contains("secret"));
+        assert!(!format!("{sensitive:?}").contains("secret"));
     }
 
     #[test]
@@ -1001,93 +1088,93 @@ mod tests {
                 .unwrap();
         assert_eq!(selector.identity(), "inventory/production@v1");
         assert!(ServiceSelector::new("bad/value", None, None).is_err());
-        let reserved = Metadata::from([("fusen.protocol".into(), "invalid".into())]);
+        let reserved = Metadata::from([("fusen.http.binding".into(), "invalid".into())]);
         assert!(selector.with_metadata(reserved).is_err());
     }
 
     #[test]
-    fn spring_mapping_validates_explicit_argument_locations() {
-        let mapping = spring_get(
+    fn http_operation_validates_explicit_argument_locations() {
+        let mapping = http_get(
             "/users/{id}",
             vec![
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "id",
-                    SpringCloudParameterSource::Path,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Path,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "filter",
-                    SpringCloudParameterSource::Query,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Query,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
             ],
         );
         assert_eq!(mapping.path(), "/users/{id}");
 
-        let missing_path = SpringCloudMethod::new(
+        let missing_path = http_operation(
             Method::GET,
             "/users/{id}",
             vec![
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "id",
-                    SpringCloudParameterSource::Query,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Query,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
             ],
         );
         assert!(missing_path.is_err());
 
-        let two_bodies = SpringCloudMethod::new(
+        let two_bodies = http_operation(
             Method::POST,
             "/users",
             vec![
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "first",
-                    SpringCloudParameterSource::Body,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Body,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "second",
-                    SpringCloudParameterSource::Body,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Body,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
             ],
         );
         assert!(two_bodies.is_err());
 
-        let raw_and_fields = SpringCloudMethod::new(
+        let raw_and_fields = http_operation(
             Method::POST,
             "/users",
             vec![
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "document",
-                    SpringCloudParameterSource::Body,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Body,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "audit",
-                    SpringCloudParameterSource::BodyField,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::BodyField,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
             ],
         );
         assert!(raw_and_fields.is_err());
 
-        let get_body_field = SpringCloudMethod::new(
+        let get_body_field = http_operation(
             Method::GET,
             "/users",
             vec![
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "filter",
-                    SpringCloudParameterSource::BodyField,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::BodyField,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
             ],
@@ -1096,48 +1183,111 @@ mod tests {
 
         for path in ["/users/", "/users//active"] {
             assert!(
-                SpringCloudMethod::new(Method::GET, path, Vec::new()).is_err(),
+                http_operation(Method::GET, path, Vec::new()).is_err(),
                 "{path}"
             );
         }
     }
 
     #[test]
-    fn spring_repeated_cardinality_is_query_only() {
-        let repeated = SpringCloudParameter::new(
-            "tags",
-            SpringCloudParameterSource::Query,
-            SpringCloudParameterCardinality::Repeated,
+    fn http_operation_canonicalizes_media_types_and_supports_http_sources() {
+        let operation = HttpOperation::new(
+            Method::POST,
+            "/items",
+            vec![
+                HttpParameter::new(
+                    "tenant",
+                    HttpParameterSource::Header,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                HttpParameter::new(
+                    "session",
+                    HttpParameterSource::Cookie,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                HttpParameter::new(
+                    "query",
+                    HttpParameterSource::QueryMap,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+                HttpParameter::new(
+                    "headers",
+                    HttpParameterSource::HeaderMap,
+                    HttpParameterCardinality::Scalar,
+                )
+                .unwrap(),
+            ],
+            "application/json; charset=utf-8",
+            "application/vnd.fusen+json",
         )
         .unwrap();
-        assert_eq!(
-            repeated.cardinality(),
-            SpringCloudParameterCardinality::Repeated
+        assert_eq!(operation.consumes(), "application/json; charset=utf-8");
+        assert_eq!(operation.produces(), "application/vnd.fusen+json");
+        assert!(
+            HttpOperation::new(
+                Method::GET,
+                "/items",
+                Vec::new(),
+                "not a media type",
+                "application/json",
+            )
+            .is_err()
         );
-        assert!(SpringCloudMethod::new(Method::GET, "/items", vec![repeated]).is_ok(),);
+    }
+
+    #[test]
+    fn repeated_cardinality_is_query_only() {
+        let repeated = HttpParameter::new(
+            "tags",
+            HttpParameterSource::Query,
+            HttpParameterCardinality::Repeated,
+        )
+        .unwrap();
+        assert_eq!(repeated.cardinality(), HttpParameterCardinality::Repeated);
+        assert!(http_operation(Method::GET, "/items", vec![repeated]).is_ok(),);
 
         for source in [
-            SpringCloudParameterSource::Path,
-            SpringCloudParameterSource::BodyField,
-            SpringCloudParameterSource::Body,
+            HttpParameterSource::Path,
+            HttpParameterSource::Header,
+            HttpParameterSource::Cookie,
+            HttpParameterSource::BodyField,
+            HttpParameterSource::Body,
+            HttpParameterSource::QueryMap,
+            HttpParameterSource::HeaderMap,
         ] {
-            let parameter = SpringCloudParameter::new(
-                "value",
-                source,
-                SpringCloudParameterCardinality::Repeated,
-            )
-            .unwrap();
-            let path = if source == SpringCloudParameterSource::Path {
+            let parameter =
+                HttpParameter::new("value", source, HttpParameterCardinality::Repeated).unwrap();
+            let path = if source == HttpParameterSource::Path {
                 "/items/{value}"
             } else {
                 "/items"
             };
-            assert!(SpringCloudMethod::new(Method::POST, path, vec![parameter]).is_err());
+            assert!(http_operation(Method::POST, path, vec![parameter]).is_err());
         }
     }
 
     #[test]
-    fn spring_routes_require_canonical_rfc3986_literals() {
+    fn http_operation_allows_at_most_one_parameter_map_per_source() {
+        for source in [
+            HttpParameterSource::QueryMap,
+            HttpParameterSource::HeaderMap,
+        ] {
+            let parameters = ["first", "second"]
+                .into_iter()
+                .map(|name| {
+                    HttpParameter::new(name, source, HttpParameterCardinality::Scalar).unwrap()
+                })
+                .collect();
+            let error = http_operation(Method::GET, "/items", parameters).unwrap_err();
+            assert!(error.to_string().contains("at most one"));
+        }
+    }
+
+    #[test]
+    fn http_routes_require_canonical_rfc3986_literals() {
         for path in [
             "/",
             "/users/a-._~!$&'()*+,;=:@",
@@ -1146,10 +1296,10 @@ mod tests {
         ] {
             let parameters = if path.contains("{id}") {
                 vec![
-                    SpringCloudParameter::new(
+                    HttpParameter::new(
                         "id",
-                        SpringCloudParameterSource::Path,
-                        SpringCloudParameterCardinality::Scalar,
+                        HttpParameterSource::Path,
+                        HttpParameterCardinality::Scalar,
                     )
                     .unwrap(),
                 ]
@@ -1157,7 +1307,7 @@ mod tests {
                 Vec::new()
             };
             assert!(
-                SpringCloudMethod::new(Method::GET, path, parameters).is_ok(),
+                http_operation(Method::GET, path, parameters).is_ok(),
                 "{path}"
             );
         }
@@ -1178,50 +1328,46 @@ mod tests {
             "/..",
         ] {
             assert!(
-                SpringCloudMethod::new(Method::GET, path, Vec::new()).is_err(),
+                http_operation(Method::GET, path, Vec::new()).is_err(),
                 "{path}"
             );
         }
     }
 
     #[test]
-    fn method_keeps_fusen_identity_independent_from_optional_spring_route() {
-        let spring = spring_get("/users", Vec::new());
+    fn method_keeps_invocation_name_independent_from_http_route() {
+        let operation = http_get("/users", Vec::new());
         let descriptor =
-            MethodDescriptor::new(MethodId::new(0), "inventory.users.list", Some(spring)).unwrap();
-        assert_eq!(descriptor.fusen_identity(), "inventory.users.list");
+            MethodDescriptor::new(MethodId::new(0), "inventory.users.list", operation).unwrap();
+        assert_eq!(descriptor.invocation_name(), "inventory.users.list");
         assert!(descriptor.allows_retries());
-        assert_eq!(descriptor.spring_cloud().unwrap().path(), "/users");
+        assert_eq!(descriptor.http_operation().path(), "/users");
     }
 
     #[test]
     fn method_sensitivity_is_optional_process_local_metadata() {
-        let spring = spring_get(
+        let operation = http_get(
             "/users/{id}",
             vec![
-                SpringCloudParameter::new(
+                HttpParameter::new(
                     "id",
-                    SpringCloudParameterSource::Path,
-                    SpringCloudParameterCardinality::Scalar,
+                    HttpParameterSource::Path,
+                    HttpParameterCardinality::Scalar,
                 )
                 .unwrap(),
             ],
         );
-        let plain = MethodDescriptor::new(
-            MethodId::new(0),
-            "inventory.users.get",
-            Some(spring.clone()),
-        )
-        .unwrap();
+        let plain =
+            MethodDescriptor::new(MethodId::new(0), "inventory.users.get", operation.clone())
+                .unwrap();
         assert!(plain.sensitivity().is_none());
 
-        let classified =
-            MethodDescriptor::new(MethodId::new(0), "inventory.users.get", Some(spring))
-                .unwrap()
-                .with_sensitivity(MethodSensitivity::new(
-                    vec![SensitiveArgument::new("id", token_shape)],
-                    Some(public_shape),
-                ));
+        let classified = MethodDescriptor::new(MethodId::new(0), "inventory.users.get", operation)
+            .unwrap()
+            .with_sensitivity(MethodSensitivity::new(
+                vec![SensitiveArgument::new("id", token_shape)],
+                Some(public_shape),
+            ));
 
         let sensitivity = classified.sensitivity().unwrap();
         assert_eq!(sensitivity.arguments()[0].name(), "id");
@@ -1234,8 +1380,8 @@ mod tests {
             Some(SensitiveShape::Kind(SensitivityKind::PUBLIC))
         ));
         assert_eq!(classified.id(), plain.id());
-        assert_eq!(classified.fusen_identity(), plain.fusen_identity());
-        assert_eq!(classified.spring_cloud(), plain.spring_cloud());
+        assert_eq!(classified.invocation_name(), plain.invocation_name());
+        assert_eq!(classified.http_operation(), plain.http_operation());
         assert_eq!(classified.allows_retries(), plain.allows_retries());
         assert_eq!(classified, plain);
         assert!(format!("{classified:?}").contains("has_sensitivity: true"));
@@ -1244,10 +1390,7 @@ mod tests {
         let plain_service = ServiceDescriptor::new(selector.clone(), vec![plain]).unwrap();
         let classified_service = ServiceDescriptor::new(selector, vec![classified]).unwrap();
         assert_eq!(plain_service.identity(), classified_service.identity());
-        assert_eq!(
-            plain_service.supported_protocols(),
-            classified_service.supported_protocols()
-        );
+        assert_eq!(plain_service.methods(), classified_service.methods());
     }
 
     #[test]
@@ -1265,7 +1408,7 @@ mod tests {
             let descriptor = MethodDescriptor::new(
                 MethodId::new(index as u16),
                 method.as_str().to_owned(),
-                Some(SpringCloudMethod::new(method, "/users", Vec::new()).unwrap()),
+                http_operation(method, "/users", Vec::new()).unwrap(),
             )
             .unwrap();
             assert!(descriptor.allows_retries());
@@ -1274,16 +1417,11 @@ mod tests {
             let descriptor = MethodDescriptor::new(
                 MethodId::new(index as u16),
                 method.as_str().to_owned(),
-                Some(SpringCloudMethod::new(method, "/users", Vec::new()).unwrap()),
+                http_operation(method, "/users", Vec::new()).unwrap(),
             )
             .unwrap();
             assert!(!descriptor.allows_retries());
         }
-        assert!(
-            !MethodDescriptor::new(MethodId::new(0), "fusen-only", None)
-                .unwrap()
-                .allows_retries()
-        );
     }
 
     #[test]
@@ -1295,51 +1433,44 @@ mod tests {
                 .is_err()
         );
 
-        let first = MethodDescriptor::new(
-            MethodId::new(0),
-            "list",
-            Some(spring_get("/users", Vec::new())),
-        )
-        .unwrap();
-        let second = MethodDescriptor::new(
-            MethodId::new(1),
-            "search",
-            Some(spring_get("/users", Vec::new())),
-        )
-        .unwrap();
+        let first = MethodDescriptor::new(MethodId::new(0), "list", http_get("/users", Vec::new()))
+            .unwrap();
+        let second =
+            MethodDescriptor::new(MethodId::new(1), "search", http_get("/users", Vec::new()))
+                .unwrap();
         assert!(ServiceDescriptor::new(selector, vec![first, second]).is_err());
 
         let selector = ServiceSelector::new("inventory", None, None).unwrap();
         let by_id = MethodDescriptor::new(
             MethodId::new(0),
             "by-id",
-            Some(spring_get(
+            http_get(
                 "/users/{id}",
                 vec![
-                    SpringCloudParameter::new(
+                    HttpParameter::new(
                         "id",
-                        SpringCloudParameterSource::Path,
-                        SpringCloudParameterCardinality::Scalar,
+                        HttpParameterSource::Path,
+                        HttpParameterCardinality::Scalar,
                     )
                     .unwrap(),
                 ],
-            )),
+            ),
         )
         .unwrap();
         let by_name = MethodDescriptor::new(
             MethodId::new(1),
             "by-name",
-            Some(spring_get(
+            http_get(
                 "/users/{name}",
                 vec![
-                    SpringCloudParameter::new(
+                    HttpParameter::new(
                         "name",
-                        SpringCloudParameterSource::Path,
-                        SpringCloudParameterCardinality::Scalar,
+                        HttpParameterSource::Path,
+                        HttpParameterCardinality::Scalar,
                     )
                     .unwrap(),
                 ],
-            )),
+            ),
         )
         .unwrap();
         assert!(ServiceDescriptor::new(selector, vec![by_id, by_name]).is_err());
@@ -1356,35 +1487,47 @@ mod tests {
         ));
         let id = InstanceId::new("inventory-01").unwrap();
         let endpoint: ServiceEndpoint = "http://127.0.0.1:8080".parse().unwrap();
-        let registration = ServiceRegistration::new(
-            id.clone(),
-            descriptor,
-            endpoint.clone(),
-            ProtocolSet::ALL,
-            ServiceWeight::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(
-            registration,
-            ContractError::UnsupportedServiceProtocol {
-                protocol: WireProtocol::SpringCloudV1,
-                ..
-            }
-        ));
-
-        let registration = ServiceRegistration::new(
-            id.clone(),
-            descriptor,
-            endpoint.clone(),
-            ProtocolSet::FUSEN_V1,
-            ServiceWeight::default(),
+        let unsupported = EndpointCapabilities::new(
+            HttpVersionSet::HTTP_1_1,
+            [HttpBindingId::new("vendor-json-v1").unwrap()],
+            false,
         )
         .unwrap();
-        assert_eq!(registration.instance_id(), &id);
-        assert!(registration.protocols().contains(WireProtocol::FusenV1));
+        let custom_registration = ServiceRegistration::new(
+            id.clone(),
+            descriptor,
+            endpoint.clone(),
+            unsupported,
+            ServiceWeight::default(),
+        );
+        assert_eq!(custom_registration.capabilities().bindings().len(), 1);
 
-        let instance = ServiceInstance::new(id.clone(), endpoint, ServiceWeight::default());
+        let registration = ServiceRegistration::new(
+            id.clone(),
+            descriptor,
+            endpoint.clone(),
+            EndpointCapabilities::default(),
+            ServiceWeight::default(),
+        )
+        .with_metadata(Metadata::from([("zone".into(), "east".into())]))
+        .unwrap();
+        assert_eq!(registration.instance_id(), &id);
+        assert_eq!(registration.metadata()["zone"], "east");
+        assert!(
+            registration
+                .capabilities()
+                .supports_binding(&HttpBindingId::default())
+        );
+
+        let instance = ServiceInstance::new(
+            id.clone(),
+            endpoint,
+            EndpointCapabilities::default(),
+            ServiceWeight::default(),
+        );
         assert_eq!(instance.instance_id(), &id);
+        let reserved = Metadata::from([("fusen.http.bindings".into(), "http-json-v1".into())]);
+        assert!(instance.with_metadata(reserved).is_err());
     }
 
     #[test]

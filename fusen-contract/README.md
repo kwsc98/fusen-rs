@@ -6,9 +6,10 @@ network I/O and has no runtime lifecycle.
 
 The public contract includes:
 
-- `WireProtocol::{FusenV1, SpringCloudV1}` and `ProtocolSet`.
-- `ServiceDescriptor`, `MethodDescriptor`, `ServiceSelector`, and Spring Cloud
-  method/parameter metadata.
+- `HttpBindingId`, `HttpVersionSet`, `HttpVersionPolicy`, and
+  `EndpointCapabilities`.
+- `ServiceDescriptor`, `MethodDescriptor`, `ServiceSelector`, and required
+  `HttpOperation` method/parameter metadata.
 - Process-local `SensitiveFields` shapes and method sensitivity metadata for
   structured diagnostic redaction.
 - `ServiceRegistration`, `ServiceInstance`, stable `InstanceId`, and bounded
@@ -33,9 +34,9 @@ assert_eq!(secure_endpoint.as_str(), "https://api.example.com/");
 Enable the optional `derive` feature to re-export
 `#[derive(fusen_contract::SensitiveFields)]`. Structured shapes carry separate
 Serde serialization and deserialization field tables, and projection selects
-the table that matches the middleware side and response origin. Shapes are
+the table that matches the interceptor side and response origin. Shapes are
 lazy, so recursive DTOs are supported. They remain local to the process and
-never alter wire encoding, service identity, discovery, or registration.
+never alter HTTP encoding, service identity, discovery, or registration.
 Built-in scalar types default to the fail-closed `Opaque` shape; retaining a
 value requires an explicit `public` classification.
 

@@ -45,7 +45,7 @@ pub enum RegistryErrorKind {
     Timeout,
     /// The provider rejected the supplied credentials or identity.
     Unauthorized,
-    /// A registration, selector, protocol, or endpoint is invalid.
+    /// A registration, selector, capability declaration, or endpoint is invalid.
     InvalidResource,
     /// The requested resource conflicts with existing provider state.
     Conflict,
@@ -80,12 +80,13 @@ impl fmt::Display for RegistryErrorKind {
 }
 
 /// Cloneable registry failure with stable operation and kind metadata.
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Clone)]
 #[non_exhaustive]
-#[error("registry {operation} failed ({kind}): {source}")]
+#[error("registry {operation} failed ({kind}): {message}")]
 pub struct RegistryError {
     operation: RegistryOperation,
     kind: RegistryErrorKind,
+    message: Arc<str>,
     #[source]
     source: Arc<dyn std::error::Error + Send + Sync + 'static>,
 }
@@ -99,17 +100,26 @@ impl RegistryError {
         Self {
             operation,
             kind,
+            message: Arc::from(default_message(kind)),
             source: Arc::new(source),
         }
     }
 
-    /// Creates a classified registry error from an owned diagnostic message.
+    /// Creates a classified registry error from a safe public diagnostic message.
+    ///
+    /// The message is included in [`Debug`](fmt::Debug) and [`Display`](fmt::Display) output.
     pub fn message(
         operation: RegistryOperation,
         kind: RegistryErrorKind,
         message: impl Into<String>,
     ) -> Self {
-        Self::new(operation, kind, RegistryMessage(message.into()))
+        let message = message.into();
+        Self {
+            operation,
+            kind,
+            message: Arc::from(message.as_str()),
+            source: Arc::new(RegistryMessage(message)),
+        }
     }
 
     /// Returns the operation that failed.
@@ -122,6 +132,11 @@ impl RegistryError {
         self.kind
     }
 
+    /// Returns the safe public diagnostic message.
+    pub fn safe_message(&self) -> &str {
+        &self.message
+    }
+
     /// Returns whether a fresh provider operation may succeed without changing its input.
     pub const fn is_retryable(&self) -> bool {
         self.kind.is_retryable()
@@ -130,6 +145,30 @@ impl RegistryError {
     /// Returns the retained provider or framework source.
     pub fn source_ref(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
         self.source.as_ref()
+    }
+}
+
+impl fmt::Debug for RegistryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryError")
+            .field("operation", &self.operation)
+            .field("kind", &self.kind)
+            .field("message", &self.message)
+            .finish_non_exhaustive()
+    }
+}
+
+const fn default_message(kind: RegistryErrorKind) -> &'static str {
+    match kind {
+        RegistryErrorKind::Unavailable => "registry provider is unavailable",
+        RegistryErrorKind::Timeout => "registry operation timed out",
+        RegistryErrorKind::Unauthorized => "registry provider rejected the operation",
+        RegistryErrorKind::InvalidResource => "registry resource is invalid",
+        RegistryErrorKind::Conflict => "registry resource conflicts with existing state",
+        RegistryErrorKind::Cancelled => "registry operation was cancelled",
+        RegistryErrorKind::CleanupAborted => "registry cleanup did not complete",
+        RegistryErrorKind::Internal => "registry operation failed internally",
     }
 }
 
@@ -159,6 +198,48 @@ mod tests {
         assert_eq!(error.operation(), RegistryOperation::ActivateSubscription);
         assert_eq!(error.kind(), RegistryErrorKind::Unavailable);
         assert!(error.is_retryable());
-        assert!(error.to_string().contains("provider offline"));
+        assert_eq!(error.safe_message(), "registry provider is unavailable");
+        assert!(error.source_ref().to_string().contains("provider offline"));
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .to_string()
+                .contains("provider offline")
+        );
+    }
+
+    #[test]
+    fn formatting_shows_safe_message_without_exposing_provider_source() {
+        let error = RegistryError::new(
+            RegistryOperation::ActivateSubscription,
+            RegistryErrorKind::Unavailable,
+            std::io::Error::other("provider-token=secret"),
+        );
+
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        assert!(debug.contains("ActivateSubscription"));
+        assert!(debug.contains("Unavailable"));
+        assert!(debug.contains("registry provider is unavailable"));
+        assert!(display.contains("registry provider is unavailable"));
+        assert!(!debug.contains("provider-token=secret"));
+        assert!(!display.contains("provider-token=secret"));
+    }
+
+    #[test]
+    fn explicit_public_message_is_preserved() {
+        let error = RegistryError::message(
+            RegistryOperation::Directory,
+            RegistryErrorKind::InvalidResource,
+            "directory snapshot is invalid",
+        );
+
+        assert_eq!(error.safe_message(), "directory snapshot is invalid");
+        assert!(format!("{error:?}").contains("directory snapshot is invalid"));
+        assert!(error.to_string().contains("directory snapshot is invalid"));
+        assert_eq!(
+            error.source_ref().to_string(),
+            "directory snapshot is invalid"
+        );
     }
 }

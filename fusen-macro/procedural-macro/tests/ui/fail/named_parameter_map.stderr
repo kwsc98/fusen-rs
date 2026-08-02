@@ -1,0 +1,5 @@
+error: #[param(query_map)] and #[param(header_map)] parameters must not declare a wire name
+  --> tests/ui/fail/named_parameter_map.rs:11:35
+   |
+11 |         #[param(query_map, name = "query")] query: String,
+   |                                   ^^^^^^^

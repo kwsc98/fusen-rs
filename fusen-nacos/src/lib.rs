@@ -5,7 +5,7 @@ mod config;
 mod register;
 
 pub use config::NacosConfigSource;
-pub use register::NacosRegistry;
+pub use register::{NacosConvention, NacosRegistry};
 
 fn client_props(
     config: &NacosConfig,

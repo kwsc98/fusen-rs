@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "path-mismatch")]
 trait PathMismatch {
@@ -11,7 +11,7 @@ trait PathMismatch {
     async fn get(
         &self,
         #[param(query)] id: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

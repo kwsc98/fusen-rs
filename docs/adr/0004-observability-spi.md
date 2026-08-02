@@ -13,8 +13,8 @@
 - Core 直接产生结构化 `tracing` span/event，但从不安装进程级 subscriber；
 - 唯一公开 metrics 扩展为同步、非阻塞、无失败返回值的 `MetricsRecorder`；
 - `fusen-observability` 的 base feature 只包含 backend-neutral event/SPI，可选 tracing/OTel adapter 由应用初始化并持有 flush/shutdown guard；
-- recorder callback 分别被 panic boundary 包围，首次 panic 后原子禁用该 recorder，RPC 与生命周期继续运行；
-- metrics label 只允许 side、protocol、service、method、outcome、status、failure class 等有界值；
+- recorder callback 分别被 panic boundary 包围，首次 panic 后原子禁用该 recorder，service invocation 与生命周期继续运行；
+- metrics label 只允许 side、binding、HTTP version、service、method、outcome、status、failure class 等有界值；
 - request ID、endpoint、错误文本、body、完整 headers 和凭据禁止成为 metric label；其中必要字段只可进入脱敏 trace；
 - success/error/timeout/cancellation 由 runtime-owned RAII guard 形成唯一终态，不依赖用户后置代码执行。
 

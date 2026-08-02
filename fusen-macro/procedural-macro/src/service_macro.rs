@@ -17,7 +17,7 @@ struct GeneratedBindings {
     methods: Ident,
     error: Ident,
     runtime: Ident,
-    middleware: Ident,
+    interceptor: Ident,
     dispatch_lifetime: Lifetime,
 }
 
@@ -36,7 +36,7 @@ impl GeneratedBindings {
             methods: private_ident("__fusen_methods"),
             error: private_ident("__fusen_error"),
             runtime: private_ident("__fusen_runtime"),
-            middleware: private_ident("__fusen_middleware"),
+            interceptor: private_ident("__fusen_interceptor"),
             dispatch_lifetime: Lifetime::new("'__fusen_dispatch", Span::mixed_site()),
         }
     }
@@ -75,7 +75,7 @@ fn expand_tokens(args: ServiceArgs, item: ItemTrait) -> syn::Result<proc_macro2:
         invocation,
         method_id,
         runtime: runtime_binding,
-        middleware,
+        interceptor,
         dispatch_lifetime,
         ..
     } = &bindings;
@@ -145,22 +145,22 @@ fn expand_tokens(args: ServiceArgs, item: ItemTrait) -> syn::Result<proc_macro2:
                 }
             }
 
-            /// Adds interface-local head middleware.
-            pub fn head_middleware(mut self, #middleware: impl #abi::Middleware) -> Self {
-                self.#inner = self.#inner.head_middleware(#middleware);
+            /// Adds an interface-local head interceptor.
+            pub fn head_interceptor(mut self, #interceptor: impl #abi::Interceptor) -> Self {
+                self.#inner = self.#inner.head_interceptor(#interceptor);
                 self
             }
 
-            /// Adds interface-local decoded-call middleware.
-            pub fn middleware(mut self, #middleware: impl #abi::Middleware) -> Self {
-                self.#inner = self.#inner.middleware(#middleware);
+            /// Adds an interface-local decoded-call interceptor.
+            pub fn interceptor(mut self, #interceptor: impl #abi::Interceptor) -> Self {
+                self.#inner = self.#inner.interceptor(#interceptor);
                 self
             }
 
             fn __dispatch<#dispatch_lifetime>(
                 #handler: &#dispatch_lifetime #handler_type,
                 mut #invocation: #abi::ServerInvocation,
-            ) -> #abi::MiddlewareFuture<#dispatch_lifetime> {
+            ) -> #abi::InterceptorFuture<#dispatch_lifetime> {
                 ::std::boxed::Box::pin(async move {
                     let #method_id = #invocation.method_id();
                     match #method_id.get() {
@@ -201,7 +201,7 @@ fn generated_trait(item: &ItemTrait) -> proc_macro2::TokenStream {
             });
         }
         let ReturnType::Type(_, output) = &method.sig.output else {
-            unreachable!("the interface validator required an RPC result")
+            unreachable!("the interface validator required a service invocation result")
         };
         let output = output.clone();
         method.sig.asyncness = None;
@@ -245,15 +245,19 @@ fn descriptor(
             let source = match parameter.source {
                 validate::ParameterSource::Path => quote!(Path),
                 validate::ParameterSource::Query => quote!(Query),
+                validate::ParameterSource::Header => quote!(Header),
+                validate::ParameterSource::Cookie => quote!(Cookie),
                 validate::ParameterSource::BodyField => quote!(BodyField),
                 validate::ParameterSource::Body => quote!(Body),
+                validate::ParameterSource::QueryMap => quote!(QueryMap),
+                validate::ParameterSource::HeaderMap => quote!(HeaderMap),
                 validate::ParameterSource::Context => unreachable!(),
             };
             let repeated = parameter.repeated;
             Some(quote! {
-                #abi::RpcField::new(
+                #abi::ArgumentField::new(
                     #name,
-                    #abi::RpcFieldSource::#source,
+                    #abi::ArgumentSource::#source,
                     #repeated,
                 )
             })
@@ -281,12 +285,16 @@ fn descriptor(
             })
         });
         let response = &method.response;
+        let consumes = &mapping.consumes;
+        let produces = &mapping.produces;
         let http = quote! {
-            Some(#abi::http_method(
+            #abi::http_method(
                 #abi::http::Method::#http_method,
                 #path,
+                #consumes,
+                #produces,
                 &[#(#fields),*],
-            )?)
+            )?
         };
         quote! {
             #abi::MethodDescriptor::new(
@@ -342,7 +350,7 @@ fn client_methods(
                 .iter()
                 .find(|parameter| parameter.source == validate::ParameterSource::Context)
                 .map_or_else(
-                    || quote!(#abi::RpcCall::new()),
+                    || quote!(#abi::Call::new()),
                     |parameter| {
                         let ident = &parameter.ident;
                         quote!(#ident)
@@ -366,13 +374,13 @@ fn client_methods(
                 async fn #ident(
                     &self,
                     #(#parameters),*
-                ) -> ::core::result::Result<#abi::RpcResponse<#response>, #abi::RpcError> {
+                ) -> ::core::result::Result<#abi::Response<#response>, #abi::Error> {
                     self.#inner
                         .invoke::<#response, _>(
                             #abi::MethodId::new(#index as u16),
                             #call,
                             move || {
-                                let mut #arguments_binding = #abi::RpcArguments::new();
+                                let mut #arguments_binding = #abi::Arguments::new();
                                 #(#arguments)*
                                 Ok(#arguments_binding)
                             },
@@ -405,15 +413,15 @@ fn dispatch_arms(
                 let kind = &parameter.kind;
                 if parameter.source == validate::ParameterSource::Context {
                     quote! {
-                        let #ident: #kind = #invocation.rpc_call();
+                        let #ident: #kind = #invocation.call();
                     }
                 } else {
                     let name = &parameter.wire_name;
-                    let spring_text = parameter.spring_text;
+                    let text_encoded = parameter.text_encoded;
                     quote! {
                         let #ident: #kind = #invocation.decode_argument(
                             #name,
-                            #spring_text,
+                            #text_encoded,
                         )?;
                     }
                 }
@@ -452,7 +460,7 @@ mod tests {
                     &self,
                     id: String,
                     expand: Option<bool>,
-                ) -> Result<RpcResponse<User>, RpcError>;
+                ) -> Result<Response<User>, Error>;
             }
         })
         .unwrap();
@@ -462,5 +470,9 @@ mod tests {
         assert!(expansion.contains("impl UserApi for UserApiClient"));
         assert!(!expansion.contains("UserApiClientBuilder"));
         assert!(expansion.contains("UserApiServer"));
+        assert!(expansion.contains("__macro :: v1 :: Interceptor"));
+        assert!(expansion.contains("head_interceptor"));
+        assert!(expansion.contains("__macro :: v1 :: Response < User >"));
+        assert!(expansion.contains("__macro :: v1 :: Error"));
     }
 }

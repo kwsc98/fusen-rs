@@ -1,4 +1,4 @@
-error: an RPC method may declare at most one #[param(body)] parameter
+error: a service invocation method may declare at most one #[param(body)] parameter
   --> tests/ui/fail/duplicate_body.rs:12:9
    |
 12 |         #[param(body)] second: String,

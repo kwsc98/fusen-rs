@@ -2,22 +2,18 @@
 
 use examples::{
     DemoServiceServer, DemoServiceV2Server,
-    middleware::{
-        log::{LogMetricsRecorder, init_tracing},
-        tracing::TracingMiddleware,
+    extensions::{
+        interceptor::tracing::TracingInterceptor,
+        metrics::{LogMetricsRecorder, init_tracing},
     },
     service::{DemoServiceImpl, DemoServiceImplV2},
 };
 use fusen_nacos::{NacosConfig, NacosRegistry};
-use fusen_rs::{Server, ServerConfig, contract::ProtocolSet};
+use fusen_rs::Server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing("nacos_server=debug,examples::middleware=debug,fusen_rs=debug,fusen_nacos=debug");
-    let server_config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .map_err(std::io::Error::other)?;
+    init_tracing("nacos_server=debug,examples::extensions=debug,fusen_rs=debug,fusen_nacos=debug");
     let nacos_config = NacosConfig::builder()
         .server_addr(std::env::var("NACOS_ADDR").unwrap_or_else(|_| "127.0.0.1:8848".to_owned()))
         .build()?;
@@ -25,12 +21,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let advertised_endpoint = std::env::var("FUSEN_ADVERTISED_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8081".to_owned());
     let running = Server::builder("0.0.0.0:8081")
-        .config(server_config)
         .advertised_endpoint(advertised_endpoint)
         .registry("nacos", registry)
         .metrics(LogMetricsRecorder)
-        .interface(DemoServiceServer::new(DemoServiceImpl).middleware(TracingMiddleware))
-        .interface(DemoServiceV2Server::new(DemoServiceImplV2).middleware(TracingMiddleware))
+        .interface(DemoServiceServer::new(DemoServiceImpl).interceptor(TracingInterceptor))
+        .interface(DemoServiceV2Server::new(DemoServiceImplV2).interceptor(TracingInterceptor))
         .build()?
         .start()
         .await?;

@@ -1,10 +1,10 @@
-//! Minimal dual-protocol benchmark server.
+//! Minimal `http-json-v1` HTTP/1.1 and h2c benchmark server.
 
 use examples::{
     DemoServiceServer, DemoServiceV2Server,
     service::{DemoServiceImpl, DemoServiceImplV2},
 };
-use fusen_rs::{Server, ServerConfig, contract::ProtocolSet};
+use fusen_rs::Server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,12 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "0.0.0.0:8081".to_owned())
         .parse()?;
     println!("压测服务端监听 {bind_addr}（已关闭逐请求日志和 tracing）");
-    let config = ServerConfig::builder()
-        .protocols(ProtocolSet::ALL)
-        .build()
-        .map_err(std::io::Error::other)?;
     let running = Server::builder(bind_addr.to_string())
-        .config(config)
         .interface(DemoServiceServer::new(DemoServiceImpl))
         .interface(DemoServiceV2Server::new(DemoServiceImplV2))
         .build()?

@@ -32,7 +32,7 @@ def benchmark_output(run: int, *, omit: str | None = None, errors: str | None = 
         error_count = 1 if case == errors else 0
         byte_count = spec["iterations"] * spec["payload_bytes"] * 2
         lines.append(
-            f"benchmark-result case={case} protocol={spec['protocol']} "
+            f"benchmark-result case={case} binding={spec['binding']} "
             f"transport={spec['transport']} concurrency={spec['concurrency']} "
             f"payload={spec['payload']} payload_bytes={spec['payload_bytes']} "
             f"iterations={spec['iterations']} bytes={byte_count} "
@@ -111,27 +111,31 @@ class BenchmarkGateTests(unittest.TestCase):
             {
                 case
                 for case, result in sample["cases"].items()
-                if result["protocol"] == "fusen-v1"
+                if result["transport"] == "h2c"
             },
             {
-                "fusen-c1-small",
-                "fusen-c1-64k",
-                "fusen-c100-small",
-                "fusen-c100-64k",
+                "h2c-c1-small",
+                "h2c-c1-64k",
+                "h2c-c100-small",
+                "h2c-c100-64k",
             },
         )
+        self.assertEqual(
+            {result["binding"] for result in sample["cases"].values()},
+            {"http-json-v1"},
+        )
         with self.assertRaisesRegex(RuntimeError, "case mismatch"):
-            gate.parse_sample(benchmark_output(1, omit="spring-c100-64k"), 1)
+            gate.parse_sample(benchmark_output(1, omit="http1-c100-64k"), 1)
 
     def test_parse_rejects_any_request_error(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "reported 1 error"):
-            gate.parse_sample(benchmark_output(1, errors="fusen-c1-small"), 1)
+            gate.parse_sample(benchmark_output(1, errors="h2c-c1-small"), 1)
 
     def test_baseline_schema_requires_five_raw_samples_and_full_sha(self) -> None:
         baseline = gate.baseline_from_summary(ready_summary(), 10)
         gate.validate_baseline(baseline)
         self.assertEqual(
-            len(baseline["cases"]["fusen-c100-64k"]["samples"]), 5
+            len(baseline["cases"]["h2c-c100-64k"]["samples"]), 5
         )
 
         invalid_sha = copy.deepcopy(baseline)
@@ -140,12 +144,12 @@ class BenchmarkGateTests(unittest.TestCase):
             gate.validate_baseline(invalid_sha)
 
         missing_sample = copy.deepcopy(baseline)
-        missing_sample["cases"]["fusen-c100-64k"]["samples"].pop()
+        missing_sample["cases"]["h2c-c100-64k"]["samples"].pop()
         with self.assertRaisesRegex(RuntimeError, "five raw samples"):
             gate.validate_baseline(missing_sample)
 
         inconsistent_qps = copy.deepcopy(baseline)
-        inconsistent_qps["cases"]["fusen-c100-64k"]["samples"][0]["qps"] *= 2
+        inconsistent_qps["cases"]["h2c-c100-64k"]["samples"][0]["qps"] *= 2
         with self.assertRaisesRegex(RuntimeError, "inconsistent sample QPS"):
             gate.validate_baseline(inconsistent_qps)
 
@@ -161,7 +165,7 @@ class BenchmarkGateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "clean working tree"):
             gate.compare(dirty, baseline)
 
-    def test_exact_ten_percent_fusen_regression_passes_and_qps_is_not_enforced(
+    def test_exact_ten_percent_transport_regression_passes_and_qps_is_not_enforced(
         self,
     ) -> None:
         summary = ready_summary()
@@ -176,34 +180,30 @@ class BenchmarkGateTests(unittest.TestCase):
                     reference["median_p99_ns"] * 110 // 100
                 )
                 current["cases"][case]["median_qps"] = 1.0
-            else:
-                current["cases"][case]["median_p50_ns"] *= 10
-                current["cases"][case]["median_p99_ns"] *= 10
-
         comparison = gate.compare(current, baseline)
         self.assertTrue(comparison["passed"])
         self.assertFalse(
-            comparison["cases"]["fusen-c1-small"]["qps"]["enforced"]
+            comparison["cases"]["h2c-c1-small"]["qps"]["enforced"]
         )
-        self.assertFalse(
-            comparison["cases"]["spring-c1-small"]["p99_ns"]["enforced"]
+        self.assertTrue(
+            comparison["cases"]["http1-c1-small"]["p99_ns"]["enforced"]
         )
 
-    def test_more_than_ten_percent_in_any_fusen_latency_metric_fails(self) -> None:
+    def test_more_than_ten_percent_in_any_transport_latency_metric_fails(self) -> None:
         summary = ready_summary()
         baseline = gate.baseline_from_summary(summary, 10)
         current = copy.deepcopy(summary)
-        reference = baseline["cases"]["fusen-c100-64k"]["median_p99_ns"]
-        current["cases"]["fusen-c100-64k"]["median_p99_ns"] = (
+        reference = baseline["cases"]["h2c-c100-64k"]["median_p99_ns"]
+        current["cases"]["h2c-c100-64k"]["median_p99_ns"] = (
             reference * 110 // 100 + 1
         )
-        with self.assertRaisesRegex(RuntimeError, "fusen-c100-64k p99"):
+        with self.assertRaisesRegex(RuntimeError, "h2c-c100-64k p99"):
             gate.compare(current, baseline)
 
     def test_calibration_marker_fails_closed(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "requires fixed-host calibration"):
             gate.validate_baseline(
-                {"schema_version": 2, "status": "calibration-required"}
+                {"schema_version": gate.SCHEMA_VERSION, "status": "calibration-required"}
             )
 
     def test_release_metadata_must_remain_clean_and_stable(self) -> None:

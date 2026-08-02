@@ -14,7 +14,7 @@ mod validate;
 
 use args::{MethodArgs, ServiceArgs};
 
-/// Declares one versioned RPC interface and generates its client and server wrapper.
+/// Declares one versioned service interface and generates its client and server wrapper.
 #[proc_macro_attribute]
 pub fn interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as ServiceArgs);

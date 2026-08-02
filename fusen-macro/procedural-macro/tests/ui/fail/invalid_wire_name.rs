@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "invalid-wire-name")]
 trait InvalidWireName {
@@ -9,7 +9,7 @@ trait InvalidWireName {
     async fn call(
         &self,
         #[param(query, name = "")] value: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

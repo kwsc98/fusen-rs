@@ -1,4 +1,4 @@
-use rpc::interface;
+use runtime::interface;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Request {
@@ -7,11 +7,11 @@ struct Request {
 
 #[interface(name = "missing-request-sensitivity")]
 trait MissingRequestSensitivity {
-    #[rpc::method(method = "POST", path = "/request")]
+    #[runtime::method(method = "POST", path = "/request")]
     async fn call(
         &self,
         #[param(body)] request: Request,
-    ) -> Result<rpc::RpcResponse<String>, rpc::RpcError>;
+    ) -> Result<runtime::Response<String>, runtime::Error>;
 }
 
 fn main() {}

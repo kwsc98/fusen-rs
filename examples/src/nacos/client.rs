@@ -1,9 +1,9 @@
 //! Nacos-backed discovery client example.
 
-use examples::middleware::{
+use examples::extensions::{
+    interceptor::tracing::TracingInterceptor,
     load_balancer::RandomLoadBalancer,
-    log::{LogMetricsRecorder, init_tracing},
-    tracing::TracingMiddleware,
+    metrics::{LogMetricsRecorder, init_tracing},
 };
 use examples::{DemoService, DemoServiceClient, DemoServiceV2, DemoServiceV2Client, RequestDto};
 use fusen_nacos::{NacosConfig, NacosRegistry};
@@ -11,7 +11,7 @@ use fusen_rs::ClientRuntime;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing("nacos_client=debug,examples::middleware=debug,fusen_rs=debug,fusen_nacos=debug");
+    init_tracing("nacos_client=debug,examples::extensions=debug,fusen_rs=debug,fusen_nacos=debug");
     let config = NacosConfig::builder()
         .server_addr(std::env::var("NACOS_ADDR").unwrap_or_else(|_| "127.0.0.1:8848".to_owned()))
         .build()?;
@@ -22,13 +22,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let client = DemoServiceClient::builder(&runtime)
         .discover()
-        .middleware(TracingMiddleware)
+        .interceptor(TracingInterceptor)
         .load_balancer(RandomLoadBalancer)
         .connect()
         .await?;
     let client_v2 = DemoServiceV2Client::builder(&runtime)
         .discover()
-        .middleware(TracingMiddleware)
+        .interceptor(TracingInterceptor)
         .connect()
         .await?;
 

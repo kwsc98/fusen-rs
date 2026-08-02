@@ -16,6 +16,8 @@ const MAX_IDENTITY_BYTES: usize = 128;
 pub(crate) struct HttpMapping {
     pub(crate) method: String,
     pub(crate) path: String,
+    pub(crate) consumes: String,
+    pub(crate) produces: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,8 +25,12 @@ pub(crate) enum ParameterSource {
     Context,
     Path,
     Query,
+    Header,
+    Cookie,
     BodyField,
     Body,
+    QueryMap,
+    HeaderMap,
 }
 
 #[derive(Clone)]
@@ -34,7 +40,7 @@ pub(crate) struct Parameter {
     pub(crate) wire_name: String,
     pub(crate) source: ParameterSource,
     pub(crate) repeated: bool,
-    pub(crate) spring_text: bool,
+    pub(crate) text_encoded: bool,
     pub(crate) sensitivity: Option<SensitiveOverride>,
 }
 
@@ -56,11 +62,11 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
     if item.unsafety.is_some() || item.modifiers.auto_token.is_some() {
         return Err(syn::Error::new_spanned(
             &item.ident,
-            "RPC interfaces must be ordinary safe traits",
+            "service interfaces must be ordinary safe traits",
         ));
     }
     validate_trait_generics(&item.generics)?;
-    reject_conditional_attributes(&item.attrs, "RPC interface traits")?;
+    reject_conditional_attributes(&item.attrs, "service interface traits")?;
 
     let name = args.name.ok_or_else(|| {
         syn::Error::new(
@@ -78,13 +84,13 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
     if item.items.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.ident,
-            "RPC interfaces must declare at least one method",
+            "service interfaces must declare at least one invocation method",
         ));
     }
     if item.items.len() > usize::from(u16::MAX) + 1 {
         return Err(syn::Error::new_spanned(
             &item.ident,
-            "RPC interfaces may declare at most 65536 methods",
+            "service interfaces may declare at most 65536 invocation methods",
         ));
     }
 
@@ -94,14 +100,14 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
         let TraitItem::Fn(method) = trait_item else {
             return Err(syn::Error::new_spanned(
                 trait_item,
-                "RPC interfaces may contain only async methods",
+                "service interfaces may contain only async invocation methods",
             ));
         };
-        reject_conditional_attributes(&method.attrs, "RPC methods")?;
+        reject_conditional_attributes(&method.attrs, "service invocation methods")?;
         if method.default.is_some() {
             return Err(syn::Error::new_spanned(
                 method,
-                "RPC methods must not provide default implementations",
+                "service invocation methods must not provide default implementations",
             ));
         }
         validate_signature(&method.sig)?;
@@ -119,7 +125,7 @@ pub(crate) fn validate(args: ServiceArgs, item: &ItemTrait) -> syn::Result<Servi
         {
             return Err(syn::Error::new_spanned(
                 &method.sig.output,
-                "HTTP HEAD mappings must return Result<RpcResponse<()>, RpcError>",
+                "HTTP HEAD mappings must return Result<Response<()>, Error>",
             ));
         }
         let key = (http.method.clone(), route_shape(&http.path));
@@ -178,7 +184,7 @@ fn method_args(attributes: &[Attribute], method_ident: &Ident) -> syn::Result<Me
         if parsed.is_some() {
             return Err(syn::Error::new_spanned(
                 attribute,
-                "only one `method` attribute is allowed per RPC method",
+                "only one `method` attribute is allowed per service invocation method",
             ));
         }
         let args = match &attribute.meta {
@@ -196,7 +202,7 @@ fn method_args(attributes: &[Attribute], method_ident: &Ident) -> syn::Result<Me
     parsed.ok_or_else(|| {
         syn::Error::new(
             method_ident.span(),
-            "each RPC method must declare #[method(method = \"...\", path = \"/...\")]",
+            "each service invocation method must declare #[method(method = \"...\", path = \"/...\")]",
         )
     })
 }
@@ -205,7 +211,7 @@ fn validate_trait_generics(generics: &Generics) -> syn::Result<()> {
     if !generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &generics.params,
-            "RPC interfaces must not declare generic parameters",
+            "service interfaces must not declare generic parameters",
         ));
     }
     if let Some(where_clause) = &generics.where_clause {
@@ -213,7 +219,7 @@ fn validate_trait_generics(generics: &Generics) -> syn::Result<()> {
             let WherePredicate::Type(predicate) = predicate else {
                 return Err(syn::Error::new_spanned(
                     predicate,
-                    "RPC interface where clauses may constrain only Self",
+                    "service interface where clauses may constrain only Self",
                 ));
             };
             let Type::Path(TypePath {
@@ -222,13 +228,13 @@ fn validate_trait_generics(generics: &Generics) -> syn::Result<()> {
             else {
                 return Err(syn::Error::new_spanned(
                     predicate,
-                    "RPC interface where clauses may constrain only Self",
+                    "service interface where clauses may constrain only Self",
                 ));
             };
             if !path.is_ident("Self") {
                 return Err(syn::Error::new_spanned(
                     predicate,
-                    "RPC interface where clauses may constrain only Self",
+                    "service interface where clauses may constrain only Self",
                 ));
             }
         }
@@ -245,7 +251,7 @@ fn validate_signature(signature: &Signature) -> syn::Result<()> {
     {
         return Err(syn::Error::new_spanned(
             signature,
-            "RPC methods must be ordinary async Rust methods",
+            "service invocation methods must be ordinary async Rust methods",
         ));
     }
     if signature.generics.params.iter().any(|parameter| {
@@ -257,23 +263,29 @@ fn validate_signature(signature: &Signature) -> syn::Result<()> {
     {
         return Err(syn::Error::new_spanned(
             &signature.generics,
-            "RPC methods must not declare generic parameters or where clauses",
+            "service invocation methods must not declare generic parameters or where clauses",
         ));
     }
     for input in &signature.inputs {
         match input {
             FnArg::Receiver(receiver) => {
-                reject_conditional_attributes(&receiver.attrs, "RPC method receivers")?;
+                reject_conditional_attributes(
+                    &receiver.attrs,
+                    "service invocation method receivers",
+                )?;
             }
             FnArg::Typed(input) => {
-                reject_conditional_attributes(&input.attrs, "RPC method parameters")?;
+                reject_conditional_attributes(
+                    &input.attrs,
+                    "service invocation method parameters",
+                )?;
             }
         }
     }
     let Some(FnArg::Receiver(receiver)) = signature.inputs.first() else {
         return Err(syn::Error::new_spanned(
             signature,
-            "RPC methods must have an immutable &self receiver",
+            "service invocation methods must have an immutable &self receiver",
         ));
     };
     if !matches!(&receiver.kind, syn::ReceiverKind::Reference(_, None, None))
@@ -281,14 +293,14 @@ fn validate_signature(signature: &Signature) -> syn::Result<()> {
     {
         return Err(syn::Error::new_spanned(
             receiver,
-            "RPC methods must have an immutable &self receiver without an explicit lifetime",
+            "service invocation methods must have an immutable &self receiver without an explicit lifetime",
         ));
     }
     for input in signature.inputs.iter().skip(1) {
         let FnArg::Typed(input) = input else {
             return Err(syn::Error::new_spanned(
                 input,
-                "RPC methods may declare only one receiver",
+                "service invocation methods may declare only one receiver",
             ));
         };
         validate_owned_type(&input.ty)?;
@@ -305,6 +317,8 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
     let mut raw_body = None;
     let mut first_body_field = None;
     let mut context = None;
+    let mut query_map = None;
+    let mut header_map = None;
 
     for input in signature.inputs.iter().skip(1) {
         let FnArg::Typed(input) = input else {
@@ -313,13 +327,13 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
         let Pat::Ident(pattern) = input.pat.as_ref() else {
             return Err(syn::Error::new_spanned(
                 &input.pat,
-                "RPC parameters must use plain immutable identifier patterns",
+                "service invocation parameters must use plain immutable identifier patterns",
             ));
         };
         if pattern.by_ref.is_some() || pattern.mutability.is_some() || pattern.subpat.is_some() {
             return Err(syn::Error::new_spanned(
                 pattern,
-                "RPC parameters must use plain immutable identifier patterns",
+                "service invocation parameters must use plain immutable identifier patterns",
             ));
         }
 
@@ -344,7 +358,11 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                 if meta.path.is_ident("context")
                     || meta.path.is_ident("path")
                     || meta.path.is_ident("query")
+                    || meta.path.is_ident("header")
+                    || meta.path.is_ident("cookie")
                     || meta.path.is_ident("body")
+                    || meta.path.is_ident("query_map")
+                    || meta.path.is_ident("header_map")
                 {
                     let source = if meta.path.is_ident("context") {
                         ParameterSource::Context
@@ -352,6 +370,14 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                         ParameterSource::Path
                     } else if meta.path.is_ident("query") {
                         ParameterSource::Query
+                    } else if meta.path.is_ident("header") {
+                        ParameterSource::Header
+                    } else if meta.path.is_ident("cookie") {
+                        ParameterSource::Cookie
+                    } else if meta.path.is_ident("query_map") {
+                        ParameterSource::QueryMap
+                    } else if meta.path.is_ident("header_map") {
+                        ParameterSource::HeaderMap
                     } else {
                         ParameterSource::Body
                     };
@@ -402,7 +428,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                     Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown parameter field; expected context, path, query, body, name, or repeated",
+                        "unknown parameter field; expected context, path, query, header, cookie, body, query_map, header_map, name, or repeated",
                     ))
                 }
             })?;
@@ -435,19 +461,19 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
             if context.replace(pattern.ident.span()).is_some() {
                 return Err(syn::Error::new_spanned(
                     input,
-                    "an RPC method may declare at most one #[param(context)] parameter",
+                    "a service invocation method may declare at most one #[param(context)] parameter",
                 ));
             }
             let Type::Path(kind) = input.ty.as_ref() else {
                 return Err(syn::Error::new_spanned(
                     &input.ty,
-                    "#[param(context)] parameters must use the RpcCall type",
+                    "#[param(context)] parameters must use the Call type",
                 ));
             };
-            if !is_runtime_type_path(&kind.path, "RpcCall") {
+            if !is_runtime_type_path(&kind.path, "Call") {
                 return Err(syn::Error::new_spanned(
                     &input.ty,
-                    "#[param(context)] parameters must use the RpcCall type",
+                    "#[param(context)] parameters must use the Call type",
                 ));
             }
             parameters.push(Parameter {
@@ -456,37 +482,81 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                 wire_name: String::new(),
                 source: ParameterSource::Context,
                 repeated: false,
-                spring_text: false,
+                text_encoded: false,
                 sensitivity: None,
             });
             continue;
+        }
+
+        let source = explicit_source.map(|(source, _)| source);
+        if matches!(
+            source,
+            Some(ParameterSource::QueryMap | ParameterSource::HeaderMap)
+        ) {
+            if let Some(name) = &wire_name {
+                return Err(syn::Error::new(
+                    name.span(),
+                    "#[param(query_map)] and #[param(header_map)] parameters must not declare a wire name",
+                ));
+            }
+            if let Some(span) = repeated {
+                return Err(syn::Error::new(
+                    span,
+                    "#[param(query_map)] and #[param(header_map)] parameters cannot be repeated",
+                ));
+            }
         }
 
         let (wire_name, wire_name_span) = wire_name.map_or_else(
             || (rust_name.clone(), pattern.ident.span()),
             |name| (name.value(), name.span()),
         );
-        validate_identity(&wire_name, "RPC parameter name", wire_name_span)?;
+        validate_identity(
+            &wire_name,
+            "service invocation argument name",
+            wire_name_span,
+        )?;
         if let Some(first_span) = names.insert(wire_name.clone(), wire_name_span) {
             let mut error = syn::Error::new(
                 wire_name_span,
-                format!("duplicate RPC wire parameter name `{wire_name}`"),
+                format!("duplicate service invocation wire argument name `{wire_name}`"),
             );
             error.combine(syn::Error::new(first_span, "first wire name declared here"));
             return Err(error);
         }
 
-        let source = explicit_source
-            .map(|(source, _)| source)
-            .unwrap_or_else(|| {
-                if placeholders.contains(&wire_name) {
-                    ParameterSource::Path
-                } else if body_fields_by_default {
-                    ParameterSource::BodyField
-                } else {
-                    ParameterSource::Query
-                }
-            });
+        let source = source.unwrap_or_else(|| {
+            if placeholders.contains(&wire_name) {
+                ParameterSource::Path
+            } else if body_fields_by_default {
+                ParameterSource::BodyField
+            } else {
+                ParameterSource::Query
+            }
+        });
+        let map_slot = match source {
+            ParameterSource::QueryMap => Some((&mut query_map, "query_map")),
+            ParameterSource::HeaderMap => Some((&mut header_map, "header_map")),
+            _ => None,
+        };
+        if let Some((slot, source_name)) = map_slot {
+            let source_span = explicit_source
+                .map(|(_, span)| span)
+                .unwrap_or_else(|| pattern.ident.span());
+            if let Some(first_span) = slot.replace(source_span) {
+                let mut error = syn::Error::new(
+                    source_span,
+                    format!(
+                        "a service invocation method may declare at most one #[param({source_name})] parameter"
+                    ),
+                );
+                error.combine(syn::Error::new(
+                    first_span,
+                    "first map parameter declared here",
+                ));
+                return Err(error);
+            }
+        }
         if source != ParameterSource::Path && placeholders.contains(&wire_name) {
             let span = explicit_source
                 .map(|(_, span)| span)
@@ -525,7 +595,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
         if source == ParameterSource::Body && raw_body.replace(pattern.ident.span()).is_some() {
             return Err(syn::Error::new_spanned(
                 input,
-                "an RPC method may declare at most one #[param(body)] parameter",
+                "a service invocation method may declare at most one #[param(body)] parameter",
             ));
         }
         if source == ParameterSource::BodyField && first_body_field.is_none() {
@@ -576,7 +646,13 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
             wire_name,
             source,
             repeated,
-            spring_text: matches!(source, ParameterSource::Path | ParameterSource::Query),
+            text_encoded: matches!(
+                source,
+                ParameterSource::Path
+                    | ParameterSource::Query
+                    | ParameterSource::Header
+                    | ParameterSource::Cookie
+            ),
             sensitivity,
         });
     }
@@ -609,32 +685,32 @@ fn response_type(output: &ReturnType) -> syn::Result<Type> {
     let ReturnType::Type(_, output) = output else {
         return Err(syn::Error::new_spanned(
             output,
-            "RPC methods must return Result<RpcResponse<T>, RpcError>",
+            "service invocation methods must return Result<Response<T>, Error>",
         ));
     };
     let Type::Path(result) = output.as_ref() else {
         return Err(syn::Error::new_spanned(
             output,
-            "RPC methods must return Result<RpcResponse<T>, RpcError>",
+            "service invocation methods must return Result<Response<T>, Error>",
         ));
     };
     let segment = result.path.segments.last().ok_or_else(|| {
         syn::Error::new_spanned(
             output,
-            "RPC methods must return Result<RpcResponse<T>, RpcError>",
+            "service invocation methods must return Result<Response<T>, Error>",
         )
     })?;
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(syn::Error::new_spanned(
             output,
-            "RPC methods must return Result<RpcResponse<T>, RpcError>",
+            "service invocation methods must return Result<Response<T>, Error>",
         ));
     };
     if result.qself.is_some() || !is_standard_result_path(&result.path) || arguments.args.len() != 2
     {
         return Err(syn::Error::new_spanned(
             output,
-            "RPC methods must return Result<RpcResponse<T>, RpcError>",
+            "service invocation methods must return Result<Response<T>, Error>",
         ));
     }
     let mut args = arguments.args.iter();
@@ -644,7 +720,7 @@ fn response_type(output: &ReturnType) -> syn::Result<Type> {
     let GenericArgument::Type(success) = success else {
         return Err(syn::Error::new_spanned(
             success,
-            "RPC Result success argument must be a response type",
+            "service invocation Result success argument must be a response type",
         ));
     };
     let response = runtime_wrapper_inner(success)?;
@@ -652,13 +728,13 @@ fn response_type(output: &ReturnType) -> syn::Result<Type> {
     let Some(GenericArgument::Type(Type::Path(error))) = args.next() else {
         return Err(syn::Error::new_spanned(
             output,
-            "RPC methods must use RpcError as their error type",
+            "service invocation methods must use Error as their error type",
         ));
     };
-    if error.qself.is_some() || !is_runtime_type_path(&error.path, "RpcError") {
+    if error.qself.is_some() || !is_runtime_type_path(&error.path, "Error") {
         return Err(syn::Error::new_spanned(
             error,
-            "RPC methods must use RpcError as their error type",
+            "service invocation methods must use Error as their error type",
         ));
     }
     Ok(response)
@@ -702,19 +778,19 @@ fn runtime_wrapper_inner(kind: &Type) -> syn::Result<Type> {
     else {
         return Err(syn::Error::new_spanned(
             kind,
-            "RPC success type must be the fusen-rs RpcResponse<T>",
+            "service invocation success type must be the fusen-rs Response<T>",
         ));
     };
     let Some(segment) = path.segments.last() else {
         return Err(syn::Error::new_spanned(
             kind,
-            "RPC success type must be the fusen-rs RpcResponse<T>",
+            "service invocation success type must be the fusen-rs Response<T>",
         ));
     };
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(syn::Error::new_spanned(
             kind,
-            "RPC success type must be the fusen-rs RpcResponse<T>",
+            "service invocation success type must be the fusen-rs Response<T>",
         ));
     };
     let segments = path
@@ -722,9 +798,9 @@ fn runtime_wrapper_inner(kind: &Type) -> syn::Result<Type> {
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
-    let valid_path = matches!(segments.as_slice(), [response] if response == "RpcResponse")
+    let valid_path = matches!(segments.as_slice(), [response] if response == "Response")
         || matches!(segments.as_slice(), [runtime, response]
-            if runtime == &crate::runtime_crate_name() && response == "RpcResponse");
+            if runtime == &crate::runtime_crate_name() && response == "Response");
     if !valid_path
         || path
             .segments
@@ -735,14 +811,14 @@ fn runtime_wrapper_inner(kind: &Type) -> syn::Result<Type> {
     {
         return Err(syn::Error::new_spanned(
             kind,
-            "RPC success type must be the fusen-rs RpcResponse<T>",
+            "service invocation success type must be the fusen-rs Response<T>",
         ));
     }
     match arguments.args.first() {
         Some(GenericArgument::Type(kind)) => Ok(kind.clone()),
         _ => Err(syn::Error::new_spanned(
             kind,
-            "RPC success type must be the fusen-rs RpcResponse<T>",
+            "service invocation success type must be the fusen-rs Response<T>",
         )),
     }
 }
@@ -772,10 +848,29 @@ fn validate_http(args: MethodArgs, method_ident: &Ident) -> syn::Result<HttpMapp
     }
     let path_value = path.value();
     validate_route(&path_value, path.span())?;
+    let consumes = validate_media_type(args.consumes, "consumes")?;
+    let produces = validate_media_type(args.produces, "produces")?;
     Ok(HttpMapping {
         method: method_value,
         path: path_value,
+        consumes,
+        produces,
     })
+}
+
+fn validate_media_type(value: Option<syn::LitStr>, field: &str) -> syn::Result<String> {
+    let Some(value) = value else {
+        return Ok("application/json".to_owned());
+    };
+    let raw = value.value();
+    raw.parse::<mime::Mime>()
+        .map(|media_type| media_type.to_string())
+        .map_err(|_| {
+            syn::Error::new_spanned(
+                value,
+                format!("invalid {field} media type {raw:?}: expected a MIME media type"),
+            )
+        })
 }
 
 fn validate_route(path: &str, span: proc_macro2::Span) -> syn::Result<BTreeSet<String>> {
@@ -974,8 +1069,12 @@ const fn source_name(source: ParameterSource) -> &'static str {
         ParameterSource::Context => "context",
         ParameterSource::Path => "path",
         ParameterSource::Query => "query",
+        ParameterSource::Header => "header",
+        ParameterSource::Cookie => "cookie",
         ParameterSource::BodyField => "body field",
         ParameterSource::Body => "body",
+        ParameterSource::QueryMap => "query map",
+        ParameterSource::HeaderMap => "header map",
     }
 }
 
@@ -1042,23 +1141,29 @@ impl OwnedTypeValidator {
 
 impl<'ast> Visit<'ast> for OwnedTypeValidator {
     fn visit_type_reference(&mut self, node: &'ast syn::TypeReference) {
-        self.reject(node, "RPC request and response types must be owned");
+        self.reject(
+            node,
+            "service invocation request and response types must be owned",
+        );
     }
 
     fn visit_lifetime(&mut self, node: &'ast syn::Lifetime) {
-        self.reject(node, "RPC types must not contain lifetime arguments");
+        self.reject(
+            node,
+            "service invocation types must not contain lifetime arguments",
+        );
     }
 
     fn visit_type_impl_trait(&mut self, node: &'ast syn::TypeImplTrait) {
-        self.reject(node, "RPC types must not use impl Trait");
+        self.reject(node, "service invocation types must not use impl Trait");
     }
 
     fn visit_type_infer(&mut self, node: &'ast syn::TypeInfer) {
-        self.reject(node, "RPC types must not use inferred types");
+        self.reject(node, "service invocation types must not use inferred types");
     }
 
     fn visit_type_trait_object(&mut self, node: &'ast syn::TypeTraitObject) {
-        self.reject(node, "RPC types must not use trait objects");
+        self.reject(node, "service invocation types must not use trait objects");
     }
 
     fn visit_type_path(&mut self, node: &'ast TypePath) {
@@ -1069,7 +1174,7 @@ impl<'ast> Visit<'ast> for OwnedTypeValidator {
                 .first()
                 .is_some_and(|segment| segment.ident == "Self")
         {
-            self.reject(node, "RPC types must not depend on Self");
+            self.reject(node, "service invocation types must not depend on Self");
             return;
         }
         syn::visit::visit_type_path(self, node);

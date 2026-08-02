@@ -1,9 +1,9 @@
 # fusen-rs
 
-`fusen-rs` is a production-oriented JSON RPC runtime for Rust with HTTP/HTTPS
+`fusen-rs` is a production-oriented microservice and service invocation runtime for Rust with HTTP/HTTPS
 clients and a plaintext HTTP/1.1/h2c server. It provides generated clients and
 server adapters, bounded resource admission, service discovery, retries,
-circuit breakers, middleware, metrics, and explicit runtime lifecycles.
+circuit breakers, interceptors, metrics, and explicit runtime lifecycles.
 
 Version 0.9 is a clean-slate API and wire reset. It is the first compatibility
 baseline and is intentionally incompatible with releases before 0.9.
@@ -13,7 +13,7 @@ baseline and is intentionally incompatible with releases before 0.9.
 One trait declares the shared client and server contract:
 
 ```rust
-use fusen_rs::{RpcError, RpcResponse, SensitiveFields};
+use fusen_rs::{Error, Response, SensitiveFields};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, SensitiveFields)]
@@ -31,12 +31,12 @@ pub trait UserApi {
         &self,
         #[param(path)] id: String,
         #[param(query)] expand: Option<bool>,
-    ) -> Result<RpcResponse<User>, RpcError>;
+    ) -> Result<Response<User>, Error>;
 }
 ```
 
-Every RPC requires `#[method(method = "...", path = "...")]`, accepts zero or
-more owned named parameters, and returns `Result<RpcResponse<T>, RpcError>`.
+Every service method requires `#[method(method = "...", path = "...")]`, accepts zero or
+more owned named parameters, and returns `Result<Response<T>, Error>`.
 Path placeholders are inferred by name, or confirmed explicitly with
 `#[param(path)]`; an explicit path wire name must match its placeholder.
 Remaining read-method parameters become query values, while remaining
@@ -56,7 +56,7 @@ DTOs recurse automatically; classify a complete field with
 `#[sensitive(kind = "public")]` (or `credential`, `token`, `phone`, `email`,
 `identifier`, `secret`, or a validated custom kind), and use
 `#[sensitive(opaque)]` for a third-party field that must be omitted. Scalars are
-opaque by default. The interface macro discovers request and `RpcResponse<T>`
+opaque by default. The interface macro discovers request and `Response<T>`
 schemas automatically, so there is no `#[sensitive(response)]` marker.
 
 ```rust
@@ -82,13 +82,13 @@ struct LoginResponse {
 }
 ```
 
-Fusen does not log these values. Third-party middleware explicitly calls
-`RpcContext::sanitized_arguments(&sanitizer)` before delegating and
-`RpcResponse<RpcBody>::sanitized_body(method, &sanitizer)` on a successful
+Fusen does not log these values. Third-party interceptors explicitly call
+`Context::sanitized_arguments(&sanitizer)` before delegating and
+`Response<Body>::sanitized_body(method, &sanitizer)` on a successful
 response. `PolicySanitizer` reveals only `public`, redacts predefined sensitive
 kinds, and omits custom or unclassified values. Missing metadata, shape errors,
 limits, sanitizer panics, and short-circuit responses fail closed to `<omitted>`
-without affecting the RPC. Response projection also applies a configurable 64
+without affecting the service invocation. Response projection also applies a configurable 64
 KiB default input limit before constructing its JSON view.
 
 A `kind` classifies the complete JSON value and intentionally replaces its
@@ -97,7 +97,7 @@ the complete null or array once; structured DTO containers recurse per element.
 Known Serde shape-changing attributes must be classified or opaque, and
 `flatten` requires classifying the complete type.
 
-`SensitiveFields` does not change a DTO's `Debug`, either wire protocol, service
+`SensitiveFields` does not change a DTO's `Debug`, HTTP binding, service
 identity, registry, or discovery metadata. Only the returned `SanitizedValue`
 is intended for safe `Debug`, `Display`, or structured serialization.
 
@@ -107,12 +107,12 @@ Build a shared client runtime and then connect each generated client either to
 one direct endpoint or through the configured registry:
 
 ```rust
-use fusen_rs::{ClientRuntime, WireProtocol};
+use fusen_rs::{ClientRuntime, HttpVersionPolicy};
 
 let runtime = ClientRuntime::builder().build()?;
 let client = UserApiClient::builder(&runtime)
     .direct("http://127.0.0.1:8080")
-    .protocol(WireProtocol::FusenV1)
+    .http_version_policy(HttpVersionPolicy::Http1)
     .connect()
     .await?;
 
@@ -125,7 +125,7 @@ Rustls Ring, TLS 1.2/1.3, bundled Mozilla WebPKI roots, and strict certificate
 and hostname verification. System roots, custom CAs, mTLS, verification bypass,
 and plaintext fallback are not supported.
 
-A successful wire response whose `result` cannot decode into the generated
+A successful HTTP response whose raw JSON body cannot decode into the generated
 method's Rust type terminates as non-retryable `DataLoss`/`invalid_result` and
 is recorded as a protocol failure by both endpoint and service breakers.
 
@@ -150,19 +150,28 @@ running.shutdown().await?;
 The built-in listener remains plaintext HTTP/1.1 and h2c. An advertised HTTPS
 endpoint must be served by an external TLS terminator forwarding to that listener.
 
-## Wire protocols
+## HTTP binding and transport
 
-| Protocol | Transport and mapping |
-|---|---|
-| `WireProtocol::FusenV1` | h2c over HTTP or TLS/ALPN `h2` over HTTPS; versioned Fusen JSON |
-| `WireProtocol::SpringCloudV1` | HTTP/1.1 over HTTP or HTTPS; explicit method/path/query/body mapping |
+| Concern | Public API | Meaning |
+|---|---|---|
+| Representation | `HttpBindingId` / `HTTP_JSON_V1` | Declared method/path/query/body mapping with raw JSON success |
+| Transport preference | `HttpVersionPolicy::{Auto, Http1, Http2, H2c}` | HTTP version policy applied after selecting an endpoint |
+| Endpoint support | `EndpointCapabilities` | Advertised binding, HTTP versions, and invocation controls |
+
+The built-in representation is `http-json-v1`; selecting it does not select an
+HTTP version. Without `.direct_capabilities(...)`, a direct endpoint uses the
+client-selected binding with invocation controls disabled. `http://` plus `Auto`
+uses HTTP/1.1, while `https://` plus `Auto` negotiates HTTP/2 or HTTP/1.1 through
+ALPN. Set `.direct_capabilities(...)` to replace that inference with an explicit
+binding, version, and controls contract.
 
 The client accepts canonical `http://` and `https://` endpoints. The server does
 not terminate TLS; use a sidecar, service mesh, ingress, or reverse proxy for
 inbound HTTPS.
 
-The supported extension surface is `Middleware`, `Registry`, `ConfigSource`,
-`InstanceRouter`, `LoadBalancer`, `RetryPolicy`, and `MetricsRecorder`. Transports, codecs,
+The supported extension surface is `Interceptor`, `Registry`, `ConfigSource`,
+`InstanceRouter`, `LoadBalancer`, `RetryPolicy`, `MetricsRecorder`, and the client-side
+`RequestEncoder`/`ResponseDecoder`/`ErrorDecoder` traits. Transports, server codecs,
 acceptors, connection pools, and lifecycle state machines are private runtime
 implementation details.
 

@@ -235,6 +235,7 @@ mod tests {
             InstanceId::new("test-instance").unwrap(),
             addr.parse().unwrap(),
             Default::default(),
+            Default::default(),
         )
     }
 

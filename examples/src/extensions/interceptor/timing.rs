@@ -1,14 +1,14 @@
-//! Invocation timing middleware example.
+//! Invocation timing interceptor example.
 
-use fusen_rs::{Middleware, MiddlewareFuture, Next, RpcContext};
+use fusen_rs::{Context, Interceptor, InterceptorFuture, Next};
 use std::time::Instant;
 use tracing::debug;
 
 /// Records the elapsed duration of one logical invocation.
-pub struct TimingMiddleware;
+pub struct TimingInterceptor;
 
-impl Middleware for TimingMiddleware {
-    fn call<'a>(&'a self, context: RpcContext, next: Next<'a>) -> MiddlewareFuture<'a> {
+impl Interceptor for TimingInterceptor {
+    fn intercept<'a>(&'a self, context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
         Box::pin(async move {
             let started = Instant::now();
             let result = next.run(context).await;

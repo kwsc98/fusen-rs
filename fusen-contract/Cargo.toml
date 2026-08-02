@@ -4,7 +4,7 @@ version = "0.9.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Stable protocol and service registry contracts for fusen-rs"
+description = "Stable HTTP binding and service registry contracts for fusen-rs"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/fusen-contract"
@@ -17,6 +17,7 @@ derive = ["dep:fusen-procedural-macro"]
 [dependencies]
 fusen-procedural-macro = { workspace = true, optional = true }
 http.workspace = true
+mime.workspace = true
 thiserror.workspace = true
 url.workspace = true
 

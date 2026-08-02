@@ -1,7 +1,7 @@
 use crate::{NacosConfig, client_props, validate_application_name};
 use fusen_contract::{
-    InstanceId, ServiceEndpoint, ServiceInstance, ServiceRegistration, ServiceSelector,
-    ServiceWeight, WireProtocol,
+    EndpointCapabilities, HttpBindingId, HttpVersionSet, InstanceId, ServiceEndpoint,
+    ServiceInstance, ServiceRegistration, ServiceSelector, ServiceWeight,
 };
 use fusen_register::{
     RegistrationHandle, RegistrationRequest, Registry, RegistryFuture, SubscriptionHandle,
@@ -23,12 +23,28 @@ const META_SERVICE_ID: &str = "fusen.service_id";
 const META_VERSION: &str = "fusen.version";
 const META_GROUP: &str = "fusen.group";
 const META_INSTANCE_ID: &str = "fusen.instance_id";
-const META_PROTOCOL: &str = "fusen.protocol";
+const META_HTTP_BINDINGS: &str = "fusen.http.bindings";
+const META_HTTP_VERSIONS: &str = "fusen.http.versions";
+const META_INVOCATION_CONTROLS: &str = "fusen.invocation-controls";
+const INVOCATION_CONTROLS_V1: &str = "v1";
+const DEFAULT_GROUP: &str = "DEFAULT_GROUP";
+
+/// Provider-specific conventions used when interoperating with Nacos services.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NacosConvention {
+    /// Requires Fusen endpoint capability metadata.
+    #[default]
+    Canonical,
+    /// Accepts Spring Cloud instances that omit Fusen endpoint capability metadata.
+    SpringCloud,
+}
 
 /// Nacos-backed service registry and discovery provider.
 #[derive(Clone)]
 pub struct NacosRegistry {
     naming: Arc<dyn NamingOperations>,
+    convention: NacosConvention,
 }
 
 impl NacosRegistry {
@@ -68,7 +84,19 @@ impl NacosRegistry {
             naming: Arc::new(SdkNamingOperations {
                 service: Arc::new(service),
             }),
+            convention: NacosConvention::Canonical,
         })
+    }
+
+    /// Selects the conventions used to encode and decode Nacos instances.
+    pub fn with_convention(mut self, convention: NacosConvention) -> Self {
+        self.convention = convention;
+        self
+    }
+
+    /// Returns the configured Nacos interoperability convention.
+    pub const fn convention(&self) -> NacosConvention {
+        self.convention
     }
 }
 
@@ -76,6 +104,7 @@ impl std::fmt::Debug for NacosRegistry {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("NacosRegistry")
+            .field("convention", &self.convention)
             .finish_non_exhaustive()
     }
 }
@@ -85,24 +114,10 @@ impl Registry for NacosRegistry {
         &self,
         request: RegistrationRequest,
     ) -> Result<RegistrationHandle, RegistryError> {
-        let (registration, protocol) = request.into_parts();
-        if !registration.protocols().contains(protocol) {
-            return Err(RegistryError::message(
-                RegistryOperation::PrepareRegistration,
-                RegistryErrorKind::InvalidResource,
-                format!(
-                    "registration {} does not advertise {protocol}",
-                    registration.selector().identity()
-                ),
-            ));
-        }
-        let service_name = service_name(
-            registration.selector(),
-            protocol,
-            RegistryOperation::PrepareRegistration,
-        )?;
-        let group = registration.selector().group().map(str::to_owned);
-        let instance = build_instance(&registration, protocol)?;
+        let registration = request.into_registration();
+        let service_name = service_name(registration.selector());
+        let group = service_group(registration.selector());
+        let instance = build_instance(&registration)?;
         let activate_naming = self.naming.clone();
         let activate_service_name = service_name.clone();
         let activate_group = group.clone();
@@ -123,15 +138,16 @@ impl Registry for NacosRegistry {
         &self,
         request: SubscriptionRequest,
     ) -> Result<SubscriptionHandle, RegistryError> {
-        let (selector, protocol) = request.into_parts();
-        let service_name =
-            service_name(&selector, protocol, RegistryOperation::PrepareSubscription)?;
-        let group = selector.group().map(str::to_owned);
+        let selector = request.into_selector();
+        let service_name = service_name(&selector);
+        let group = service_group(&selector);
         let clusters = Vec::new();
         let (publisher, directory) = directory();
         let snapshot_gate = Arc::new(SnapshotGate::new(publisher));
         let listener: Arc<dyn NamingEventListener> = Arc::new(ServiceChangeListener {
             snapshot_gate: snapshot_gate.clone(),
+            selector: selector.clone(),
+            convention: self.convention,
         });
 
         let activate_naming = self.naming.clone();
@@ -140,6 +156,7 @@ impl Registry for NacosRegistry {
         let activate_clusters = clusters.clone();
         let activate_listener = listener.clone();
         let close_naming = self.naming.clone();
+        let convention = self.convention;
 
         Ok(provider::subscription(
             directory,
@@ -155,7 +172,7 @@ impl Registry for NacosRegistry {
                 let instances = activate_naming
                     .select(activate_service_name, activate_group, activate_clusters)
                     .await?;
-                snapshot_gate.initialize(to_service_instances(instances))
+                snapshot_gate.initialize(to_service_instances(instances, &selector, convention))
             },
             move || async move {
                 close_naming
@@ -351,6 +368,8 @@ impl SnapshotGate {
 
 struct ServiceChangeListener {
     snapshot_gate: Arc<SnapshotGate>,
+    selector: ServiceSelector,
+    convention: NacosConvention,
 }
 
 impl NamingEventListener for ServiceChangeListener {
@@ -358,7 +377,7 @@ impl NamingEventListener for ServiceChangeListener {
         let instances = event
             .instances
             .clone()
-            .map(to_service_instances)
+            .map(|instances| to_service_instances(instances, &self.selector, self.convention))
             .unwrap_or_default();
         if let Err(error) = self.snapshot_gate.update(instances) {
             tracing::warn!(
@@ -370,15 +389,37 @@ impl NamingEventListener for ServiceChangeListener {
     }
 }
 
-fn to_service_instances(instances: Vec<NacosServiceInstance>) -> Vec<ServiceInstance> {
+fn to_service_instances(
+    instances: Vec<NacosServiceInstance>,
+    selector: &ServiceSelector,
+    convention: NacosConvention,
+) -> Vec<ServiceInstance> {
     instances
         .into_iter()
         .filter(|instance| instance.healthy && instance.enabled && instance.weight > 0.0)
-        .filter_map(to_service_instance)
+        .filter(|instance| matches_selector(instance, selector, convention))
+        .filter_map(|instance| to_service_instance(instance, convention))
         .collect()
 }
 
-fn to_service_instance(instance: NacosServiceInstance) -> Option<ServiceInstance> {
+fn matches_selector(
+    instance: &NacosServiceInstance,
+    selector: &ServiceSelector,
+    convention: NacosConvention,
+) -> bool {
+    if instance.metadata.get(META_VERSION).map(String::as_str) != selector.version() {
+        return false;
+    }
+    match instance.metadata.get(META_SERVICE_ID) {
+        Some(service_id) => service_id == selector.service_id(),
+        None => convention == NacosConvention::SpringCloud,
+    }
+}
+
+fn to_service_instance(
+    instance: NacosServiceInstance,
+    convention: NacosConvention,
+) -> Option<ServiceInstance> {
     let port = u16::try_from(instance.port)
         .ok()
         .filter(|port| *port != 0)?;
@@ -417,40 +458,83 @@ fn to_service_instance(instance: NacosServiceInstance) -> Option<ServiceInstance
         .and_then(|value| InstanceId::new(value).ok())
         .or_else(|| InstanceId::new(format!("nacos:{}:{port}", instance.ip)).ok())?;
     let endpoint = ServiceEndpoint::try_from(url).ok()?;
+    let capabilities = decode_capabilities(&instance.metadata, convention)?;
     let weight = ServiceWeight::new(instance.weight).ok()?;
-    ServiceInstance::new(instance_id, endpoint, weight)
-        .with_metadata(instance.metadata.into_iter().collect())
+    let user_metadata = instance
+        .metadata
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with("fusen."))
+        .collect();
+    ServiceInstance::new(instance_id, endpoint, capabilities, weight)
+        .with_metadata(user_metadata)
         .ok()
 }
 
-fn service_name(
-    selector: &ServiceSelector,
-    protocol: WireProtocol,
-    operation: RegistryOperation,
-) -> Result<String, RegistryError> {
-    match protocol {
-        WireProtocol::SpringCloudV1 => Ok(selector
-            .metadata()
-            .get("spring.application.name")
-            .cloned()
-            .unwrap_or_else(|| selector.service_id().to_owned())),
-        WireProtocol::FusenV1 => Ok(format!(
-            "fusen:v1:{}:{}:{}",
-            selector.service_id(),
-            selector.version().unwrap_or(""),
-            selector.group().unwrap_or("")
-        )),
-        _ => Err(RegistryError::message(
-            operation,
-            RegistryErrorKind::InvalidResource,
-            format!("unsupported Nacos wire protocol {protocol}"),
-        )),
+fn decode_capabilities(
+    metadata: &std::collections::HashMap<String, String>,
+    convention: NacosConvention,
+) -> Option<EndpointCapabilities> {
+    let bindings = metadata.get(META_HTTP_BINDINGS);
+    let versions = metadata.get(META_HTTP_VERSIONS);
+    let controls = metadata.get(META_INVOCATION_CONTROLS);
+    if bindings.is_none() && versions.is_none() && controls.is_none() {
+        return (convention == NacosConvention::SpringCloud).then(EndpointCapabilities::default);
     }
+    let bindings = decode_bindings(bindings?)?;
+    let versions = decode_http_versions(versions?)?;
+    let invocation_controls = match controls.map(String::as_str) {
+        None => false,
+        Some(INVOCATION_CONTROLS_V1) => true,
+        Some(_) => return None,
+    };
+    EndpointCapabilities::new(versions, bindings, invocation_controls).ok()
+}
+
+fn decode_bindings(value: &str) -> Option<Vec<HttpBindingId>> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut bindings = Vec::new();
+    for value in value.split(',') {
+        let binding = HttpBindingId::new(value).ok()?;
+        if !seen.insert(binding.clone()) {
+            return None;
+        }
+        bindings.push(binding);
+    }
+    (!bindings.is_empty()).then_some(bindings)
+}
+
+fn decode_http_versions(value: &str) -> Option<HttpVersionSet> {
+    let mut http1 = false;
+    let mut http2 = false;
+    for version in value.split(',') {
+        let seen = match version {
+            "1.1" => &mut http1,
+            "2" => &mut http2,
+            _ => return None,
+        };
+        if *seen {
+            return None;
+        }
+        *seen = true;
+    }
+    match (http1, http2) {
+        (true, true) => Some(HttpVersionSet::ALL),
+        (true, false) => Some(HttpVersionSet::HTTP_1_1),
+        (false, true) => Some(HttpVersionSet::HTTP_2),
+        (false, false) => None,
+    }
+}
+
+fn service_name(selector: &ServiceSelector) -> String {
+    selector.service_id().to_owned()
+}
+
+fn service_group(selector: &ServiceSelector) -> Option<String> {
+    Some(selector.group().unwrap_or(DEFAULT_GROUP).to_owned())
 }
 
 fn build_instance(
     registration: &ServiceRegistration,
-    protocol: WireProtocol,
 ) -> Result<NacosServiceInstance, RegistryError> {
     let url = registration.endpoint().as_url();
     let ip = url.host_str().ok_or_else(|| {
@@ -477,6 +561,12 @@ fn build_instance(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<std::collections::HashMap<_, _>>();
+    metadata.extend(
+        registration
+            .metadata()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     metadata.insert(META_SCHEME.into(), url.scheme().into());
     metadata.insert(
         META_SERVICE_ID.into(),
@@ -486,7 +576,26 @@ fn build_instance(
         META_INSTANCE_ID.into(),
         registration.instance_id().to_string(),
     );
-    metadata.insert(META_PROTOCOL.into(), protocol.as_str().into());
+    metadata.insert(
+        META_HTTP_BINDINGS.into(),
+        registration
+            .capabilities()
+            .bindings()
+            .iter()
+            .map(HttpBindingId::as_str)
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    metadata.insert(
+        META_HTTP_VERSIONS.into(),
+        encode_http_versions(registration.capabilities().http_versions()).into(),
+    );
+    if registration.capabilities().invocation_controls() {
+        metadata.insert(
+            META_INVOCATION_CONTROLS.into(),
+            INVOCATION_CONTROLS_V1.into(),
+        );
+    }
     if url.path() != "/" && !url.path().is_empty() {
         metadata.insert(META_BASE_PATH.into(), url.path().into());
     }
@@ -506,10 +615,20 @@ fn build_instance(
     })
 }
 
+fn encode_http_versions(versions: HttpVersionSet) -> &'static str {
+    if versions == HttpVersionSet::HTTP_1_1 {
+        "1.1"
+    } else if versions == HttpVersionSet::HTTP_2 {
+        "2"
+    } else {
+        "1.1,2"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusen_contract::{MethodDescriptor, MethodId, ProtocolSet, ServiceDescriptor};
+    use fusen_contract::{HttpOperation, MethodDescriptor, MethodId, ServiceDescriptor};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::{Notify, oneshot};
 
@@ -521,7 +640,21 @@ mod tests {
         let descriptor = Box::leak(Box::new(
             ServiceDescriptor::new(
                 selector(),
-                vec![MethodDescriptor::new(MethodId::new(0), "call", None).unwrap()],
+                vec![
+                    MethodDescriptor::new(
+                        MethodId::new(0),
+                        "call",
+                        HttpOperation::new(
+                            "POST".parse().unwrap(),
+                            "/call",
+                            vec![],
+                            "application/json",
+                            "application/json",
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                ],
             )
             .unwrap(),
         ));
@@ -530,9 +663,21 @@ mod tests {
                 InstanceId::new("demo-1").unwrap(),
                 descriptor,
                 endpoint.parse().unwrap(),
-                ProtocolSet::FUSEN_V1,
+                EndpointCapabilities::new(
+                    HttpVersionSet::ALL,
+                    [
+                        HttpBindingId::new("vendor-v1").unwrap(),
+                        HttpBindingId::default(),
+                    ],
+                    true,
+                )
+                .unwrap(),
                 ServiceWeight::new(3.0).unwrap(),
             )
+            .with_metadata(std::collections::BTreeMap::from([(
+                "zone".into(),
+                "east".into(),
+            )]))
             .unwrap(),
         )
     }
@@ -545,50 +690,41 @@ mod tests {
         ServiceInstance::new(
             InstanceId::new("test-instance").unwrap(),
             address.parse().unwrap(),
+            EndpointCapabilities::default(),
             ServiceWeight::default(),
         )
     }
 
     #[test]
-    fn protocol_names_are_explicitly_versioned() {
-        assert_eq!(
-            service_name(
-                &selector(),
-                WireProtocol::FusenV1,
-                RegistryOperation::PrepareRegistration,
-            )
-            .unwrap(),
-            "fusen:v1:demo:1:prod"
-        );
-        let spring = selector()
-            .with_metadata(std::collections::BTreeMap::from([(
-                "spring.application.name".into(),
-                "orders".into(),
-            )]))
-            .unwrap();
-        assert_eq!(
-            service_name(
-                &spring,
-                WireProtocol::SpringCloudV1,
-                RegistryOperation::PrepareSubscription,
-            )
-            .unwrap(),
-            "orders"
-        );
+    fn service_name_and_group_are_binding_independent() {
+        assert_eq!(service_name(&selector()), "demo");
+        assert_eq!(service_group(&selector()).as_deref(), Some("prod"));
+        let ungrouped = ServiceSelector::new("demo", None, None).unwrap();
+        assert_eq!(service_group(&ungrouped).as_deref(), Some(DEFAULT_GROUP));
     }
 
     #[test]
     fn registration_metadata_preserves_identity_address_and_weight() {
         let registration = registration();
-        let instance = build_instance(&registration, WireProtocol::FusenV1).unwrap();
+        let instance = build_instance(&registration).unwrap();
         assert_eq!(instance.instance_id.as_deref(), Some("demo-1"));
         assert_eq!(instance.weight, 3.0);
         assert_eq!(instance.metadata[META_SCHEME], "http");
         assert_eq!(instance.metadata[META_BASE_PATH], "/rpc");
-        assert_eq!(instance.metadata[META_PROTOCOL], "fusen-v1");
+        assert_eq!(
+            instance.metadata[META_HTTP_BINDINGS],
+            "http-json-v1,vendor-v1"
+        );
+        assert_eq!(instance.metadata[META_HTTP_VERSIONS], "1.1,2");
+        assert_eq!(instance.metadata["zone"], "east");
+        assert_eq!(
+            instance.metadata[META_INVOCATION_CONTROLS],
+            INVOCATION_CONTROLS_V1
+        );
+        assert!(!instance.metadata.contains_key("fusen.protocol"));
 
         let tls = registration_at("https://service.example:443/rpc");
-        let tls = build_instance(&tls, WireProtocol::FusenV1).unwrap();
+        let tls = build_instance(&tls).unwrap();
         assert_eq!(tls.ip, "service.example");
         assert_eq!(tls.port, 443);
         assert_eq!(tls.metadata[META_SCHEME], "https");
@@ -604,6 +740,11 @@ mod tests {
             metadata: std::collections::HashMap::from([
                 (META_SCHEME.into(), "http".into()),
                 (META_BASE_PATH.into(), "/api%20v1/a%2Fb".into()),
+                (META_SERVICE_ID.into(), "demo".into()),
+                (META_VERSION.into(), "1".into()),
+                (META_HTTP_BINDINGS.into(), "http-json-v1".into()),
+                (META_HTTP_VERSIONS.into(), "1.1,2".into()),
+                ("zone".into(), "east".into()),
             ]),
             ..NacosServiceInstance::default()
         };
@@ -611,24 +752,145 @@ mod tests {
             instance_id: Some("provider-tls".into()),
             ip: "127.0.0.1".into(),
             port: 8443,
-            metadata: std::collections::HashMap::from([(META_SCHEME.into(), "https".into())]),
+            metadata: std::collections::HashMap::from([
+                (META_SCHEME.into(), "https".into()),
+                (META_SERVICE_ID.into(), "demo".into()),
+                (META_VERSION.into(), "1".into()),
+                (META_HTTP_BINDINGS.into(), "http-json-v1".into()),
+                (META_HTTP_VERSIONS.into(), "1.1".into()),
+            ]),
             ..NacosServiceInstance::default()
         };
         let unsupported = NacosServiceInstance {
             ip: "127.0.0.1".into(),
             port: 21,
-            metadata: std::collections::HashMap::from([(META_SCHEME.into(), "ftp".into())]),
+            metadata: std::collections::HashMap::from([
+                (META_SCHEME.into(), "ftp".into()),
+                (META_SERVICE_ID.into(), "demo".into()),
+                (META_VERSION.into(), "1".into()),
+                (META_HTTP_BINDINGS.into(), "http-json-v1".into()),
+                (META_HTTP_VERSIONS.into(), "1.1".into()),
+            ]),
             ..NacosServiceInstance::default()
         };
-        let instances = to_service_instances(vec![tls, unsupported, plaintext]);
+        let instances = to_service_instances(
+            vec![tls, unsupported, plaintext],
+            &selector(),
+            NacosConvention::Canonical,
+        );
         assert_eq!(instances.len(), 2);
         assert_eq!(instances[0].instance_id().as_str(), "provider-tls");
         assert_eq!(instances[0].endpoint().as_str(), "https://127.0.0.1:8443/");
+        assert_eq!(
+            instances[0].capabilities().http_versions(),
+            HttpVersionSet::HTTP_1_1
+        );
         assert_eq!(instances[1].instance_id().as_str(), "provider-1");
         assert_eq!(
             instances[1].endpoint().as_str(),
             "http://[::1]:8080/api%20v1/a%2Fb"
         );
+        assert!(instances.iter().all(|instance| {
+            instance
+                .metadata()
+                .keys()
+                .all(|key| !key.starts_with("fusen."))
+        }));
+        assert_eq!(instances[1].metadata()["zone"], "east");
+    }
+
+    #[test]
+    fn discovery_filters_versions_and_spring_accepts_external_instances() {
+        let external = NacosServiceInstance {
+            instance_id: Some("external".into()),
+            ip: "127.0.0.1".into(),
+            port: 8080,
+            ..NacosServiceInstance::default()
+        };
+        let unversioned = ServiceSelector::new("demo", None, None).unwrap();
+        assert!(
+            to_service_instances(
+                vec![external.clone()],
+                &unversioned,
+                NacosConvention::Canonical,
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            to_service_instances(
+                vec![external.clone()],
+                &unversioned,
+                NacosConvention::SpringCloud,
+            )
+            .len(),
+            1
+        );
+        let spring = to_service_instances(
+            vec![external.clone()],
+            &unversioned,
+            NacosConvention::SpringCloud,
+        );
+        assert_eq!(spring[0].capabilities(), &EndpointCapabilities::default());
+        assert!(
+            to_service_instances(vec![external], &selector(), NacosConvention::SpringCloud,)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn capability_metadata_rejects_partial_duplicate_and_unknown_values() {
+        let valid = std::collections::HashMap::from([
+            (META_HTTP_BINDINGS.into(), "http-json-v1,vendor-v1".into()),
+            (META_HTTP_VERSIONS.into(), "2,1.1".into()),
+            (
+                META_INVOCATION_CONTROLS.into(),
+                INVOCATION_CONTROLS_V1.into(),
+            ),
+        ]);
+        let capabilities = decode_capabilities(&valid, NacosConvention::Canonical).unwrap();
+        assert_eq!(capabilities.http_versions(), HttpVersionSet::ALL);
+        assert!(capabilities.invocation_controls());
+
+        for metadata in [
+            std::collections::HashMap::from([(META_HTTP_BINDINGS.into(), "http-json-v1".into())]),
+            std::collections::HashMap::from([
+                (
+                    META_HTTP_BINDINGS.into(),
+                    "http-json-v1,http-json-v1".into(),
+                ),
+                (META_HTTP_VERSIONS.into(), "1.1".into()),
+            ]),
+            std::collections::HashMap::from([
+                (META_HTTP_BINDINGS.into(), "HTTP-JSON-V1".into()),
+                (META_HTTP_VERSIONS.into(), "1.1".into()),
+            ]),
+            std::collections::HashMap::from([
+                (META_HTTP_BINDINGS.into(), String::new()),
+                (META_HTTP_VERSIONS.into(), "1.1".into()),
+            ]),
+            std::collections::HashMap::from([
+                (META_HTTP_BINDINGS.into(), "http-json-v1".into()),
+                (META_HTTP_VERSIONS.into(), "1.1,1.1".into()),
+            ]),
+            std::collections::HashMap::from([
+                (META_HTTP_BINDINGS.into(), "http-json-v1".into()),
+                (META_HTTP_VERSIONS.into(), String::new()),
+            ]),
+            std::collections::HashMap::from([
+                (META_HTTP_BINDINGS.into(), "http-json-v1".into()),
+                (META_HTTP_VERSIONS.into(), "3".into()),
+            ]),
+            std::collections::HashMap::from([
+                (META_HTTP_BINDINGS.into(), "http-json-v1".into()),
+                (META_HTTP_VERSIONS.into(), "1.1".into()),
+                (META_INVOCATION_CONTROLS.into(), "true".into()),
+            ]),
+        ] {
+            assert!(
+                decode_capabilities(&metadata, NacosConvention::SpringCloud).is_none(),
+                "{metadata:?}"
+            );
+        }
     }
 
     #[test]
@@ -730,12 +992,10 @@ mod tests {
         };
         let registry = NacosRegistry {
             naming: Arc::new(provider.clone()),
+            convention: NacosConvention::Canonical,
         };
         let handle = registry
-            .prepare_registration(RegistrationRequest::new(
-                registration(),
-                WireProtocol::FusenV1,
-            ))
+            .prepare_registration(RegistrationRequest::new(registration()))
             .unwrap();
         let waiter = tokio::spawn({
             let handle = handle.clone();

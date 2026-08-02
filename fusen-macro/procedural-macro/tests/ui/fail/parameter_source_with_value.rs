@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "parameter-source-with-value")]
 trait ParameterSourceWithValue {
@@ -9,7 +9,7 @@ trait ParameterSourceWithValue {
     async fn items(
         &self,
         #[param(query = true)] filter: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

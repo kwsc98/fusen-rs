@@ -1,7 +1,7 @@
 pub use crate::{
-    context::{CallInfo, RpcArguments, RpcCall, RpcResponse},
-    rpc::{
-        ErrorCode, InvalidErrorCode, RetryHint, RpcCategory, RpcError, RpcErrorDetails, RpcOrigin,
+    context::{Arguments, Call, CallInfo, Response},
+    error::{
+        Error, ErrorCategory, ErrorCode, ErrorDetails, ErrorOrigin, InvalidErrorCode, RetryHint,
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -12,27 +12,33 @@ use serde_json::Value;
 pub fn http_method(
     method: http::Method,
     path: &str,
-    fields: &[RpcField],
-) -> Result<fusen_contract::SpringCloudMethod, String> {
+    consumes: &str,
+    produces: &str,
+    fields: &[ArgumentField],
+) -> Result<fusen_contract::HttpOperation, String> {
     let parameters = fields
         .iter()
         .map(|field| {
             let source = match field.source {
-                RpcFieldSource::Path => fusen_contract::SpringCloudParameterSource::Path,
-                RpcFieldSource::Query => fusen_contract::SpringCloudParameterSource::Query,
-                RpcFieldSource::BodyField => fusen_contract::SpringCloudParameterSource::BodyField,
-                RpcFieldSource::Body => fusen_contract::SpringCloudParameterSource::Body,
+                ArgumentSource::Path => fusen_contract::HttpParameterSource::Path,
+                ArgumentSource::Query => fusen_contract::HttpParameterSource::Query,
+                ArgumentSource::Header => fusen_contract::HttpParameterSource::Header,
+                ArgumentSource::Cookie => fusen_contract::HttpParameterSource::Cookie,
+                ArgumentSource::BodyField => fusen_contract::HttpParameterSource::BodyField,
+                ArgumentSource::Body => fusen_contract::HttpParameterSource::Body,
+                ArgumentSource::QueryMap => fusen_contract::HttpParameterSource::QueryMap,
+                ArgumentSource::HeaderMap => fusen_contract::HttpParameterSource::HeaderMap,
             };
             let cardinality = if field.repeated {
-                fusen_contract::SpringCloudParameterCardinality::Repeated
+                fusen_contract::HttpParameterCardinality::Repeated
             } else {
-                fusen_contract::SpringCloudParameterCardinality::Scalar
+                fusen_contract::HttpParameterCardinality::Scalar
             };
-            fusen_contract::SpringCloudParameter::new(field.name, source, cardinality)
+            fusen_contract::HttpParameter::new(field.name, source, cardinality)
                 .map_err(|error| error.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    fusen_contract::SpringCloudMethod::new(method, path, parameters)
+    fusen_contract::HttpOperation::new(method, path, parameters, consumes, produces)
         .map_err(|error| error.to_string())
 }
 
@@ -40,30 +46,38 @@ pub fn http_method(
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum RpcFieldSource {
+pub enum ArgumentSource {
     /// A named path placeholder.
     Path,
     /// A URL query parameter.
     Query,
+    /// A named HTTP header.
+    Header,
+    /// A named request cookie.
+    Cookie,
     /// A named field in the synthesized JSON request body object.
     BodyField,
     /// The single JSON request body.
     Body,
+    /// An object expanded into query parameters.
+    QueryMap,
+    /// An object expanded into request headers.
+    HeaderMap,
 }
 
 /// Static wire metadata for one named interface parameter.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RpcField {
+pub struct ArgumentField {
     name: &'static str,
-    source: RpcFieldSource,
+    source: ArgumentSource,
     repeated: bool,
 }
 
-impl RpcField {
+impl ArgumentField {
     /// Creates field metadata generated from an interface parameter.
     #[doc(hidden)]
-    pub const fn new(name: &'static str, source: RpcFieldSource, repeated: bool) -> Self {
+    pub const fn new(name: &'static str, source: ArgumentSource, repeated: bool) -> Self {
         Self {
             name,
             source,
@@ -76,8 +90,8 @@ impl RpcField {
         self.name
     }
 
-    /// Returns the field's Spring Cloud wire role.
-    pub const fn source(&self) -> RpcFieldSource {
+    /// Returns the field's HTTP wire role.
+    pub const fn source(&self) -> ArgumentSource {
         self.source
     }
 
@@ -88,31 +102,24 @@ impl RpcField {
 }
 
 #[doc(hidden)]
-pub fn encode_argument<T: Serialize>(value: &T) -> Result<Value, RpcError> {
+pub fn encode_argument<T: Serialize>(value: &T) -> Result<Value, Error> {
     serde_json::to_value(value)
-        .map_err(|error| RpcError::internal("failed to serialize RPC argument", error))
+        .map_err(|error| Error::internal("failed to serialize invocation argument", error))
 }
 
 #[doc(hidden)]
-pub fn decode_argument<T: DeserializeOwned>(
-    value: Value,
-    protocol: crate::WireProtocol,
-    spring_text: bool,
-) -> Result<T, RpcError> {
+pub fn decode_argument<T: DeserializeOwned>(value: Value, text_encoded: bool) -> Result<T, Error> {
     if let Ok(decoded) = serde_json::from_value(value.clone()) {
         return Ok(decoded);
     }
-    if protocol == crate::WireProtocol::SpringCloudV1
-        && spring_text
-        && let Ok(decoded) = serde_json::from_value(parse_spring_json_scalars(value))
-    {
+    if text_encoded && let Ok(decoded) = serde_json::from_value(parse_spring_json_scalars(value)) {
         return Ok(decoded);
     }
-    tracing::debug!("RPC message decoding failed");
-    Err(RpcError::framework(
-        RpcCategory::InvalidArgument,
+    tracing::debug!("service invocation message decoding failed");
+    Err(Error::framework(
+        ErrorCategory::InvalidArgument,
         "invalid_argument",
-        "request does not match the RPC message schema",
+        "request does not match the invocation message schema",
     ))
 }
 
@@ -129,11 +136,11 @@ fn parse_spring_json_scalars(value: Value) -> Value {
     }
 }
 
-pub(crate) fn unknown_argument() -> RpcError {
-    RpcError::framework(
-        RpcCategory::InvalidArgument,
+pub(crate) fn unknown_argument() -> Error {
+    Error::framework(
+        ErrorCategory::InvalidArgument,
         "unknown_argument",
-        "request contains an unknown RPC argument",
+        "request contains an unknown invocation argument",
     )
 }
 
@@ -150,33 +157,23 @@ mod tests {
     struct Count(u64);
 
     #[test]
-    fn spring_text_decoding_prefers_the_original_string_shape() {
-        let text =
-            decode_argument::<String>(json!("true"), crate::WireProtocol::SpringCloudV1, true)
-                .unwrap();
+    fn http_text_decoding_prefers_the_original_string_shape() {
+        let text = decode_argument::<String>(json!("true"), true).unwrap();
         assert_eq!(text, "true");
 
-        let flag = decode_argument::<Flag>(json!("true"), crate::WireProtocol::SpringCloudV1, true)
-            .unwrap();
+        let flag = decode_argument::<Flag>(json!("true"), true).unwrap();
         assert!(flag);
 
-        let count = decode_argument::<Count>(json!("42"), crate::WireProtocol::SpringCloudV1, true)
-            .unwrap();
+        let count = decode_argument::<Count>(json!("42"), true).unwrap();
         assert_eq!(count, Count(42));
 
-        let values = decode_argument::<Vec<u64>>(
-            json!(["1", "2"]),
-            crate::WireProtocol::SpringCloudV1,
-            true,
-        )
-        .unwrap();
+        let values = decode_argument::<Vec<u64>>(json!(["1", "2"]), true).unwrap();
         assert_eq!(values, [1, 2]);
     }
 
     #[test]
-    fn spring_body_decoding_does_not_reinterpret_json_strings() {
-        let error = decode_argument::<u64>(json!("42"), crate::WireProtocol::SpringCloudV1, false)
-            .unwrap_err();
+    fn http_body_decoding_does_not_reinterpret_json_strings() {
+        let error = decode_argument::<u64>(json!("42"), false).unwrap_err();
         assert_eq!(error.code().as_str(), "invalid_argument");
     }
 }

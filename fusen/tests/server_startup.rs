@@ -4,10 +4,7 @@ use fusen_register::{
     RegistrationHandle, RegistrationRequest, Registry, SubscriptionHandle, SubscriptionRequest,
     error::RegistryError, provider,
 };
-use fusen_rs::{
-    RpcError, RpcResponse, Server, ServerConfig, ServerRegistryConfig, contract::ProtocolSet,
-    interface,
-};
+use fusen_rs::{Error, Response, Server, ServerConfig, ServerRegistryConfig, interface};
 use serde_json::Value;
 use std::{
     net::SocketAddr,
@@ -26,14 +23,14 @@ use tokio::{
 #[interface(name = "startup-lifecycle-e2e")]
 trait StartupLifecycleService {
     #[fusen_rs::method(method = "GET", path = "/startup")]
-    async fn check(&self) -> Result<RpcResponse<String>, RpcError>;
+    async fn check(&self) -> Result<Response<String>, Error>;
 }
 
 struct StartupLifecycleServiceImpl;
 
 impl StartupLifecycleService for StartupLifecycleServiceImpl {
-    async fn check(&self) -> Result<RpcResponse<String>, RpcError> {
-        Ok(RpcResponse::new("ready".to_owned()))
+    async fn check(&self) -> Result<Response<String>, Error> {
+        Ok(Response::new("ready".to_owned()))
     }
 }
 
@@ -252,7 +249,6 @@ async fn aborting_start_compensates_a_late_registration_success_exactly_once() {
 
 fn build_server(registry: GatedRegistry) -> Server {
     let config = ServerConfig::builder()
-        .protocols(ProtocolSet::SPRING_CLOUD_V1)
         .registry(
             ServerRegistryConfig::builder()
                 .startup_timeout(Duration::from_secs(5))

@@ -7,7 +7,7 @@ use syn::{Attribute, LitStr, Meta, Token, WherePredicate};
 
 const MAX_KIND_BYTES: usize = 64;
 
-/// A sensitivity override attached to a type, DTO field, or RPC parameter.
+/// A sensitivity override attached to a type, DTO field, or service invocation parameter.
 #[derive(Clone)]
 pub(crate) enum SensitiveOverride {
     /// Classifies the complete represented value with the named kind.

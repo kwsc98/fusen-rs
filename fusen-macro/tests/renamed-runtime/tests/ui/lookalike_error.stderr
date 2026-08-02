@@ -1,0 +1,5 @@
+error: service invocation methods must use Error as their error type
+  --> tests/ui/lookalike_error.rs:10:58
+   |
+10 |     async fn get(&self) -> Result<runtime::Response<()>, lookalike::Error>;
+   |                                                          ^^^^^^^^^^^^^^^^

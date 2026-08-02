@@ -1,6 +1,6 @@
 use super::config::ClientHttpConfig;
-use crate::{ClientError, ClientErrorKind, RetryHint, RpcCategory, RpcError, wire::GuardedBody};
-use http::{Request, Response, Uri, Version, uri::Scheme};
+use crate::{ClientError, ClientErrorKind, Error, ErrorCategory, RetryHint, wire::GuardedBody};
+use http::{Request, Response as HttpResponse, Uri, Version, uri::Scheme};
 use hyper::body::Incoming;
 use hyper_rustls::{ConfigBuilderExt, HttpsConnector, HttpsConnectorBuilder, MaybeHttpsStream};
 use hyper_util::{
@@ -12,21 +12,28 @@ use std::{
     future::Future,
     io,
     pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context as TaskContext, Poll},
     time::Duration,
 };
 use tower_service::Service;
 
 type Connector = HttpsConnector<HttpConnector>;
 type Http1Socket = Client<Connector, GuardedBody>;
+type AutoSocket = Client<Connector, GuardedBody>;
 type Http2Socket = Client<RequireH2Alpn<Connector>, GuardedBody>;
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct HttpTransport {
     http1: Http1Socket,
+    auto: Box<[AutoSocket]>,
     http2: Box<[Http2Socket]>,
+    next_auto_shard: Arc<AtomicUsize>,
+    next_http2_shard: Arc<AtomicUsize>,
 }
 
 impl HttpTransport {
@@ -59,6 +66,12 @@ impl HttpTransport {
             .https_or_http()
             .enable_http1()
             .wrap_connector(http_connector(connect_timeout));
+        let auto_connector = HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config.clone())
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .wrap_connector(http_connector(connect_timeout));
         let http2_connector = RequireH2Alpn {
             inner: HttpsConnectorBuilder::new()
                 .with_tls_config(tls_config)
@@ -75,6 +88,21 @@ impl HttpTransport {
             .http1_writev(true);
         let http1 = http1.build(http1_connector);
 
+        let auto = (0..config.http2_connections_per_host())
+            .map(|_| {
+                let mut builder = Client::builder(TokioExecutor::new());
+                builder
+                    .pool_timer(TokioTimer::new())
+                    .pool_idle_timeout(config.pool_idle_timeout())
+                    .pool_max_idle_per_host(config.http1_max_idle_per_host())
+                    .http1_writev(true)
+                    .http2_keep_alive_interval(config.http2_keep_alive_interval())
+                    .http2_keep_alive_timeout(config.http2_keep_alive_timeout())
+                    .http2_keep_alive_while_idle(false);
+                builder.build(auto_connector.clone())
+            })
+            .collect();
+
         let http2 = (0..config.http2_connections_per_host())
             .map(|_| {
                 let mut builder = Client::builder(TokioExecutor::new());
@@ -89,27 +117,26 @@ impl HttpTransport {
                 builder.build(http2_connector.clone())
             })
             .collect();
-        Self { http1, http2 }
+        Self {
+            http1,
+            auto,
+            http2,
+            next_auto_shard: Arc::new(AtomicUsize::new(0)),
+            next_http2_shard: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     pub(crate) async fn send(
         &self,
         request: Request<GuardedBody>,
-    ) -> Result<Response<Incoming>, TransportFailure> {
-        let response = if request.version() == Version::HTTP_2 {
-            let authority = request
-                .uri()
-                .authority()
-                .map(|value| value.as_str().as_bytes())
-                .unwrap_or_default();
-            let request_id = request
-                .headers()
-                .get("x-request-id")
-                .map(http::HeaderValue::as_bytes)
-                .unwrap_or_default();
-            self.http2[stable_shard(authority, request_id, self.http2.len())]
-                .request(request)
-                .await
+        auto_negotiate: bool,
+    ) -> Result<HttpResponse<Incoming>, TransportFailure> {
+        let response = if auto_negotiate {
+            let shard = request_shard(&request, self.auto.len(), &self.next_auto_shard);
+            self.auto[shard].request(request).await
+        } else if request.version() == Version::HTTP_2 {
+            let shard = request_shard(&request, self.http2.len(), &self.next_http2_shard);
+            self.http2[shard].request(request).await
         } else {
             self.http1.request(request).await
         };
@@ -121,6 +148,23 @@ impl HttpTransport {
             };
             TransportFailure { kind, error }
         })
+    }
+}
+
+fn request_shard<B>(request: &Request<B>, count: usize, next: &AtomicUsize) -> usize {
+    let authority = request
+        .uri()
+        .authority()
+        .map(|value| value.as_str().as_bytes())
+        .unwrap_or_default();
+    match request
+        .headers()
+        .get("x-request-id")
+        .map(http::HeaderValue::as_bytes)
+        .filter(|request_id| !request_id.is_empty())
+    {
+        Some(request_id) => stable_shard(authority, request_id, count),
+        None => next.fetch_add(1, Ordering::Relaxed) % count,
     }
 }
 
@@ -139,7 +183,7 @@ where
     type Error = BoxError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, context: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(context)
     }
 
@@ -157,7 +201,7 @@ where
                 };
                 if !negotiated_h2 {
                     return Err(io::Error::other(
-                        "HTTPS FusenV1 connection did not negotiate ALPN h2",
+                        "HTTPS connection did not negotiate the required ALPN h2 protocol",
                     )
                     .into());
                 }
@@ -180,9 +224,8 @@ pub(crate) struct TransportFailure {
 }
 
 impl TransportFailure {
-    pub(crate) fn into_rpc(self) -> RpcError {
-        RpcError::internal("HTTP transport failed", self.error)
-            .with_retry_hint(RetryHint::Retryable)
+    pub(crate) fn into_error(self) -> Error {
+        Error::internal("HTTP transport failed", self.error).with_retry_hint(RetryHint::Retryable)
     }
 }
 
@@ -207,9 +250,9 @@ fn stable_shard(authority: &[u8], request_id: &[u8], count: usize) -> usize {
     (hash % count as u64) as usize
 }
 
-pub(crate) fn circuit_open() -> RpcError {
-    RpcError::framework(
-        RpcCategory::Unavailable,
+pub(crate) fn circuit_open() -> Error {
+    Error::framework(
+        ErrorCategory::Unavailable,
         "circuit_open",
         "circuit breaker rejected the attempt",
     )
@@ -271,7 +314,7 @@ mod tests {
                 return;
             };
             let service = service_fn(|_| async {
-                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"secure"))))
+                Ok::<_, Infallible>(HttpResponse::new(Full::new(Bytes::from_static(b"secure"))))
             });
             if version == Version::HTTP_2 {
                 let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
@@ -320,8 +363,72 @@ mod tests {
             .header("x-request-id", "tls-test")
             .body(GuardedBody::new(Bytes::new(), None))
             .unwrap();
-        let response = transport.send(request).await?;
+        let response = transport.send(request, false).await?;
         Ok(response.into_body().collect().await.unwrap().to_bytes())
+    }
+
+    async fn send_auto_tls_request(
+        fixture: &TlsFixture,
+        tls_config: TlsClientConfig,
+    ) -> Result<(Version, Bytes), TransportFailure> {
+        let transport = HttpTransport::with_tls_config(
+            Duration::from_secs(1),
+            &ClientHttpConfig::default(),
+            tls_config,
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri(&fixture.endpoint)
+            .body(GuardedBody::new(Bytes::new(), None))
+            .unwrap();
+        let response = transport.send(request, true).await?;
+        let version = response.version();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        Ok((version, body))
+    }
+
+    #[tokio::test]
+    async fn configured_http2_shards_are_built_for_explicit_and_auto_pools() {
+        let config = ClientHttpConfig::builder()
+            .http2_connections_per_host(3)
+            .build()
+            .unwrap();
+        let transport = HttpTransport::with_tls_config(
+            Duration::from_secs(1),
+            &config,
+            client_tls_config(None),
+        );
+
+        assert_eq!(transport.auto.len(), 3);
+        assert_eq!(transport.http2.len(), 3);
+    }
+
+    #[test]
+    fn requests_without_control_ids_round_robin_across_shards() {
+        let request = Request::builder()
+            .uri("https://service.example/items")
+            .body(())
+            .unwrap();
+        let next = AtomicUsize::new(0);
+
+        assert_eq!(request_shard(&request, 3, &next), 0);
+        assert_eq!(request_shard(&request, 3, &next), 1);
+        assert_eq!(request_shard(&request, 3, &next), 2);
+        assert_eq!(request_shard(&request, 3, &next), 0);
+    }
+
+    #[test]
+    fn requests_with_control_ids_keep_stable_shard_selection() {
+        let request = Request::builder()
+            .uri("https://service.example/items")
+            .header("x-request-id", "request-1")
+            .body(())
+            .unwrap();
+        let next = AtomicUsize::new(0);
+
+        let selected = request_shard(&request, 3, &next);
+        assert_eq!(request_shard(&request, 3, &next), selected);
+        assert_eq!(next.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -340,6 +447,36 @@ mod tests {
                 fixture.task.abort();
             }
         }
+    }
+
+    #[tokio::test]
+    async fn https_auto_negotiates_http2_with_alpn() {
+        let fixture =
+            spawn_tls_server(Version::HTTP_2, "127.0.0.1", true, &rustls::version::TLS13).await;
+        let (version, body) = send_auto_tls_request(
+            &fixture,
+            client_tls_config(Some(fixture.certificate.clone())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(version, Version::HTTP_2);
+        assert_eq!(body, "secure");
+        fixture.task.abort();
+    }
+
+    #[tokio::test]
+    async fn https_auto_falls_back_to_http1_with_alpn() {
+        let fixture =
+            spawn_tls_server(Version::HTTP_11, "127.0.0.1", true, &rustls::version::TLS13).await;
+        let (version, body) = send_auto_tls_request(
+            &fixture,
+            client_tls_config(Some(fixture.certificate.clone())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(version, Version::HTTP_11);
+        assert_eq!(body, "secure");
+        fixture.task.abort();
     }
 
     #[tokio::test]

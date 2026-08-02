@@ -6,7 +6,7 @@
 
 ## 背景
 
-稳定契约、运行时、provider adapter 和可观测性 backend 必须保持单向依赖，否则具体 SDK 或进程级设施会渗入核心 RPC 生命周期，并形成难以独立测试和发布的循环。
+稳定契约、运行时、provider adapter 和可观测性 backend 必须保持单向依赖，否则具体 SDK 或进程级设施会渗入核心 service invocation 生命周期，并形成难以独立测试和发布的循环。
 
 ## 决策
 
@@ -24,7 +24,7 @@ L4  examples and test consumers
 
 - `fusen-procedural-macro` 私有持有属性解析、`SensitiveFields` derive 和接口代码生成实现；生成代码引用 contract/runtime ABI，但过程宏 crate 自身不依赖它们；
 - `fusen-config` 与 `fusen-observability` 当前都不依赖其他 workspace crate；前者拥有静态解析、last-good typed hot config 和取消安全 lifecycle，后者拥有 backend-neutral `MetricsRecorder` SPI 与可选 telemetry adapter；
-- `fusen-contract` 只拥有 wire、service、registry 和进程内 sensitivity schema 共用的稳定值对象，不拥有 executor、provider 或 backend；其可选 `derive` feature 只重导出 L0 的 `SensitiveFields` derive，因此发布时必须在过程宏之后；
+- `fusen-contract` 只拥有 HTTP binding/capability、service、registry 和进程内 sensitivity schema 共用的稳定值对象，不拥有 executor、provider 或 backend；其可选 `derive` feature 只重导出 L0 的 `SensitiveFields` derive，因此发布时必须在过程宏之后；
 - `fusen-register` 依赖 contract，拥有 registry、registration/subscription lifecycle 和 Directory SPI；
 - `fusen-rs` 只依赖 contract、register、observability SPI 和过程宏；
 - `fusen-nacos` 依赖 register、config 和 contract，核心 crate 永不反向依赖 Nacos；

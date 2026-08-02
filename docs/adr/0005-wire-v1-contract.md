@@ -1,6 +1,6 @@
 # ADR 0005: Wire v1 首个兼容基线
 
-- 状态：已接受
+- 状态：已被 [ADR 0009](0009-http-binding-discovery-decoupling.md) 取代
 - 日期：2026-07-26
 - 决策者：fusen-rs 维护者
 
@@ -10,9 +10,9 @@
 
 ## 决策
 
-`0.9.0` 定义两个首版协议：
+`0.9.0` 最初提议两种开发期 wire 形状；它们都在首个 tag 前被 ADR 0009 取代：
 
-### Fusen V1
+### 私有 envelope 方案
 
 - `http://` 使用 HTTP/2 prior knowledge（h2c）；
 - `https://` 使用 TLS ALPN `h2`，不得降级到 HTTP/1.1；
@@ -22,7 +22,7 @@
 - success 为 `{"result":...}`；
 - group/version 由 `x-fusen-service-group`、`x-fusen-service-version` 区分。
 
-### Spring Cloud V1
+### 显式 HTTP mapping 方案
 
 - `http://` 与 `https://` 都使用 HTTP/1.1；
 - 使用方法属性显式声明的 method/path/query/body；

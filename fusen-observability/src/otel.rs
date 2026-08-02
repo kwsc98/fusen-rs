@@ -1,11 +1,12 @@
 //! OpenTelemetry instruments for Fusen's bounded metric event vocabulary.
 
 use crate::{
-    CircuitState, DirectoryMetricState, MetricEvent, MetricOutcome, MetricSide, MetricsRecorder,
+    AttemptFinishedEvent, CircuitState, CircuitStateChangedEvent, DirectoryMetricState,
+    MetricEvent, MetricOutcome, MetricSide, MetricsRecorder,
 };
 use opentelemetry::{
     KeyValue,
-    metrics::{Counter, Histogram, Meter},
+    metrics::{Counter, Histogram, HistogramBuilder, Meter},
 };
 
 /// Records Fusen metric events into an application-owned OpenTelemetry [`Meter`].
@@ -31,10 +32,7 @@ impl OpenTelemetryMetricsRecorder {
                 .f64_histogram("fusen.runtime.duration")
                 .with_description("Fusen operation duration in seconds")
                 .build(),
-            attempts: meter
-                .u64_histogram("fusen.rpc.attempts")
-                .with_description("Physical attempts per logical RPC invocation")
-                .build(),
+            attempts: attempts_histogram_builder(meter).build(),
         }
     }
 
@@ -48,6 +46,16 @@ impl OpenTelemetryMetricsRecorder {
     }
 }
 
+fn attempts_histogram_builder(meter: &Meter) -> HistogramBuilder<'_, Histogram<u64>> {
+    meter
+        .u64_histogram("fusen.invocation.attempts")
+        .with_description("Physical attempts per logical client service invocation")
+}
+
+const fn records_logical_attempts(side: MetricSide) -> bool {
+    matches!(side, MetricSide::Client)
+}
+
 impl MetricsRecorder for OpenTelemetryMetricsRecorder {
     fn record(&self, event: &MetricEvent<'_>) {
         match event {
@@ -55,7 +63,8 @@ impl MetricsRecorder for OpenTelemetryMetricsRecorder {
                 let attributes = invocation_attributes(
                     "invocation_started",
                     event.side(),
-                    event.protocol(),
+                    event.binding(),
+                    event.http_version(),
                     event.service(),
                     event.method(),
                 );
@@ -65,7 +74,8 @@ impl MetricsRecorder for OpenTelemetryMetricsRecorder {
                 let mut attributes = invocation_attributes(
                     "invocation_finished",
                     event.side(),
-                    event.protocol(),
+                    event.binding(),
+                    event.http_version(),
                     event.service(),
                     event.method(),
                 );
@@ -78,21 +88,13 @@ impl MetricsRecorder for OpenTelemetryMetricsRecorder {
                 }
                 self.record_event(&attributes);
                 self.record_duration(event.duration(), &attributes);
-                self.attempts
-                    .record(u64::from(event.attempts()), &attributes);
+                if records_logical_attempts(event.side()) {
+                    self.attempts
+                        .record(u64::from(event.attempts()), &attributes);
+                }
             }
             MetricEvent::AttemptFinished(event) => {
-                let mut attributes = vec![
-                    KeyValue::new("event", "attempt_finished"),
-                    KeyValue::new("protocol", event.protocol().to_owned()),
-                    KeyValue::new("service", event.service().to_owned()),
-                    KeyValue::new("method", event.method().to_owned()),
-                    KeyValue::new("outcome", outcome_name(event.outcome())),
-                    KeyValue::new("attempt", i64::from(event.attempt())),
-                ];
-                if let Some(failure_class) = event.failure_class() {
-                    attributes.push(KeyValue::new("failure_class", failure_class.to_owned()));
-                }
+                let attributes = attempt_attributes(event);
                 self.record_event(&attributes);
                 self.record_duration(event.duration(), &attributes);
             }
@@ -116,12 +118,9 @@ impl MetricsRecorder for OpenTelemetryMetricsRecorder {
                 KeyValue::new("service", event.service().to_owned()),
                 KeyValue::new("state", directory_state_name(event.state())),
             ]),
-            MetricEvent::CircuitStateChanged(event) => self.record_event(&[
-                KeyValue::new("event", "circuit_state_changed"),
-                KeyValue::new("scope", event.scope().to_owned()),
-                KeyValue::new("service", event.service().to_owned()),
-                KeyValue::new("state", circuit_state_name(event.state())),
-            ]),
+            MetricEvent::CircuitStateChanged(event) => {
+                self.record_event(&circuit_attributes(event))
+            }
             MetricEvent::ShutdownFinished(event) => {
                 let attributes = [
                     KeyValue::new("event", "shutdown_finished"),
@@ -135,19 +134,58 @@ impl MetricsRecorder for OpenTelemetryMetricsRecorder {
     }
 }
 
+fn attempt_attributes(event: &AttemptFinishedEvent<'_>) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new("event", "attempt_finished"),
+        KeyValue::new("http.binding", event.binding().to_owned()),
+        KeyValue::new("service", event.service().to_owned()),
+        KeyValue::new("method", event.method().to_owned()),
+        KeyValue::new("outcome", outcome_name(event.outcome())),
+        KeyValue::new("attempt", i64::from(event.attempt())),
+    ];
+    if let Some(http_version) = event.http_version() {
+        attributes.push(KeyValue::new(
+            "network.protocol.version",
+            http_version.to_owned(),
+        ));
+    }
+    if let Some(failure_class) = event.failure_class() {
+        attributes.push(KeyValue::new("failure_class", failure_class.to_owned()));
+    }
+    attributes
+}
+
 fn invocation_attributes(
     event: &'static str,
     side: MetricSide,
-    protocol: &str,
+    binding: &str,
+    http_version: Option<&str>,
     service: &str,
     method: &str,
 ) -> Vec<KeyValue> {
-    vec![
+    let mut attributes = vec![
         KeyValue::new("event", event),
         KeyValue::new("side", side_name(side)),
-        KeyValue::new("protocol", protocol.to_owned()),
+        KeyValue::new("http.binding", binding.to_owned()),
         KeyValue::new("service", service.to_owned()),
         KeyValue::new("method", method.to_owned()),
+    ];
+    if let Some(http_version) = http_version {
+        attributes.push(KeyValue::new(
+            "network.protocol.version",
+            http_version.to_owned(),
+        ));
+    }
+    attributes
+}
+
+fn circuit_attributes(event: &CircuitStateChangedEvent<'_>) -> [KeyValue; 5] {
+    [
+        KeyValue::new("event", "circuit_state_changed"),
+        KeyValue::new("scope", event.scope().to_owned()),
+        KeyValue::new("http.binding", event.binding().to_owned()),
+        KeyValue::new("service", event.service().to_owned()),
+        KeyValue::new("state", circuit_state_name(event.state())),
     ]
 }
 
@@ -189,7 +227,7 @@ const fn circuit_state_name(state: CircuitState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AdmissionRejectedEvent;
+    use crate::{AdmissionRejectedEvent, AttemptFinishedEvent};
 
     #[test]
     fn adapter_accepts_events_without_backend_initialization() {
@@ -199,5 +237,69 @@ mod tests {
         recorder.record(&MetricEvent::AdmissionRejected(
             AdmissionRejectedEvent::new(MetricSide::Server, "concurrency"),
         ));
+    }
+
+    #[test]
+    fn attempts_histogram_uses_invocation_name() {
+        let meter = opentelemetry::global::meter("fusen-observability-test");
+        let builder = attempts_histogram_builder(&meter);
+
+        assert_eq!(builder.name.as_ref(), "fusen.invocation.attempts");
+    }
+
+    #[test]
+    fn attempts_histogram_only_samples_client_logical_invocations() {
+        assert!(records_logical_attempts(MetricSide::Client));
+        assert!(!records_logical_attempts(MetricSide::Server));
+    }
+
+    #[test]
+    fn attempt_attributes_only_include_an_observed_http_version() {
+        let unknown = AttemptFinishedEvent::new(
+            "http-json-v1",
+            None,
+            "service",
+            "call",
+            1,
+            MetricOutcome::Error,
+            Some("connect"),
+            std::time::Duration::ZERO,
+        );
+        assert!(
+            !attempt_attributes(&unknown)
+                .iter()
+                .any(|attribute| attribute.key.as_str() == "network.protocol.version")
+        );
+
+        let known = AttemptFinishedEvent::new(
+            "http-json-v1",
+            Some("2"),
+            "service",
+            "call",
+            1,
+            MetricOutcome::Success,
+            None,
+            std::time::Duration::ZERO,
+        );
+        assert!(
+            attempt_attributes(&known)
+                .iter()
+                .any(|attribute| attribute.key.as_str() == "network.protocol.version")
+        );
+    }
+
+    #[test]
+    fn circuit_attributes_include_the_http_binding() {
+        let event = CircuitStateChangedEvent::new(
+            "endpoint",
+            "http-json-v1",
+            "service",
+            CircuitState::Open,
+        );
+
+        assert!(circuit_attributes(&event).iter().any(|attribute| {
+            attribute.key.as_str() == "http.binding"
+                && attribute.value.to_string() == "http-json-v1"
+        }));
     }
 }

@@ -1,7 +1,7 @@
-use rpc::interface;
+use runtime::interface;
 
 mod lookalike {
-    pub struct RpcError;
+    pub struct Error;
 
     pub enum LookalikeResult<T, E> {
         Ok(T),
@@ -13,8 +13,8 @@ mod lookalike {
 
 #[interface(name = "user")]
 trait UserService {
-    #[rpc::method(method = "GET", path = "/users")]
-    async fn get(&self) -> lookalike::Result<rpc::RpcResponse<()>, rpc::RpcError>;
+    #[runtime::method(method = "GET", path = "/users")]
+    async fn get(&self) -> lookalike::Result<runtime::Response<()>, runtime::Error>;
 }
 
 fn main() {}

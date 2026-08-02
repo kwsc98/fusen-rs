@@ -1,4 +1,4 @@
-#![allow(dead_code, missing_docs)]
+#![allow(clippy::too_many_arguments, dead_code, missing_docs)]
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
@@ -11,15 +11,15 @@ use std::{
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
-pub struct RpcArguments(Map<String, Value>);
+pub struct Arguments(Map<String, Value>);
 
-impl RpcArguments {
+impl Arguments {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl Deref for RpcArguments {
+impl Deref for Arguments {
     type Target = Map<String, Value>;
 
     fn deref(&self) -> &Self::Target {
@@ -27,24 +27,24 @@ impl Deref for RpcArguments {
     }
 }
 
-impl DerefMut for RpcArguments {
+impl DerefMut for Arguments {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-mod rpc_error {
+mod invocation_error {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../fusen/src/rpc/error.rs"
+        "/../fusen/src/error/invocation.rs"
     ));
 }
 
-pub use rpc_error::{ErrorCode, InvalidErrorCode, RetryHint, RpcCategory, RpcError, RpcOrigin};
-
-mod rpc {
-    pub(crate) use crate::rpc_error::ProblemDetails;
-}
+pub(crate) use invocation_error::RemoteErrorParts;
+pub use invocation_error::{
+    Error, ErrorCategory, ErrorCode, ErrorConstructionError, ErrorDetails, ErrorKind, ErrorOrigin,
+    InvalidErrorCode, RetryHint,
+};
 
 mod runtime {
     pub(crate) mod budget {
@@ -62,17 +62,21 @@ mod runtime {
     }
 }
 
-pub struct RpcBody {
+pub struct Body {
     bytes: Bytes,
     permit: Option<Arc<runtime::budget::BytePermit>>,
 }
 
-impl RpcBody {
+impl Body {
     fn from_bytes(bytes: Bytes) -> Self {
         Self {
             bytes,
             permit: None,
         }
+    }
+
+    fn len(&self) -> usize {
+        self.bytes.len()
     }
 
     fn into_parts(self) -> (Bytes, Option<Arc<runtime::budget::BytePermit>>) {
@@ -84,13 +88,13 @@ impl RpcBody {
     }
 }
 
-pub struct RpcResponse<T> {
+pub struct Response<T> {
     body: T,
     status: StatusCode,
     headers: HeaderMap,
 }
 
-impl<T> RpcResponse<T> {
+impl<T> Response<T> {
     fn new(body: T) -> Self {
         Self {
             body,
@@ -103,12 +107,16 @@ impl<T> RpcResponse<T> {
         self.status
     }
 
-    pub(crate) fn set_status(&mut self, status: StatusCode) -> Result<(), RpcError> {
+    pub(crate) const fn body(&self) -> &T {
+        &self.body
+    }
+
+    pub(crate) fn set_status(&mut self, status: StatusCode) -> Result<(), Error> {
         if !status.is_success() {
-            return Err(RpcError::framework(
-                RpcCategory::InvalidArgument,
+            return Err(Error::framework(
+                ErrorCategory::InvalidArgument,
                 "invalid_response_status",
-                "RPC success response status must be 2xx",
+                "service invocation success response status must be 2xx",
             ));
         }
         self.status = status;
@@ -124,13 +132,17 @@ impl<T> RpcResponse<T> {
     }
 }
 
-impl RpcResponse<RpcBody> {
+impl Response<Body> {
     fn fixture(result: Bytes) -> Self {
-        Self::new(RpcBody::from_bytes(result))
+        Self::new(Body::from_bytes(result))
     }
 
     pub(crate) fn from_json_bytes(result: Bytes) -> Self {
         Self::fixture(result)
+    }
+
+    pub(crate) fn result_bytes(&self) -> &Bytes {
+        &self.body.bytes
     }
 
     pub(crate) fn success_with_budget<T: serde::Serialize>(
@@ -138,12 +150,12 @@ impl RpcResponse<RpcBody> {
         limit: usize,
         wire_overhead: usize,
         budget: &Arc<runtime::budget::ByteBudget>,
-    ) -> Result<Self, RpcError> {
+    ) -> Result<Self, Error> {
         use runtime::budget::{BudgetedWriteFailure, BudgetedWriter};
 
         let exhausted = || {
-            RpcError::framework(
-                RpcCategory::ResourceExhausted,
+            Error::framework(
+                ErrorCategory::ResourceExhausted,
                 "response_byte_budget_exhausted",
                 "server response byte budget is exhausted",
             )
@@ -152,14 +164,14 @@ impl RpcResponse<RpcBody> {
             BudgetedWriter::new(limit, budget, wire_overhead).map_err(|_failure| exhausted())?;
         serde_json::to_writer(&mut writer, &value).map_err(|error| match writer.failure() {
             Some(BudgetedWriteFailure::BudgetExhausted) => exhausted(),
-            Some(BudgetedWriteFailure::LimitExceeded) | None => RpcError::framework(
-                RpcCategory::Internal,
+            Some(BudgetedWriteFailure::LimitExceeded) | None => Error::framework(
+                ErrorCategory::Internal,
                 "response_too_large",
                 error.to_string(),
             ),
         })?;
         let (result, permit) = writer.into_parts();
-        Ok(Self::new(RpcBody {
+        Ok(Self::new(Body {
             bytes: result,
             permit: Some(permit),
         }))
@@ -188,16 +200,28 @@ impl RpcResponse<RpcBody> {
     }
 }
 
-mod middleware {
-    pub(crate) trait MiddlewareDyn: Send + Sync {}
+mod interceptor {
+    pub(crate) trait InterceptorDyn: Send + Sync {}
 }
 
 #[cfg(not(test))]
-pub(crate) use middleware::MiddlewareDyn as Middleware;
+pub(crate) use interceptor::InterceptorDyn as Interceptor;
 
 mod service {
     pub(crate) trait ErasedDispatch: Send + Sync {}
 }
+
+mod codec {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fusen/src/codec.rs"
+    ));
+}
+
+pub(crate) use codec::{
+    BufferedResponse, EncodedRequest, ErrorDecoder, RequestEncoder, RequestEncoding,
+    ResponseDecoder,
+};
 
 #[allow(clippy::items_after_test_module)]
 mod wire {
@@ -207,30 +231,67 @@ mod wire {
     ));
 
     pub(super) fn exercise_problem_details(data: &[u8]) {
-        if let Ok(problem) = serde_json::from_slice::<ProblemDetails>(data) {
-            let error = RpcError::from_remote(problem);
-            let normalized = error.problem_details("fuzz-request", Some("/fuzz".to_owned()));
-            let encoded = bounded_problem(&normalized);
-            assert!(encoded.len() <= EMERGENCY_PROBLEM_LIMIT);
-            let _: ProblemDetails = serde_json::from_slice(&encoded)
-                .expect("the emergency Problem Details encoder must emit valid JSON");
+        let parsed = serde_json::from_slice::<problem::ProblemDetails>(data).ok();
+        let status = parsed
+            .as_ref()
+            .and_then(|problem| http::StatusCode::from_u16(problem.status()).ok())
+            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR);
+        let request_id = parsed
+            .as_ref()
+            .map(problem::ProblemDetails::request_id)
+            .filter(|request_id| request_id_is_valid(request_id))
+            .unwrap_or("fuzz-request");
+        let mismatched_status = if status == http::StatusCode::BAD_GATEWAY {
+            http::StatusCode::BAD_REQUEST
+        } else {
+            http::StatusCode::BAD_GATEWAY
+        };
+        let mismatched_request_id = if request_id == "mismatched-request" {
+            "other-request"
+        } else {
+            "mismatched-request"
+        };
+
+        for strict_controls in [false, true] {
+            for (response_status, expected_request_id) in [
+                (status, request_id),
+                (mismatched_status, request_id),
+                (status, mismatched_request_id),
+            ] {
+                let error = problem::decode_problem(
+                    response_status,
+                    expected_request_id,
+                    data,
+                    HeaderMap::new(),
+                    strict_controls,
+                );
+                let (normalized, _) =
+                    problem::problem_from_error(&error, "fuzz-request", Some("/fuzz".to_owned()));
+                let encoded = problem::bounded_problem(&normalized);
+                assert!(encoded.len() <= EMERGENCY_PROBLEM_LIMIT);
+                let _: problem::ProblemDetails = serde_json::from_slice(&encoded)
+                    .expect("the emergency Problem Details encoder must emit valid JSON");
+            }
         }
 
         let detail = String::from_utf8_lossy(data);
         if let Ok(error) =
-            RpcError::application(http::StatusCode::BAD_REQUEST, "fuzz_application", detail)
+            Error::application(ErrorCategory::InvalidArgument, "fuzz_application", detail)
         {
-            let encoded = bounded_problem(&error.problem_details("fuzz-request", None));
+            let response = encode_problem(&error, "fuzz-request", None, true);
+            assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+            let (problem, _) = problem::problem_from_error(&error, "fuzz-request", None);
+            let encoded = problem::bounded_problem(&problem);
             assert!(encoded.len() <= EMERGENCY_PROBLEM_LIMIT);
-            let _: ProblemDetails = serde_json::from_slice(&encoded)
+            let _: problem::ProblemDetails = serde_json::from_slice(&encoded)
                 .expect("the emergency Problem Details encoder must emit valid JSON");
         }
     }
 
-    pub(super) fn exercise_spring_path(path: &str, query: &str, body: &[u8]) {
+    pub(super) fn exercise_http_binding(path: &str, query: &str, body: &[u8]) {
         let (service, method) = crate::descriptor();
         let budget = ByteBudget::new(64 * 1024);
-        let mut arguments = RpcArguments::new();
+        let mut arguments = Arguments::new();
         arguments.insert(
             "path".to_owned(),
             serde_json::Value::String(path.to_owned()),
@@ -244,9 +305,9 @@ mod wire {
             serde_json::from_slice(body).unwrap_or(serde_json::Value::Null),
         );
         if let Ok(template) = encode_request_template(
+            &JsonCodec,
             service,
             method,
-            WireProtocol::SpringCloudV1,
             &arguments,
             &HeaderMap::new(),
             64 * 1024,
@@ -255,7 +316,19 @@ mod wire {
             let endpoint = "http://127.0.0.1:8080"
                 .parse::<ServiceEndpoint>()
                 .expect("static plaintext endpoint is valid");
-            let _ = template.to_request(&endpoint, "fuzz-request", Duration::from_secs(1), 1);
+            for (version, invocation_controls) in
+                [(Version::HTTP_11, false), (Version::HTTP_2, true)]
+            {
+                let _ = template.to_request(
+                    &endpoint,
+                    version,
+                    "fuzz-request",
+                    Duration::from_secs(1),
+                    1,
+                    invocation_controls,
+                    service,
+                );
+            }
         }
     }
 }
@@ -280,34 +353,40 @@ fn descriptor() -> (
     &'static fusen_contract::MethodDescriptor,
 ) {
     use fusen_contract::{
-        MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector, SpringCloudMethod,
-        SpringCloudParameter, SpringCloudParameterCardinality, SpringCloudParameterSource,
+        HttpOperation, HttpParameter, HttpParameterCardinality, HttpParameterSource,
+        MethodDescriptor, MethodId, ServiceDescriptor, ServiceSelector,
     };
 
     static SERVICE: LazyLock<ServiceDescriptor> = LazyLock::new(|| {
         let parameters = vec![
-            SpringCloudParameter::new(
+            HttpParameter::new(
                 "path",
-                SpringCloudParameterSource::Path,
-                SpringCloudParameterCardinality::Scalar,
+                HttpParameterSource::Path,
+                HttpParameterCardinality::Scalar,
             )
             .unwrap(),
-            SpringCloudParameter::new(
+            HttpParameter::new(
                 "query",
-                SpringCloudParameterSource::Query,
-                SpringCloudParameterCardinality::Scalar,
+                HttpParameterSource::Query,
+                HttpParameterCardinality::Scalar,
             )
             .unwrap(),
-            SpringCloudParameter::new(
+            HttpParameter::new(
                 "body",
-                SpringCloudParameterSource::Body,
-                SpringCloudParameterCardinality::Scalar,
+                HttpParameterSource::Body,
+                HttpParameterCardinality::Scalar,
             )
             .unwrap(),
         ];
-        let spring =
-            SpringCloudMethod::new(http::Method::POST, "/fuzz/{path}", parameters).unwrap();
-        let method = MethodDescriptor::new(MethodId::new(0), "fuzz", Some(spring)).unwrap();
+        let operation = HttpOperation::new(
+            http::Method::POST,
+            "/fuzz/{path}",
+            parameters,
+            "application/json",
+            "application/json",
+        )
+        .unwrap();
+        let method = MethodDescriptor::new(MethodId::new(0), "fuzz", operation).unwrap();
         ServiceDescriptor::new(
             ServiceSelector::new("fuzz", None, None).unwrap(),
             vec![method],
@@ -318,45 +397,49 @@ fn descriptor() -> (
 }
 
 pub fn fuzz_wire_codec(data: &[u8]) {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum CorpusRequest {
+        LegacyEnvelope { arguments: Arguments },
+        Arguments(Arguments),
+    }
+
     let max_body = data
         .first()
         .map_or(1024, |value| usize::from(*value).saturating_mul(256));
     let body = data.get(1..).unwrap_or_default();
-    let decoded = wire::decode_fusen_request(body);
+    let decoded = serde_json::from_slice::<CorpusRequest>(body).map(|request| match request {
+        CorpusRequest::LegacyEnvelope { arguments } | CorpusRequest::Arguments(arguments) => {
+            arguments
+        }
+    });
     if let Ok(arguments) = decoded {
         let (service, method) = descriptor();
         let request_budget = runtime::budget::ByteBudget::new(max_body.max(1));
-        for protocol in [
-            fusen_contract::WireProtocol::FusenV1,
-            fusen_contract::WireProtocol::SpringCloudV1,
-        ] {
-            let _ = wire::encode_request_template(
-                service,
-                method,
-                protocol,
-                &arguments,
-                &HeaderMap::new(),
-                max_body,
-                &request_budget,
-            );
-        }
+        let _ = wire::encode_request_template(
+            &wire::JsonCodec,
+            service,
+            method,
+            &arguments,
+            &HeaderMap::new(),
+            max_body,
+            &request_budget,
+        );
     }
 
     let budget = runtime::budget::ByteBudget::new(max_body.max(1));
-    for protocol in [
-        fusen_contract::WireProtocol::FusenV1,
-        fusen_contract::WireProtocol::SpringCloudV1,
-    ] {
+    for suppress_body in [false, true] {
         let _ = wire::encode_success(
-            protocol,
-            RpcResponse::fixture(Bytes::copy_from_slice(body)),
+            Response::fixture(Bytes::copy_from_slice(body)),
+            "application/json",
+            suppress_body,
             max_body,
             &budget,
         );
     }
 }
 
-pub fn fuzz_spring_path(data: &[u8]) {
+pub fn fuzz_http_binding(data: &[u8]) {
     let separator = data
         .iter()
         .position(|byte| matches!(*byte, 0 | b'\n'))
@@ -372,11 +455,42 @@ pub fn fuzz_spring_path(data: &[u8]) {
         .get(query_separator.saturating_add(1)..)
         .unwrap_or_default();
     routes::exercise_path_and_query(&path, &query);
-    wire::exercise_spring_path(&path, &query, body);
+    wire::exercise_http_binding(&path, &query, body);
 }
 
 pub fn fuzz_problem_details(data: &[u8]) {
     wire::exercise_problem_details(data);
+}
+
+#[cfg(test)]
+mod corpus_tests {
+    use super::*;
+
+    #[test]
+    fn arbitrary_bytes_reach_the_problem_decoder() {
+        fuzz_problem_details(b"\xff\0not-json%GG");
+    }
+
+    #[test]
+    fn existing_problem_corpus_exercises_the_decoder_matrix() {
+        fuzz_problem_details(include_bytes!(
+            "../../fuzz/corpus/problem_details/application.json"
+        ));
+    }
+
+    #[test]
+    fn existing_wire_corpus_exercises_the_http_json_codec() {
+        fuzz_wire_codec(include_bytes!(
+            "../../fuzz/corpus/wire_codec/fusen-request.json"
+        ));
+    }
+
+    #[test]
+    fn existing_http_binding_corpus_exercises_path_query_and_body_encoding() {
+        fuzz_http_binding(include_bytes!(
+            "../../fuzz/corpus/http_binding/path-query-body.txt"
+        ));
+    }
 }
 
 #[cfg(test)]

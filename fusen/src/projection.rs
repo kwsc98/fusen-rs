@@ -1,5 +1,5 @@
 use crate::{
-    RpcArguments,
+    Arguments,
     sensitive::{
         ProjectionLimits, Sanitization, SanitizationContext, SanitizationTarget, SanitizedValue,
         Sanitizer,
@@ -35,7 +35,7 @@ impl ProjectionDirection {
 
 pub(crate) fn sanitize_arguments(
     method: &MethodDescriptor,
-    arguments: &RpcArguments,
+    arguments: &Arguments,
     direction: ProjectionDirection,
     sanitizer: &dyn Sanitizer,
 ) -> SanitizedValue {
@@ -485,10 +485,22 @@ mod tests {
     use super::*;
     use crate::sensitive::{PolicySanitizer, ProjectionLimits};
     use fusen_contract::{
-        MethodId, MethodSensitivity, SensitiveArgument, SensitiveField, SensitivityKind,
+        HttpOperation, MethodId, MethodSensitivity, SensitiveArgument, SensitiveField,
+        SensitivityKind,
     };
     use serde_json::json;
     use std::sync::Mutex;
+
+    fn http_operation() -> HttpOperation {
+        HttpOperation::new(
+            http::Method::POST,
+            "/test",
+            Vec::new(),
+            "application/json",
+            "application/json",
+        )
+        .unwrap()
+    }
 
     fn public() -> SensitiveShape {
         SensitiveShape::Kind(SensitivityKind::PUBLIC)
@@ -590,7 +602,7 @@ mod tests {
     }
 
     fn method(with_response: bool) -> MethodDescriptor {
-        MethodDescriptor::new(MethodId::new(0), "project", None)
+        MethodDescriptor::new(MethodId::new(0), "project", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![SensitiveArgument::new("request", request)],
@@ -598,18 +610,18 @@ mod tests {
             ))
     }
 
-    fn rpc_arguments(value: Value) -> RpcArguments {
+    fn invocation_arguments(value: Value) -> Arguments {
         let Value::Object(fields) = value else {
             panic!("test arguments must be an object")
         };
-        let mut arguments = RpcArguments::new();
+        let mut arguments = Arguments::new();
         arguments.extend(fields);
         arguments
     }
 
     fn sanitize_serialized_arguments(
         method: &MethodDescriptor,
-        arguments: &RpcArguments,
+        arguments: &Arguments,
         sanitizer: &dyn Sanitizer,
     ) -> SanitizedValue {
         sanitize_arguments(method, arguments, ProjectionDirection::Serialize, sanitizer)
@@ -617,7 +629,7 @@ mod tests {
 
     #[test]
     fn recursive_projection_whitelists_fields_and_arrays() {
-        let arguments = rpc_arguments(json!({
+        let arguments = invocation_arguments(json!({
             "request": {
                 "id": 7,
                 "password": "do-not-log",
@@ -653,7 +665,7 @@ mod tests {
 
     #[test]
     fn field_tables_are_selected_by_representation_direction() {
-        let descriptor = MethodDescriptor::new(MethodId::new(0), "directional", None)
+        let descriptor = MethodDescriptor::new(MethodId::new(0), "directional", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![SensitiveArgument::new("request", directional_payload)],
@@ -661,7 +673,7 @@ mod tests {
             ));
         let policy = PolicySanitizer::default();
 
-        let serialized = rpc_arguments(json!({
+        let serialized = invocation_arguments(json!({
             "request": {"display": "safe", "password": "outbound-secret"}
         }));
         assert_eq!(
@@ -677,7 +689,7 @@ mod tests {
             }))
         );
 
-        let deserialized = rpc_arguments(json!({
+        let deserialized = invocation_arguments(json!({
             "request": {"public_input": "safe", "display": "inbound-secret"}
         }));
         assert_eq!(
@@ -717,7 +729,7 @@ mod tests {
 
     #[test]
     fn fully_unclassified_objects_and_nonempty_arrays_are_omitted() {
-        let descriptor = MethodDescriptor::new(MethodId::new(0), "opaque", None)
+        let descriptor = MethodDescriptor::new(MethodId::new(0), "opaque", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![
@@ -727,7 +739,7 @@ mod tests {
                 ],
                 Some(all_opaque),
             ));
-        let arguments = rpc_arguments(json!({
+        let arguments = invocation_arguments(json!({
             "object": {"value": "hidden"},
             "objects": [{"value": "one"}, {"value": "two"}],
             "empty_objects": []
@@ -781,13 +793,13 @@ mod tests {
 
     #[test]
     fn paths_are_canonical_and_do_not_include_array_indices() {
-        let method = MethodDescriptor::new(MethodId::new(0), "escaped", None)
+        let method = MethodDescriptor::new(MethodId::new(0), "escaped", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![SensitiveArgument::new("request", escaped_request)],
                 None,
             ));
-        let arguments = rpc_arguments(json!({
+        let arguments = invocation_arguments(json!({
             "request": {"a/b": [{"~token": "a"}, {"~token": "b"}]}
         }));
         let sanitizer = RecordingSanitizer::default();
@@ -803,7 +815,7 @@ mod tests {
 
     #[test]
     fn kind_classifies_complete_arrays_and_nulls() {
-        let method = MethodDescriptor::new(MethodId::new(0), "complete-values", None)
+        let method = MethodDescriptor::new(MethodId::new(0), "complete-values", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![
@@ -812,7 +824,7 @@ mod tests {
                 ],
                 None,
             ));
-        let arguments = rpc_arguments(json!({
+        let arguments = invocation_arguments(json!({
             "tokens": ["first", "second"],
             "nullable": null
         }));
@@ -833,20 +845,21 @@ mod tests {
     #[test]
     fn structural_shape_mismatches_fail_the_complete_projection_closed() {
         let policy = PolicySanitizer::default();
-        let object_expected = rpc_arguments(json!({
+        let object_expected = invocation_arguments(json!({
             "request": [{"id": 7, "children": []}]
         }));
         assert!(
             sanitize_serialized_arguments(&method(false), &object_expected, &policy).is_omitted()
         );
 
-        let sequence_expected = MethodDescriptor::new(MethodId::new(0), "sequence", None)
-            .unwrap()
-            .with_sensitivity(MethodSensitivity::new(
-                vec![SensitiveArgument::new("tokens", secret_sequence)],
-                None,
-            ));
-        let wrong_sequence = rpc_arguments(json!({"tokens": "not-an-array"}));
+        let sequence_expected =
+            MethodDescriptor::new(MethodId::new(0), "sequence", http_operation())
+                .unwrap()
+                .with_sensitivity(MethodSensitivity::new(
+                    vec![SensitiveArgument::new("tokens", secret_sequence)],
+                    None,
+                ));
+        let wrong_sequence = invocation_arguments(json!({"tokens": "not-an-array"}));
         assert!(
             sanitize_serialized_arguments(&sequence_expected, &wrong_sequence, &policy)
                 .is_omitted()
@@ -855,7 +868,7 @@ mod tests {
 
     #[test]
     fn optional_dtos_and_nested_sequences_preserve_their_json_structure() {
-        let descriptor = MethodDescriptor::new(MethodId::new(0), "optional", None)
+        let descriptor = MethodDescriptor::new(MethodId::new(0), "optional", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![
@@ -865,7 +878,7 @@ mod tests {
                 None,
             ));
         let policy = PolicySanitizer::default();
-        let present = rpc_arguments(json!({
+        let present = invocation_arguments(json!({
             "child": {"name": "one", "secret": "hidden"},
             "children": [{"name": "two", "secret": "hidden"}]
         }));
@@ -877,34 +890,35 @@ mod tests {
             }))
         );
 
-        let absent = rpc_arguments(json!({"child": null, "children": null}));
+        let absent = invocation_arguments(json!({"child": null, "children": null}));
         assert!(sanitize_serialized_arguments(&descriptor, &absent, &policy).is_omitted());
     }
 
     #[test]
     fn fixed_sequences_require_the_declared_length_and_global_array_limit() {
-        let descriptor = MethodDescriptor::new(MethodId::new(0), "fixed", None)
+        let descriptor = MethodDescriptor::new(MethodId::new(0), "fixed", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![SensitiveArgument::new("tokens", fixed_secrets)],
                 None,
             ));
         let policy = PolicySanitizer::default();
-        let valid = rpc_arguments(json!({"tokens": ["one", "two"]}));
+        let valid = invocation_arguments(json!({"tokens": ["one", "two"]}));
         assert_eq!(
             sanitize_serialized_arguments(&descriptor, &valid, &policy).as_value(),
             Some(&json!({"tokens": "<redacted>"}))
         );
-        let wrong_length = rpc_arguments(json!({"tokens": ["one"]}));
+        let wrong_length = invocation_arguments(json!({"tokens": ["one"]}));
         assert!(sanitize_serialized_arguments(&descriptor, &wrong_length, &policy).is_omitted());
 
-        let oversized = MethodDescriptor::new(MethodId::new(0), "oversized-fixed", None)
-            .unwrap()
-            .with_sensitivity(MethodSensitivity::new(
-                vec![SensitiveArgument::new("tokens", oversized_fixed_secrets)],
-                None,
-            ));
-        let oversized_values = rpc_arguments(json!({"tokens": vec!["x"; 33]}));
+        let oversized =
+            MethodDescriptor::new(MethodId::new(0), "oversized-fixed", http_operation())
+                .unwrap()
+                .with_sensitivity(MethodSensitivity::new(
+                    vec![SensitiveArgument::new("tokens", oversized_fixed_secrets)],
+                    None,
+                ));
+        let oversized_values = invocation_arguments(json!({"tokens": vec!["x"; 33]}));
         assert!(sanitize_serialized_arguments(&oversized, &oversized_values, &policy).is_omitted());
     }
 
@@ -930,18 +944,18 @@ mod tests {
 
     #[test]
     fn policy_panics_and_missing_schemas_fail_closed() {
-        let arguments = rpc_arguments(json!({"request": {"id": 7}}));
+        let arguments = invocation_arguments(json!({"request": {"id": 7}}));
         assert!(
             sanitize_serialized_arguments(&method(false), &arguments, &PanicSanitizer).is_omitted()
         );
 
-        let missing = MethodDescriptor::new(MethodId::new(0), "missing", None).unwrap();
+        let missing = MethodDescriptor::new(MethodId::new(0), "missing", http_operation()).unwrap();
         assert!(
             sanitize_serialized_arguments(&missing, &arguments, &PolicySanitizer::default())
                 .is_omitted()
         );
 
-        let panicking = MethodDescriptor::new(MethodId::new(0), "panicking", None)
+        let panicking = MethodDescriptor::new(MethodId::new(0), "panicking", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![SensitiveArgument::new("request", panic_shape)],
@@ -965,7 +979,7 @@ mod tests {
             ProjectionLimits::default().with_max_string_bytes(3),
             ProjectionLimits::default().with_max_output_bytes(4),
         ];
-        let arguments = rpc_arguments(json!({
+        let arguments = invocation_arguments(json!({
             "request": {
                 "id": "long",
                 "password": "secret",
@@ -1056,7 +1070,7 @@ mod tests {
             SensitivityKind::SECRET,
             Sanitization::Replace(json!({"safe": true})),
         );
-        let arguments = rpc_arguments(json!({
+        let arguments = invocation_arguments(json!({
             "request": {"id": 1, "password": "x", "children": []}
         }));
         let projected = sanitize_serialized_arguments(&method(false), &arguments, &replacement);
@@ -1078,13 +1092,13 @@ mod tests {
 
     #[test]
     fn deeply_nested_classified_values_are_checked_before_policy_dispatch() {
-        let descriptor = MethodDescriptor::new(MethodId::new(0), "classified", None)
+        let descriptor = MethodDescriptor::new(MethodId::new(0), "classified", http_operation())
             .unwrap()
             .with_sensitivity(MethodSensitivity::new(
                 vec![SensitiveArgument::new("secret", secret)],
                 None,
             ));
-        let arguments = rpc_arguments(json!({
+        let arguments = invocation_arguments(json!({
             "secret": {"nested": {"value": "hidden"}}
         }));
         let policy =

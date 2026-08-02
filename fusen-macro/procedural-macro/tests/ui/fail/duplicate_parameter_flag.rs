@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "duplicate-parameter-flag")]
 trait DuplicateParameterFlag {
@@ -9,7 +9,7 @@ trait DuplicateParameterFlag {
     async fn tags(
         &self,
         #[param(query, repeated, repeated)] tags: Vec<String>,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}

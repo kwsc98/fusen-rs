@@ -1,23 +1,25 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
-//! Production-oriented JSON RPC runtime with HTTP/HTTPS clients and a plaintext HTTP/1.1/h2c server.
+//! Production-oriented Rust microservice and service-invocation runtime.
 
 extern crate self as fusen_rs;
 
 mod client;
+/// Client-side HTTP request and response codec extension APIs.
+pub mod codec;
 mod context;
 mod error;
+pub(crate) use error::RemoteErrorParts;
+/// Shared client/server interceptor API.
+pub mod interceptor;
 /// Interface parameter schema and argument encoding contracts.
 pub mod interface;
-/// Shared client/server middleware API.
-pub mod middleware;
 /// Client routing, load balancing, and retry policy APIs.
 pub mod policy;
 mod projection;
 mod resilience;
-mod rpc;
 mod runtime;
-/// Policy-driven safe projections for middleware and application diagnostics.
+/// Policy-driven safe projections for interceptor and application diagnostics.
 pub mod sensitive;
 mod server;
 mod service;
@@ -30,27 +32,29 @@ pub use client::{
     ClientRuntimeBuilder, ClientState, DiscoveryConfig, DiscoveryConfigBuilder, QueueConfig,
     QueueConfigBuilder, RetryConfig, RetryConfigBuilder,
 };
-pub use context::{
-    CallInfo, MiddlewareStage, RpcArguments, RpcBody, RpcCall, RpcContext, RpcResponse, RpcSide,
+pub use codec::{
+    BufferedResponse, EncodedRequest, ErrorDecoder, RequestEncoder, RequestEncoding,
+    ResponseDecoder,
 };
+pub use context::{Arguments, Body, Call, CallInfo, Context, InterceptionStage, Response, Side};
 pub use error::{
-    ClientError, ClientErrorKind, ConfigValidationError, ConfigValidationErrorKind, ServerError,
-    ServerErrorKind,
+    ClientError, ClientErrorKind, ConfigValidationError, ConfigValidationErrorKind, Error,
+    ErrorCategory, ErrorCode, ErrorConstructionError, ErrorDetails, ErrorKind, ErrorOrigin,
+    InvalidErrorCode, RetryHint, ServerError, ServerErrorKind,
 };
 pub use fusen_contract as contract;
 pub use fusen_contract::{
+    EndpointCapabilities, HTTP_JSON_V1, HttpBindingId, HttpOperation, HttpParameter,
+    HttpParameterCardinality, HttpParameterSource, HttpVersionPolicy, HttpVersionSet,
     MethodSensitivity, SensitiveArgument, SensitiveField, SensitiveFields, SensitiveShape,
-    SensitiveShapeResolver, SensitivityKind, WireProtocol,
+    SensitiveShapeResolver, SensitivityKind,
 };
 pub use fusen_observability::{MetricsRecorder, NoopMetricsRecorder};
 pub use fusen_procedural_macro::{interface, method};
 pub use fusen_register::{RegistrationHandle, Registry, SubscriptionHandle};
-pub use middleware::{Middleware, MiddlewareFuture, MiddlewareResult, Next};
+pub use interceptor::{Interceptor, InterceptorFuture, InterceptorResult, Next};
 pub use policy::{InstanceRouter, InstanceSnapshot, LoadBalancer, RouteRequest, WeightedRandom};
 pub use resilience::{FailureClass, RetryDecision, RetryDecisionContext, RetryPolicy};
-pub use rpc::{
-    ErrorCode, InvalidErrorCode, RetryHint, RpcCategory, RpcError, RpcErrorDetails, RpcOrigin,
-};
 pub use sensitive::{
     PolicySanitizer, ProjectionLimits, Sanitization, SanitizationContext, SanitizationTarget,
     SanitizedValue, Sanitizer,
@@ -67,13 +71,13 @@ pub mod __macro {
     /// ABI version used by fusen-rs 0.9 generated code.
     pub mod v1 {
         pub use crate::client::ServiceClient;
-        pub use crate::interface::{RpcField, RpcFieldSource, encode_argument, http_method};
+        pub use crate::interface::{ArgumentField, ArgumentSource, encode_argument, http_method};
         pub use crate::service::{
             IntoServerService, PreparedService, ServerInvocation, ServerService, method_not_found,
         };
         pub use crate::{
-            ClientBuilder, ClientRuntime, Middleware, MiddlewareFuture, RpcArguments, RpcCall,
-            RpcError, RpcResponse, WireProtocol,
+            Arguments, Call, ClientBuilder, ClientRuntime, Error, Interceptor, InterceptorFuture,
+            Response,
         };
         pub use fusen_contract::{
             MethodDescriptor, MethodId, MethodSensitivity, SensitiveArgument, SensitiveField,

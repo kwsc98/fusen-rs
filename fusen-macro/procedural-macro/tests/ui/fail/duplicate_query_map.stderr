@@ -1,0 +1,11 @@
+error: a service invocation method may declare at most one #[param(query_map)] parameter
+  --> tests/ui/fail/duplicate_query_map.rs:12:17
+   |
+12 |         #[param(query_map)] second: String,
+   |                 ^^^^^^^^^
+
+error: first map parameter declared here
+  --> tests/ui/fail/duplicate_query_map.rs:11:17
+   |
+11 |         #[param(query_map)] first: String,
+   |                 ^^^^^^^^^

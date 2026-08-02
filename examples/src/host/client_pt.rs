@@ -3,7 +3,9 @@
 use std::{env, io, time::Instant};
 
 use examples::{DemoService, DemoServiceClient, RequestDto};
-use fusen_rs::{ClientRuntime, contract::WireProtocol};
+use fusen_rs::{
+    ClientRuntime, EndpointCapabilities, HttpBindingId, HttpVersionPolicy, HttpVersionSet,
+};
 use tokio::task::JoinSet;
 
 const DEFAULT_CONCURRENCIES: &[usize] = &[1, 100];
@@ -13,24 +15,33 @@ const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8081";
 const REQUEST_VALUE: &str = "benchmark";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum BenchmarkProtocol {
+enum BenchmarkTransport {
     Http1,
-    Http2,
+    H2c,
 }
 
-impl BenchmarkProtocol {
+impl BenchmarkTransport {
     fn label(self) -> &'static str {
         match self {
             Self::Http1 => "HTTP/1.1",
-            Self::Http2 => "HTTP/2",
+            Self::H2c => "h2c",
         }
     }
 
-    fn wire_protocol(self) -> WireProtocol {
+    fn http_version_policy(self) -> HttpVersionPolicy {
         match self {
-            Self::Http1 => WireProtocol::SpringCloudV1,
-            Self::Http2 => WireProtocol::FusenV1,
+            Self::Http1 => HttpVersionPolicy::Http1,
+            Self::H2c => HttpVersionPolicy::H2c,
         }
+    }
+
+    fn capabilities(self) -> EndpointCapabilities {
+        let versions = match self {
+            Self::Http1 => HttpVersionSet::HTTP_1_1,
+            Self::H2c => HttpVersionSet::HTTP_2,
+        };
+        EndpointCapabilities::new(versions, [HttpBindingId::default()], true)
+            .expect("benchmark endpoint capabilities are valid")
     }
 }
 
@@ -51,14 +62,14 @@ struct TaskStats {
 }
 
 struct BenchmarkResult {
-    protocol: BenchmarkProtocol,
+    transport: BenchmarkTransport,
     stats: TaskStats,
     elapsed_seconds: f64,
     request_body_bytes: u64,
 }
 
 struct BenchmarkSummary {
-    protocol: BenchmarkProtocol,
+    transport: BenchmarkTransport,
     concurrency: usize,
     median_qps: f64,
     median_successful_qps: f64,
@@ -102,8 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         str: REQUEST_VALUE.to_owned(),
     })?
     .len() as u64;
-    let protocols = benchmark_protocols()?;
-    let mut summaries = Vec::with_capacity(protocols.len() * concurrencies.len());
+    let transports = benchmark_transports()?;
+    let mut summaries = Vec::with_capacity(transports.len() * concurrencies.len());
     let mut failures = 0_u64;
     for concurrency in concurrencies {
         let planned_requests = concurrency
@@ -116,20 +127,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             server_url: server_url.clone(),
             request_body_bytes,
         };
-        for protocol in protocols.iter().copied() {
+        for transport in transports.iter().copied() {
             let runtime = ClientRuntime::builder().build()?;
             let client = DemoServiceClient::builder(&runtime)
                 .direct(&config.server_url)
-                .protocol(protocol.wire_protocol())
+                .http_version_policy(transport.http_version_policy())
+                .direct_capabilities(transport.capabilities())
                 .connect()
                 .await?;
 
-            // Warm each protocol at benchmark concurrency before timing steady-state RPCs.
+            // Warm each transport at benchmark concurrency before timing steady-state invocations.
             warm_up(&client, config.concurrency).await?;
 
             let mut results = Vec::with_capacity(rounds);
             for round in 1..=rounds {
-                let result = run_benchmark(&client, protocol, &config).await?;
+                let result = run_benchmark(&client, transport, &config).await?;
                 failures = failures.saturating_add(result.stats.failed);
                 print_result(&config, &result, round, rounds);
                 results.push(result);
@@ -172,7 +184,7 @@ async fn warm_up(
 
 async fn run_benchmark(
     client: &DemoServiceClient,
-    protocol: BenchmarkProtocol,
+    transport: BenchmarkTransport,
     config: &BenchmarkConfig,
 ) -> Result<BenchmarkResult, tokio::task::JoinError> {
     let started = Instant::now();
@@ -218,7 +230,7 @@ async fn run_benchmark(
         }
     }
     Ok(BenchmarkResult {
-        protocol,
+        transport,
         stats,
         elapsed_seconds: started.elapsed().as_secs_f64(),
         request_body_bytes: config.request_body_bytes,
@@ -236,7 +248,7 @@ fn print_result(config: &BenchmarkConfig, result: &BenchmarkResult, round: usize
 
     println!(
         "\n{} 压测结果，第 {round}/{rounds} 轮（不包含并发预热请求）",
-        result.protocol.label(),
+        result.transport.label(),
     );
     println!("  服务地址:             {}", config.server_url);
     println!("  并发任务数:           {}", config.concurrency);
@@ -276,12 +288,12 @@ fn print_result(config: &BenchmarkConfig, result: &BenchmarkResult, round: usize
 }
 
 fn summarize(results: &[BenchmarkResult], concurrency: usize) -> BenchmarkSummary {
-    let protocol = results
+    let transport = results
         .first()
         .expect("at least one benchmark round is required")
-        .protocol;
+        .transport;
     BenchmarkSummary {
-        protocol,
+        transport,
         concurrency,
         median_qps: median(results.iter().map(BenchmarkResult::qps)),
         median_successful_qps: median(results.iter().map(BenchmarkResult::successful_qps)),
@@ -292,7 +304,7 @@ fn summarize(results: &[BenchmarkResult], concurrency: usize) -> BenchmarkSummar
 fn print_summary(summary: &BenchmarkSummary, rounds: usize) {
     println!(
         "\n{} 汇总（并发 {}，{rounds} 轮中位数）",
-        summary.protocol.label(),
+        summary.transport.label(),
         summary.concurrency
     );
     println!("  总 QPS:               {:.2}", summary.median_qps);
@@ -315,47 +327,47 @@ fn print_comparisons(summaries: &[BenchmarkSummary]) {
     concurrencies.dedup();
     for concurrency in concurrencies {
         let http1 = summaries.iter().find(|summary| {
-            summary.concurrency == concurrency && summary.protocol == BenchmarkProtocol::Http1
+            summary.concurrency == concurrency && summary.transport == BenchmarkTransport::Http1
         });
-        let http2 = summaries.iter().find(|summary| {
-            summary.concurrency == concurrency && summary.protocol == BenchmarkProtocol::Http2
+        let h2c = summaries.iter().find(|summary| {
+            summary.concurrency == concurrency && summary.transport == BenchmarkTransport::H2c
         });
-        let (Some(http1), Some(http2)) = (http1, http2) else {
+        let (Some(http1), Some(h2c)) = (http1, h2c) else {
             continue;
         };
-        print_comparison(http1, http2);
+        print_comparison(http1, h2c);
     }
 }
 
-fn print_comparison(http1: &BenchmarkSummary, http2: &BenchmarkSummary) {
+fn print_comparison(http1: &BenchmarkSummary, h2c: &BenchmarkSummary) {
     let qps_ratio = if http1.median_successful_qps == 0.0 {
         0.0
     } else {
-        http2.median_successful_qps / http1.median_successful_qps
+        h2c.median_successful_qps / http1.median_successful_qps
     };
     let throughput_ratio = if http1.median_throughput_mib == 0.0 {
         0.0
     } else {
-        http2.median_throughput_mib / http1.median_throughput_mib
+        h2c.median_throughput_mib / http1.median_throughput_mib
     };
 
     println!(
-        "\nHTTP/1.1 与 HTTP/2 对比（并发 {}，相同负载、顺序执行）",
+        "\nHTTP/1.1 与 h2c 对比（并发 {}，相同 binding、负载与执行顺序）",
         http1.concurrency
     );
     println!("  HTTP/1.1 成功 QPS:    {:.2}", http1.median_successful_qps);
-    println!("  HTTP/2 成功 QPS:      {:.2}", http2.median_successful_qps);
-    println!("  HTTP/2 / HTTP/1.1:    {qps_ratio:.3}x QPS");
+    println!("  h2c 成功 QPS:         {:.2}", h2c.median_successful_qps);
+    println!("  h2c / HTTP/1.1:       {qps_ratio:.3}x QPS");
     println!(
         "  HTTP/1.1 JSON 吞吐:  {:.2} MiB/s",
         http1.median_throughput_mib
     );
     println!(
-        "  HTTP/2 JSON 吞吐:    {:.2} MiB/s",
-        http2.median_throughput_mib
+        "  h2c JSON 吞吐:       {:.2} MiB/s",
+        h2c.median_throughput_mib
     );
-    println!("  HTTP/2 / HTTP/1.1:    {throughput_ratio:.3}x JSON 吞吐");
-    println!("  注: 使用各轮中位数，协议仍为顺序执行，应关注系统噪声");
+    println!("  h2c / HTTP/1.1:       {throughput_ratio:.3}x JSON 吞吐");
+    println!("  注: 使用各轮中位数，transport 仍为顺序执行，应关注系统噪声");
 }
 
 fn median(values: impl IntoIterator<Item = f64>) -> f64 {
@@ -369,12 +381,12 @@ fn median(values: impl IntoIterator<Item = f64>) -> f64 {
     }
 }
 
-fn benchmark_protocols() -> Result<Vec<BenchmarkProtocol>, io::Error> {
+fn benchmark_transports() -> Result<Vec<BenchmarkTransport>, io::Error> {
     let value = env::var("PT_PROTOCOL").unwrap_or_else(|_| "h2".to_owned());
     match value.to_ascii_lowercase().as_str() {
-        "h1" | "http1" | "http/1.1" => Ok(vec![BenchmarkProtocol::Http1]),
-        "h2" | "http2" | "http/2" => Ok(vec![BenchmarkProtocol::Http2]),
-        "both" => Ok(vec![BenchmarkProtocol::Http1, BenchmarkProtocol::Http2]),
+        "h1" | "http1" | "http/1.1" => Ok(vec![BenchmarkTransport::Http1]),
+        "h2" | "http2" | "http/2" | "h2c" => Ok(vec![BenchmarkTransport::H2c]),
+        "both" => Ok(vec![BenchmarkTransport::Http1, BenchmarkTransport::H2c]),
         _ => Err(invalid_input(
             "PT_PROTOCOL 仅支持 h1、h2 或 both（默认 h2）",
         )),

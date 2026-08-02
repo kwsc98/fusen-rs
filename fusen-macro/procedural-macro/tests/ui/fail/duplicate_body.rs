@@ -1,7 +1,7 @@
 use fusen_procedural_macro::interface;
 
-struct RpcError;
-struct RpcResponse<T>(T);
+struct Error;
+struct Response<T>(T);
 
 #[interface(name = "duplicate-body")]
 trait DuplicateBody {
@@ -10,7 +10,7 @@ trait DuplicateBody {
         &self,
         #[param(body)] first: String,
         #[param(body)] second: String,
-    ) -> Result<RpcResponse<()>, RpcError>;
+    ) -> Result<Response<()>, Error>;
 }
 
 fn main() {}
