@@ -106,8 +106,14 @@ pub trait UserApi {
 }
 ```
 
-Service interface trait 必须是非泛型 async trait 方法集合，receiver 为 `&self`；每个方法可接收零到多个 owned 具名参数，返回值精确为 `Result<Response<T>, Error>`。每个方法必须声明 `#[method(method = "...", path = "...")]`；可选 `consumes`/`produces` 覆盖缺省 `application/json` media type。生成 Client 用该 `HttpOperation` 构造请求，生成 Server 用它匹配路由，重试资格也按标准 HTTP method 保守推导，不接受用户自报的幂等语义。
+Service interface trait 必须是非泛型 async trait 方法集合，receiver 为 `&self`；每个方法可接收零到多个 owned 具名参数，返回值精确为 `Result<Response<T>, Error>`。每个方法必须声明 `#[method(method = "...", path = "...")]`；可选 `consumes`/`produces` 接受语法合法的 MIME，并覆盖缺省 `application/json`。`HttpOperation` 本身保持 binding-neutral；内置 `http-json-v1` 在 Client/Server build 阶段预检并只接受 `application/json` 或具体的 `application/<subtype>+json`（可带参数），其他 MIME 在网络 I/O 前失败。生成 Client 用该 `HttpOperation` 构造请求，生成 Server 用它匹配路由，重试资格也按标准 HTTP method 保守推导，不接受用户自报的幂等语义。
 
-参数 wire name 与 path 中的 `{placeholder}` 同名时自动推断为 path；其余 GET、HEAD、OPTIONS、DELETE 参数默认为 scalar query；其余 POST、PUT、PATCH 参数成为同一个 JSON body object 的字段，单字段也保持 object 形状。`#[param(path)]` 可显式确认 path 参数并要求 wire name 匹配同名占位符；`#[param(query)]` 可覆盖默认位置，`#[param(query, repeated)]` 声明序列化为 JSON array 的重复 query；`#[param(header)]`、`#[param(cookie)]`、`#[param(query_map)]` 与 `#[param(header_map)]` 显式映射其他 HTTP 来源；每个方法最多声明一个 query map 和一个 header map。`#[param(body)]` 声明唯一 raw JSON body，`#[param(name = "...")]` 修改 wire name。需要 headers、extensions 或框架调用信息时，可额外声明一个类型为 `Call` 的 `#[param(context)]` 参数；它不进入 wire。具名来源中的 wire name 必须唯一；map 来源不接受 `name`。Raw body 不能与 body field 混用；非法映射、重复名称、非规范 route 和 path 不匹配均在宏展开阶段失败；serialized value 与声明 cardinality 不一致时在网络 I/O 前本地失败。
+参数 wire name 与 path 中的 `{placeholder}` 同名时自动推断为 path；其余 GET、HEAD、OPTIONS、DELETE 参数默认为 scalar query；其余 POST、PUT、PATCH 参数成为同一个 JSON body object 的字段，单字段也保持 object 形状。`#[param(path)]` 可显式确认 path 参数并要求 wire name 匹配同名占位符；`#[param(query)]` 可覆盖默认位置，`#[param(query, repeated)]` 声明序列化为 JSON array 的重复 query；`#[param(header)]`、`#[param(cookie)]`、`#[param(query_map)]` 与 `#[param(header_map)]` 显式映射其他 HTTP 来源；每个方法最多声明一个 query map 和一个 header map。`#[param(body_field)]` 显式声明 synthesized JSON object 中的字段，可用 `name` 改名但禁止 `repeated`；`#[param(body)]` 声明唯一 raw JSON body。GET、HEAD、OPTIONS 禁止两种 body，DELETE 默认 query 但允许显式 body/body_field，HEAD 必须返回 `Response<()>`。需要 headers、extensions 或框架调用信息时，可额外声明一个类型为 `Call` 的 `#[param(context)]` 参数；它不进入 wire。具名来源中的 wire name 必须唯一；map 来源不接受 `name`。Raw body 不能与 inferred 或 explicit body field 混用；非法映射、重复名称、非规范 route 和 path 不匹配均在宏展开阶段失败；serialized value 与声明 cardinality 不一致时在网络 I/O 前本地失败。
 
 `http-json-v1` 直接按声明的 HTTP 来源编码参数，成功响应为 raw body，不使用私有 `arguments`/`result` envelope。宏只生成 `*Client`、`*Server<T>` 和私有 dispatch；生成 Client 与用户 Handler 实现同一个 trait，Client 使用通用 `ClientBuilder<GeneratedClient>`。生成代码只依赖版本化 `fusen_rs::__macro::v1` ABI，并支持应用重命名 runtime crate。
+
+`__macro::v1` 是 doc-hidden 的 macro/runtime ABI，不是用户扩展 SPI；但 Cargo 允许组合的
+任意 `fusen-procedural-macro` 与 `fusen-rs` 0.9.x 版本必须保持编译兼容。Patch 版本
+不能原地删除或改变生成代码依赖的 `v1` item。需要不兼容形状时新增版本化 ABI，
+并在新的 minor 版本协调 macro/runtime 依赖范围；renamed-runtime package consumer
+持续验证 crate rename 与 ABI 路径。

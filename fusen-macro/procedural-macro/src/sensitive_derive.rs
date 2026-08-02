@@ -411,20 +411,19 @@ fn is_recursive_path(path: &syn::Path, type_ident: &Ident) -> bool {
     if path.leading_colon.is_some() {
         return false;
     }
-    let Some(first) = path.segments.first() else {
-        return false;
-    };
-    if first.ident == "Self" {
-        return true;
+    match path.segments.len() {
+        1 => path
+            .segments
+            .first()
+            .is_some_and(|segment| segment.ident == "Self" || segment.ident == *type_ident),
+        2 => {
+            let mut segments = path.segments.iter();
+            let first = segments.next().expect("the path contains two segments");
+            let last = segments.next().expect("the path contains two segments");
+            first.ident == "self" && last.ident == *type_ident
+        }
+        _ => false,
     }
-    let Some(last) = path.segments.last() else {
-        return false;
-    };
-    if last.ident != *type_ident {
-        return false;
-    }
-    path.segments.len() == 1
-        || matches!(first.ident.to_string().as_str(), "self" | "crate" | "super")
 }
 
 #[derive(Default)]
@@ -1120,21 +1119,21 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_qualified_recursive_paths_without_claiming_external_names() {
+    fn recognizes_only_unambiguous_recursive_paths() {
         let type_ident = Ident::new("Node", Span::call_site());
-        for tokens in [
-            quote!(Node<T>),
-            quote!(Self),
-            quote!(Self::Value),
-            quote!(self::Node<T>),
-            quote!(crate::dto::Node<T>),
-            quote!(super::super::Node<T>),
-        ] {
+        for tokens in [quote!(Node<T>), quote!(Self), quote!(self::Node<T>)] {
             let ty: Type = syn::parse2(tokens).unwrap();
             assert!(is_direct_recursive_type(&ty, &type_ident));
         }
 
-        let external: Type = syn::parse2(quote!(external::Node<T>)).unwrap();
-        assert!(!is_direct_recursive_type(&external, &type_ident));
+        for tokens in [
+            quote!(Self::Value),
+            quote!(external::Node<T>),
+            quote!(crate::dto::Node<T>),
+            quote!(super::super::Node<T>),
+        ] {
+            let ty: Type = syn::parse2(tokens).unwrap();
+            assert!(!is_direct_recursive_type(&ty, &type_ident));
+        }
     }
 }

@@ -1,6 +1,6 @@
 # fusen-rs Roadmap
 
-> 最后审阅：2026-07-28
+> 最后审阅：2026-08-02
 >
 > 最后外部检查候选：`9a33478`，尚未通过全部发布门禁，也未形成兼容性 tag。
 
@@ -20,8 +20,8 @@ M0.11 的冻结 SHA 上重跑全部门禁。
 
 ## Current Snapshot
 
-- 所有发布 crate 已使用 `0.9.0`，CHANGELOG 已建立 `0.9.0` section 但发布日期
-  仍为 placeholder，仓库没有 `v0.9.0` tag。
+- 所有发布 crate 已使用 `0.9.0`，CHANGELOG 已将 `0.9.0` 日期固定为
+  `2026-08-02`，仓库没有 `v0.9.0` tag。
 - [`9a33478` 的 CI](https://github.com/kwsc98/fusen-rs/actions/runs/30269435114) 中，format、
   MSRV clippy/test/doc、stable Linux/macOS、全部 feature matrix、release-contracts、
   lifecycle repeat 和真实 Nacos 已通过；stable Windows 的 workspace tests 失败。
@@ -49,7 +49,7 @@ M0.11 的冻结 SHA 上重跑全部门禁。
   `calibration-required`，必须先在固定 runner 上对干净提交生成五轮 baseline。
 - 发布 runbook 已统一 `v0.9.0`，并固定候选证据、七 crate 分层发布、registry
   传播等待、registry-only consumer、失败恢复和 yank/0.9.1 原则；CHANGELOG 日期
-  必须在 M0.11 冻结前填写。
+  已在 M0.11 冻结前填写。
 
 ## Milestone M0: Publish 0.9.0
 
@@ -77,7 +77,7 @@ M0.11 的冻结 SHA 上重跑全部门禁。
 ## Recommended Next Iteration
 
 1. 经维护者确认后推送当前干净候选，运行完整 CI 和 Nightly；若 Windows 仍失败，
-   下载 `windows-workspace-tests-<sha>-<attempt>` artifact 取得具体测试日志。
+   下载 `workspace-tests-Windows-<arch>-<sha>-<attempt>` artifact 取得具体测试日志。
 2. 只修复 Windows 的跨平台根因，不跳过测试或放宽断言；让同一 SHA 的 MSRV、
    Linux、macOS、Windows、security、Nacos、package consumer、Nightly fuzz/E2E 全绿。
 3. 在固定 `fusen-benchmark-0-9-reference` runner 上以 `calibrate` mode 对干净提交
@@ -88,7 +88,7 @@ M0.11 的冻结 SHA 上重跑全部门禁。
 
 - 基于 0.9 tag 接入 `cargo-semver-checks`，保护 Rust API、宏和 `http-json-v1` binding。
 - patch 版本只接受兼容修复、安全修复、fuzz 回归和文档校正。
-- 移除 package consumer 对 `0.9.0` 的硬编码，并加强 Actions/container 固定。
+- 移除 package consumer 对 `0.9.0` 的硬编码，并通过 Dependabot PR 审查升级已固定的 Actions/container digest。
 - 清理已被 0.9 实现取代的旧 issues；新需求必须重新按当前架构评估。
 
 ## Candidate, Not Committed

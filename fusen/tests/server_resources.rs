@@ -1,5 +1,6 @@
 //! Real-socket coverage for server admission and request-body resource ordering.
 
+use bytes::Bytes;
 use fusen_register::{
     RegistrationHandle, RegistrationRequest, Registry, SubscriptionHandle, SubscriptionRequest,
     error::{RegistryError, RegistryErrorKind, RegistryOperation},
@@ -10,8 +11,14 @@ use fusen_rs::{
     HttpServerConfig, Interceptor, InterceptorFuture, Next, Response, RetryConfig, Server,
     ServerConfig, ServerRequestConfig, ServerState, interface,
 };
+use futures_util::{StreamExt as _, stream};
+use http::{Method, Request, StatusCode, Version};
+use http_body_util::{BodyExt, StreamBody, combinators::UnsyncBoxBody};
+use hyper::body::Frame;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::Deserialize;
 use std::{
+    convert::Infallible,
     io,
     net::{IpAddr, SocketAddr},
     sync::{
@@ -41,6 +48,12 @@ trait ResourceService {
 
     #[fusen_rs::method(method = "GET", path = "/resources/hold/{value}")]
     async fn hold(&self, value: String) -> Result<Response<String>, Error>;
+
+    #[fusen_rs::method(method = "HEAD", path = "/resources/health")]
+    async fn health(&self) -> Result<Response<()>, Error>;
+
+    #[fusen_rs::method(method = "OPTIONS", path = "/resources/options")]
+    async fn options(&self) -> Result<Response<String>, Error>;
 }
 
 struct ResourceServiceImpl {
@@ -68,6 +81,14 @@ impl ResourceService for ResourceServiceImpl {
                 .expect("test release semaphore remains open");
         }
         Ok(Response::new(value))
+    }
+
+    async fn health(&self) -> Result<Response<()>, Error> {
+        Ok(Response::new(()))
+    }
+
+    async fn options(&self) -> Result<Response<String>, Error> {
+        Ok(Response::new("options".to_owned()))
     }
 }
 
@@ -146,6 +167,133 @@ async fn head_rejections_return_without_receiving_the_declared_body() {
     )
     .await;
     assert_problem(&oversized, 413, "payload_too_large");
+
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_body_routes_reject_chunked_http1_before_sending_continue() {
+    let server = start_resource_server(ServerConfig::default()).await;
+    let addr = server.local_addr();
+
+    for (method, path) in [
+        ("GET", "/resources/hold/chunked"),
+        ("HEAD", "/resources/health"),
+        ("OPTIONS", "/resources/options"),
+    ] {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "{}4\r\nnull\r\n0\r\n\r\n",
+            chunked_request_head(method, path, "chunked-no-body")
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        if method == "HEAD" {
+            assert_eq!(read_response_status(&mut stream).await, 400);
+        } else {
+            let response = read_response(&mut stream).await;
+            assert_problem(&response, 400, "unexpected_body");
+        }
+    }
+
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_body_routes_reject_http2_data_without_content_length() {
+    let server = start_resource_server(ServerConfig::default()).await;
+    let addr = server.local_addr();
+
+    for (method, path) in [
+        (Method::GET, "/resources/hold/h2-data"),
+        (Method::HEAD, "/resources/health"),
+        (Method::OPTIONS, "/resources/options"),
+    ] {
+        let body = StreamBody::new(
+            stream::once(async { Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"null"))) })
+                .chain(stream::pending()),
+        )
+        .boxed_unsync();
+        let (status, response_body) = h2_exchange(addr, method.clone(), path, body).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        if method == Method::HEAD {
+            assert!(response_body.is_empty());
+        } else {
+            let response = RawResponse {
+                status: status.as_u16(),
+                request_id: None,
+                body: response_body.to_vec(),
+            };
+            assert_problem(&response, 400, "unexpected_body");
+        }
+    }
+
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_length_empty_http2_bodies_remain_valid_for_no_body_routes() {
+    let server = start_resource_server(ServerConfig::default()).await;
+    let addr = server.local_addr();
+
+    for (method, path, expected) in [
+        (Method::GET, "/resources/hold/h2-empty", Some("h2-empty")),
+        (Method::HEAD, "/resources/health", None),
+        (Method::OPTIONS, "/resources/options", Some("options")),
+    ] {
+        let body =
+            StreamBody::new(stream::empty::<Result<Frame<Bytes>, Infallible>>()).boxed_unsync();
+        let (status, response_body) = h2_exchange(addr, method, path, body).await;
+
+        assert_eq!(status, StatusCode::OK);
+        match expected {
+            Some(expected) => {
+                assert_eq!(
+                    serde_json::from_slice::<String>(&response_body).unwrap(),
+                    expected
+                )
+            }
+            None => assert!(response_body.is_empty()),
+        }
+    }
+
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_http2_body_validation_obeys_deadline_and_releases_resources() {
+    let config = ServerConfig::builder()
+        .request(
+            ServerRequestConfig::builder()
+                .timeout(Duration::from_millis(250))
+                .max_concurrent_requests(1)
+                .build()
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let server = start_resource_server(config).await;
+    let addr = server.local_addr();
+    let body =
+        StreamBody::new(stream::pending::<Result<Frame<Bytes>, Infallible>>()).boxed_unsync();
+
+    let (status, response_body) =
+        h2_exchange(addr, Method::GET, "/resources/hold/pending", body).await;
+    let response = RawResponse {
+        status: status.as_u16(),
+        request_id: None,
+        body: response_body.to_vec(),
+    };
+    assert_problem(&response, 504, "deadline_exceeded");
+
+    let recovered = exchange(
+        addr,
+        request_head("GET", "/resources/hold/recovered", 0, "recovered", None),
+        &[],
+    )
+    .await;
+    assert_eq!(recovered.status, 200);
 
     server.shutdown().await.unwrap();
 }
@@ -608,6 +756,19 @@ fn request_head_expecting_continue(
     )
 }
 
+fn chunked_request_head(method: &str, path: &str, request_id: &str) -> String {
+    format!(
+        "{method} {path} HTTP/1.1\r\n\
+         Host: localhost\r\n\
+         Content-Type: application/json\r\n\
+         Transfer-Encoding: chunked\r\n\
+         Expect: 100-continue\r\n\
+         x-request-id: {request_id}\r\n\
+         Connection: close\r\n\
+         \r\n"
+    )
+}
+
 fn request_head_with_connection(
     method: &str,
     path: &str,
@@ -674,10 +835,76 @@ async fn exchange(addr: SocketAddr, head: String, body: &[u8]) -> RawResponse {
     read_response(&mut stream).await
 }
 
+async fn h2_exchange(
+    addr: SocketAddr,
+    method: Method,
+    path: &str,
+    body: UnsyncBoxBody<Bytes, Infallible>,
+) -> (StatusCode, Bytes) {
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let (mut sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+        .handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    let connection = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let request = Request::builder()
+        .method(method)
+        .version(Version::HTTP_2)
+        .uri(format!("http://{addr}{path}"))
+        .header("content-type", "application/json")
+        .header("x-request-id", "h2-no-body-test")
+        .body(body)
+        .unwrap();
+    assert!(
+        !request.headers().contains_key("content-length"),
+        "fixture must exercise an HTTP/2 body without Content-Length"
+    );
+    let response = tokio::time::timeout(Duration::from_secs(2), sender.send_request(request))
+        .await
+        .expect("server must answer the HTTP/2 request")
+        .unwrap();
+    let status = response.status();
+    let body = tokio::time::timeout(Duration::from_secs(2), response.into_body().collect())
+        .await
+        .expect("server HTTP/2 response body must complete")
+        .unwrap()
+        .to_bytes();
+    drop(sender);
+    connection.abort();
+    let _ = connection.await;
+    (status, body)
+}
+
 async fn read_response(stream: &mut TcpStream) -> RawResponse {
     try_read_response(stream)
         .await
         .expect("server response must be readable")
+}
+
+async fn read_response_status(stream: &mut TcpStream) -> u16 {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let mut received = Vec::new();
+        let mut buffer = [0u8; 512];
+        loop {
+            let read = stream.read(&mut buffer).await.unwrap();
+            assert!(read > 0, "HTTP response ended before its headers completed");
+            received.extend_from_slice(&buffer[..read]);
+            let Some(head_end) = find_bytes(&received, b"\r\n\r\n") else {
+                continue;
+            };
+            return std::str::from_utf8(&received[..head_end])
+                .unwrap()
+                .lines()
+                .next()
+                .and_then(|line| line.split_ascii_whitespace().nth(1))
+                .and_then(|status| status.parse::<u16>().ok())
+                .expect("server returned a valid HTTP status line");
+        }
+    })
+    .await
+    .expect("server must reject before waiting for a chunked request body")
 }
 
 async fn try_read_response(stream: &mut TcpStream) -> io::Result<RawResponse> {

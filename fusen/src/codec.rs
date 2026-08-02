@@ -61,7 +61,7 @@ impl std::fmt::Debug for EncodedRequest {
         formatter
             .debug_struct("EncodedRequest")
             .field("method", &self.method)
-            .field("path_and_query", &self.path_and_query)
+            .field("path_and_query", &"<omitted>")
             .field("header_count", &self.headers.len())
             .field("body_length", &self.body.len())
             .finish()
@@ -211,4 +211,62 @@ pub trait ErrorDecoder: Send + Sync + 'static {
     /// The runtime attributes the returned error to the remote endpoint, attaches the trusted
     /// invocation request ID, and replaces framework-owned response headers.
     fn decode(&self, method: &'static MethodDescriptor, response: BufferedResponse) -> Error;
+}
+
+impl<T> RequestEncoder for std::sync::Arc<T>
+where
+    T: RequestEncoder + ?Sized,
+{
+    fn encode(&self, request: RequestEncoding<'_>) -> Result<EncodedRequest, Error> {
+        (**self).encode(request)
+    }
+}
+
+impl<T> ResponseDecoder for std::sync::Arc<T>
+where
+    T: ResponseDecoder + ?Sized,
+{
+    fn decode(
+        &self,
+        method: &'static MethodDescriptor,
+        response: BufferedResponse,
+    ) -> Result<Response<Body>, Error> {
+        (**self).decode(method, response)
+    }
+}
+
+impl<T> ErrorDecoder for std::sync::Arc<T>
+where
+    T: ErrorDecoder + ?Sized,
+{
+    fn decode(&self, method: &'static MethodDescriptor, response: BufferedResponse) -> Error {
+        (**self).decode(method, response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::header::AUTHORIZATION;
+
+    #[test]
+    fn encoded_request_debug_never_expands_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            http::HeaderValue::from_static("private-authorization"),
+        );
+        let request = EncodedRequest::new(
+            Method::POST,
+            "/users/private-path?token=private-query",
+            headers,
+            Bytes::from_static(b"private-body"),
+        );
+
+        let debug = format!("{request:?}");
+        assert!(debug.contains("method: POST"));
+        assert!(debug.contains("header_count: 1"));
+        assert!(debug.contains("body_length: 12"));
+        assert!(!debug.contains("private-"));
+    }
 }

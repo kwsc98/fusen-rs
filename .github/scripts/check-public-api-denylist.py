@@ -6,6 +6,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 CRATES = {
@@ -129,7 +130,10 @@ REMOVED_PUBLIC_MODULES = {
     "fusen_rs/client/index.html",
     "fusen_rs/client/cluster/index.html",
     "fusen_rs/error/index.html",
+    "fusen_rs/interface/index.html",
     "fusen_rs/middleware/index.html",
+    "fusen_rs/__macro/index.html",
+    "fusen_rs/__macro/v1/index.html",
 }
 REMOVED_ROOT_ITEMS = {
     ("fusen_config", "Error"),
@@ -156,8 +160,39 @@ ALLOWED_PUBLIC_TRAITS = {
         "SensitiveFields",
     },
 }
+MACRO_V1_EXPORTS = {
+    "ArgumentField",
+    "ArgumentSource",
+    "Arguments",
+    "Call",
+    "ClientBuilder",
+    "ClientRuntime",
+    "Error",
+    "Interceptor",
+    "InterceptorFuture",
+    "IntoServerService",
+    "MethodDescriptor",
+    "MethodId",
+    "MethodSensitivity",
+    "PreparedService",
+    "Response",
+    "SensitiveArgument",
+    "SensitiveFields",
+    "SensitiveShape",
+    "SensitivityKind",
+    "ServerInvocation",
+    "ServerService",
+    "ServiceClient",
+    "ServiceDescriptor",
+    "ServiceSelector",
+    "encode_argument",
+    "http",
+    "http_method",
+    "method_not_found",
+}
 
 REMOVED_METHODS = {
+    "ArgumentField": {"is_repeated", "name", "source"},
     "AttemptFinishedEvent": {"protocol"},
     "CallInfo": {"protocol"},
     "ClientBuilder": {"attempt_middleware", "middleware", "protocol"},
@@ -209,12 +244,31 @@ OLD_WIRE_VARIANTS = (
     "SpringCloudV1",
 )
 REMOVED_MACROS = {"service"}
+RUST_IDENTIFIER = r"(?:r#)?[^\W\d]\w*"
 PUBLIC_DEFINITION = re.compile(
-    r"\bpub\s+(?:(?:async|const|unsafe)\s+)*"
-    r"(?P<kind>enum|fn|mod|static|struct|trait|type|union)\s+"
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"\bpub\s+"
+    r"(?:(?:async|auto|const|default|safe|unsafe)\s+)*"
+    r"(?:(?:extern(?:\s+\"(?:\\.|[^\"\\])*\")?)\s+)?"
+    r"(?P<kind>const|enum|fn|macro|mod|static|struct|trait|type|union)\s+"
+    r"(?:mut\s+)?"
+    rf"(?P<name>{RUST_IDENTIFIER})"
 )
 PUBLIC_USE = re.compile(r"\bpub\s+use\s+(?P<items>[^;]+);", re.DOTALL)
+PUBLIC_EXTERN_CRATE = re.compile(
+    rf"\bpub\s+extern\s+crate\s+(?P<source>{RUST_IDENTIFIER})"
+    rf"(?:\s+as\s+(?P<alias>{RUST_IDENTIFIER}))?"
+)
+PUBLIC_MACRO_RULES = re.compile(
+    rf"\bpub\s+macro_rules!\s*(?P<name>{RUST_IDENTIFIER})"
+)
+ATTRIBUTED_MACRO_RULES = re.compile(
+    rf"(?P<attributes>(?:#\s*\[[^\]]*\]\s*)+)"
+    rf"macro_rules!\s*(?P<name>{RUST_IDENTIFIER})"
+)
+MACRO_EXPORT_ATTRIBUTE = re.compile(r"#\s*\[\s*macro_export\b")
+DOC_HIDDEN_MACRO_MODULE = re.compile(
+    r"#\[\s*doc\s*\(\s*hidden\s*\)\s*\]\s*pub\s+mod\s+__macro\b"
+)
 WIRE_VARIANT = re.compile(
     r"^\s*(?P<name>FusenV1|SpringCloudV1)\s*(?:,|\(|\{)", re.MULTILINE
 )
@@ -233,6 +287,119 @@ def parse_args() -> argparse.Namespace:
         help="repository root used to catch doc-hidden public definitions and re-exports",
     )
     return parser.parse_args()
+
+
+def braced_body(source: str, declaration: str) -> Optional[str]:
+    """Returns a declaration body; ABI modules intentionally contain no string literals."""
+    declaration_start = source.find(declaration)
+    if declaration_start == -1:
+        return None
+    opening = source.find("{", declaration_start + len(declaration))
+    if opening == -1:
+        return None
+    depth = 0
+    for index in range(opening, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1 : index]
+    return None
+
+
+def split_top_level(value: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, character in enumerate(value):
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+        elif character == "," and depth == 0:
+            parts.append(value[start:index])
+            start = index + 1
+    parts.append(value[start:])
+    return parts
+
+
+def exported_use_names(use_tree: str) -> set[str]:
+    names: set[str] = set()
+    for branch in split_top_level(use_tree.strip()):
+        branch = branch.strip()
+        if not branch:
+            continue
+        opening = branch.find("{")
+        if opening != -1:
+            closing = branch.rfind("}")
+            if closing == -1:
+                names.add("<invalid-use-tree>")
+            else:
+                names.update(exported_use_names(branch[opening + 1 : closing]))
+            continue
+        if " as " in branch:
+            branch = branch.rsplit(" as ", 1)[1].strip()
+        names.add(normalize_identifier(branch.rsplit("::", 1)[-1].strip()))
+    return names
+
+
+def normalize_identifier(identifier: str) -> str:
+    return identifier.removeprefix("r#")
+
+
+def public_definition_names(source: str) -> set[str]:
+    """Returns names made externally reachable by public Rust item declarations."""
+    names = {
+        normalize_identifier(match.group("name"))
+        for match in PUBLIC_DEFINITION.finditer(source)
+    }
+    names.update(
+        normalize_identifier(match.group("alias") or match.group("source"))
+        for match in PUBLIC_EXTERN_CRATE.finditer(source)
+    )
+    names.update(
+        normalize_identifier(match.group("name"))
+        for match in PUBLIC_MACRO_RULES.finditer(source)
+    )
+    names.update(
+        normalize_identifier(match.group("name"))
+        for match in ATTRIBUTED_MACRO_RULES.finditer(source)
+        if MACRO_EXPORT_ATTRIBUTE.search(match.group("attributes"))
+    )
+    return names
+
+
+def audit_macro_v1(source_root: Path, failures: list[str]) -> None:
+    source = (source_root / "fusen/src/lib.rs").read_text(encoding="utf-8")
+    if DOC_HIDDEN_MACRO_MODULE.search(source) is None:
+        failures.append(
+            "fusen/src/lib.rs: public __macro module must have an immediately preceding "
+            "#[doc(hidden)] attribute"
+        )
+    macro_body = braced_body(source, "pub mod __macro")
+    v1_body = braced_body(macro_body or "", "pub mod v1")
+    if v1_body is None:
+        failures.append("fusen/src/lib.rs: missing versioned __macro::v1 ABI")
+        return
+
+    exports: set[str] = set()
+    for match in PUBLIC_USE.finditer(v1_body):
+        exports.update(exported_use_names(match.group("items")))
+    exports.update(public_definition_names(v1_body))
+
+    missing = sorted(MACRO_V1_EXPORTS - exports)
+    unexpected = sorted(exports - MACRO_V1_EXPORTS)
+    if missing:
+        failures.append(
+            "fusen/src/lib.rs: __macro::v1 is missing approved exports: "
+            + ", ".join(missing)
+        )
+    if unexpected:
+        failures.append(
+            "fusen/src/lib.rs: __macro::v1 exposes unapproved items: "
+            + ", ".join(unexpected)
+        )
 
 
 def main() -> int:
@@ -311,6 +478,7 @@ def main() -> int:
 
     if args.source_root is not None:
         source_root = args.source_root.resolve()
+        audit_macro_v1(source_root, failures)
         for package_path in REMOVED_PACKAGE_PATHS:
             if (source_root / package_path).exists():
                 failures.append(f"{package_path}: removed package is present")

@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-/// Named JSON values used by the versioned wire protocols.
+/// Named JSON values used by the HTTP binding.
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct Arguments(Map<String, Value>);
@@ -74,7 +74,7 @@ pub enum InterceptionStage {
 }
 
 /// Framework metadata bound to a [`Call`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CallInfo {
     request_id: String,
     binding_id: HttpBindingId,
@@ -82,6 +82,19 @@ pub struct CallInfo {
     interface: &'static ServiceDescriptor,
     method: &'static MethodDescriptor,
     deadline: Deadline,
+}
+
+impl fmt::Debug for CallInfo {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CallInfo")
+            .field("request_id", &self.request_id)
+            .field("binding_id", &self.binding_id)
+            .field("http_version", &self.http_version)
+            .field("interface", &self.interface.identity())
+            .field("method", &self.method.invocation_name())
+            .finish()
+    }
 }
 
 impl CallInfo {
@@ -117,11 +130,22 @@ impl CallInfo {
 }
 
 /// Optional call metadata passed explicitly by generated clients and interface handlers.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Call {
     headers: HeaderMap,
     extensions: Extensions,
     call_info: Option<CallInfo>,
+}
+
+impl fmt::Debug for Call {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Call")
+            .field("header_count", &self.headers.len())
+            .field("extension_count", &self.extensions.len())
+            .field("call_info", &self.call_info)
+            .finish()
+    }
 }
 
 impl Call {
@@ -276,12 +300,10 @@ impl<T> fmt::Debug for Response<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Response")
-            .field("body", &"<omitted>")
             .field("status", &self.status)
-            .field("headers", &self.headers)
-            .field("extensions", &self.extensions)
+            .field("header_count", &self.headers.len())
+            .field("extension_count", &self.extensions.len())
             .field("attempts", &self.attempts)
-            .field("runtime", &self.runtime)
             .finish()
     }
 }
@@ -580,20 +602,22 @@ impl fmt::Debug for Context {
             .field("request_id", &self.request_id)
             .field("binding_id", &self.binding_id)
             .field("http_version", &self.http_version)
-            .field("interface", &self.interface)
-            .field("method", &self.method)
-            .field("deadline", &self.deadline)
+            .field("interface", &self.interface.identity())
+            .field("method", &self.method.invocation_name())
             .field("attempt", &self.attempt)
-            .field("endpoint", &self.endpoint)
-            .field("headers", &self.headers)
-            .field("extensions", &self.extensions)
+            .field(
+                "endpoint_instance_id",
+                &self
+                    .endpoint
+                    .as_ref()
+                    .map(fusen_contract::ServiceInstance::instance_id),
+            )
+            .field("header_count", &self.headers.len())
+            .field("extension_count", &self.extensions.len())
             .field(
                 "argument_count",
                 &self.arguments.as_ref().map(|arguments| arguments.len()),
             )
-            .field("response_limit", &self.response_limit)
-            .field("response_wire_overhead", &self.response_wire_overhead)
-            .field("response_budget", &self.response_budget)
             .finish()
     }
 }
@@ -806,8 +830,9 @@ mod tests {
     use super::*;
     use crate::{PolicySanitizer, runtime::budget::ByteBudget};
     use fusen_contract::{
-        HttpBindingId, HttpOperation, MethodId, MethodSensitivity, SensitiveArgument,
-        SensitiveField, SensitiveShape, SensitivityKind, ServiceSelector,
+        EndpointCapabilities, HttpBindingId, HttpOperation, InstanceId, Metadata, MethodId,
+        MethodSensitivity, SensitiveArgument, SensitiveField, SensitiveShape, SensitivityKind,
+        ServiceInstance, ServiceSelector, ServiceWeight,
     };
     use http::Method;
     use serde_json::json;
@@ -876,7 +901,19 @@ mod tests {
             method: service.method(MethodId::new(0)).unwrap(),
             deadline: Deadline::after(Duration::from_secs(1)),
             attempt: None,
-            endpoint: None,
+            endpoint: Some(
+                ServiceInstance::new(
+                    InstanceId::new("sensitive-context-instance").unwrap(),
+                    "http://127.0.0.1:8080".parse().unwrap(),
+                    EndpointCapabilities::default(),
+                    ServiceWeight::default(),
+                )
+                .with_metadata(Metadata::from([(
+                    "credential".into(),
+                    "private-context-metadata-token".into(),
+                )]))
+                .unwrap(),
+            ),
             headers: HeaderMap::new(),
             extensions: Extensions::new(),
             arguments: Some(arguments),
@@ -888,6 +925,7 @@ mod tests {
 
     #[test]
     fn payload_carrier_debug_never_expands_values() {
+        #[derive(Clone)]
         struct PrivateDebug;
 
         impl fmt::Debug for PrivateDebug {
@@ -896,16 +934,45 @@ mod tests {
             }
         }
 
-        let context = context();
+        let mut context = context();
+        context.headers_mut().insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static("private-context-header"),
+        );
+        context.headers_mut().insert(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("session=private-cookie-header"),
+        );
+        context.extensions_mut().insert(PrivateDebug);
+
+        let call = Call::from_server(&context);
+        let mut response = Response::new(PrivateDebug);
+        response.headers_mut().insert(
+            http::header::SET_COOKIE,
+            http::HeaderValue::from_static("session=private-response-header"),
+        );
+        response.extensions_mut().insert(PrivateDebug);
+
         let arguments_debug = format!("{:?}", context.arguments().unwrap());
         let context_debug = format!("{context:?}");
+        let call_debug = format!("{call:?}");
         let body_debug = format!(
             "{:?}",
             Body::from_bytes(Bytes::from_static(b"private-encoded-body"))
         );
-        let response_debug = format!("{:?}", Response::new(PrivateDebug));
+        let response_debug = format!("{response:?}");
 
-        for debug in [arguments_debug, context_debug, body_debug, response_debug] {
+        assert!(!context_debug.contains("deadline"));
+        assert!(!context_debug.contains("response_budget"));
+        assert!(!response_debug.contains("runtime"));
+
+        for debug in [
+            arguments_debug,
+            context_debug,
+            call_debug,
+            body_debug,
+            response_debug,
+        ] {
             assert!(!debug.contains("private-"));
         }
     }

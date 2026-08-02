@@ -1,0 +1,5 @@
+error: service invocation methods must have an immutable &self receiver without an explicit lifetime
+ --> tests/ui/fail/mutable_receiver.rs:9:20
+  |
+9 |     async fn value(&mut self) -> Result<Response<()>, Error>;
+  |                    ^^^^^^^^^

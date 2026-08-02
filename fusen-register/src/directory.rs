@@ -228,7 +228,7 @@ impl Drop for PublisherInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusen_contract::InstanceId;
+    use fusen_contract::{InstanceId, Metadata};
 
     fn instance(addr: &str) -> ServiceInstance {
         ServiceInstance::new(
@@ -299,6 +299,26 @@ mod tests {
         for state in [DirectoryState::Initializing, DirectoryState::Closed] {
             let error = publisher.publish_state(state).unwrap_err();
             assert_eq!(error.kind(), RegistryErrorKind::InvalidResource);
+        }
+    }
+
+    #[test]
+    fn directory_debug_never_expands_instance_metadata() {
+        let (publisher, directory) = directory();
+        let instance = instance("http://provider")
+            .with_metadata(Metadata::from([(
+                "credential".into(),
+                "private-directory-token".into(),
+            )]))
+            .unwrap();
+        let snapshot = publisher.publish_ready(vec![instance]).unwrap();
+
+        for debug in [
+            format!("{snapshot:?}"),
+            format!("{directory:?}"),
+            format!("{publisher:?}"),
+        ] {
+            assert!(!debug.contains("private-directory-token"));
         }
     }
 }

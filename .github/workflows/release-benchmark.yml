@@ -25,15 +25,30 @@ jobs:
     runs-on: [self-hosted, fusen-benchmark-0-9-reference]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Require the fixed v0.9.0 evidence ref
+        shell: bash
+        env:
+          BENCHMARK_MODE: ${{ inputs.mode }}
+        run: |
+          case "$BENCHMARK_MODE" in
+            calibrate) expected_ref="refs/heads/release/v0.9.0-calibration" ;;
+            compare) expected_ref="refs/heads/release/v0.9.0-rc" ;;
+            *) echo "unsupported benchmark mode: $BENCHMARK_MODE" >&2; exit 1 ;;
+          esac
+          test "$GITHUB_REF" = "$expected_ref" || {
+            echo "$BENCHMARK_MODE must run from $expected_ref, got $GITHUB_REF" >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo +1.97.0 fetch --locked
-      - name: Run five same-host samples and enforce the committed baseline
+      - name: Run five same-host samples and enforce baseline-only provenance
         if: inputs.mode == 'compare'
         run: >-
           python3 .github/scripts/run-benchmark-gate.py
@@ -54,9 +69,9 @@ jobs:
           target/release-benchmark-gate/${{ github.run_id }}-${{ github.run_attempt }}
       - name: Archive raw samples and comparison summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-benchmark-${{ inputs.mode }}-${{ github.sha }}
+          name: release-benchmark-${{ inputs.mode }}-${{ github.sha }}-${{ github.run_attempt }}
           path: target/release-benchmark-gate/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 90

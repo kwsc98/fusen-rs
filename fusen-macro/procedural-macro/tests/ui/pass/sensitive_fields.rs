@@ -154,6 +154,9 @@ mod qualified {
     }
 
     #[derive(serde::Serialize, fusen_procedural_macro::SensitiveFields)]
+    #[sensitive(
+        bound = "external::QualifiedRecursive<U>: crate::contract::SensitiveFields"
+    )]
     pub struct QualifiedRecursive<T, U> {
         crate_next: Option<Box<crate::qualified::QualifiedRecursive<T, U>>>,
         self_next: Option<Box<self::QualifiedRecursive<T, U>>>,
@@ -234,7 +237,7 @@ struct AssociatedRequest<T: HasValue> {
 
 #[derive(serde::Serialize, SensitiveFields)]
 struct SameNameHolder<T> {
-    value: external::SameNameHolder<T>,
+    value: crate::external::SameNameHolder<T>,
 }
 
 fn main() {

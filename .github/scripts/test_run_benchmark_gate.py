@@ -77,12 +77,13 @@ class BenchmarkGateTests(unittest.TestCase):
         present = mock.Mock(returncode=0)
         unrelated = mock.Mock(returncode=1)
         repo_root = pathlib.Path("/repo")
+        baseline_path = repo_root / ".github/benchmarks/reference.json"
 
         with mock.patch.object(
             gate, "run_command", side_effect=[present, unrelated]
         ) as run_command:
             with self.assertRaisesRegex(RuntimeError, "not an ancestor of HEAD"):
-                gate.verify_baseline_commit(repo_root, source_commit)
+                gate.verify_baseline_commit(repo_root, source_commit, baseline_path)
 
         self.assertEqual(
             run_command.call_args_list,
@@ -103,6 +104,151 @@ class BenchmarkGateTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_final_candidate_may_only_change_the_committed_baseline(self) -> None:
+        source_commit = "a" * 40
+        repo_root = pathlib.Path("/repo")
+        baseline_path = repo_root / ".github/benchmarks/reference.json"
+        success = mock.Mock(returncode=0, stdout="")
+        one_commit = mock.Mock(returncode=0, stdout="1\n")
+        direct_parent = mock.Mock(
+            returncode=0,
+            stdout=f"{'c' * 40} {source_commit}\n",
+        )
+        baseline_delta = mock.Mock(
+            returncode=0,
+            stdout=".github/benchmarks/reference.json\0",
+        )
+
+        with mock.patch.object(
+            gate,
+            "run_command",
+            side_effect=[
+                success,
+                success,
+                one_commit,
+                direct_parent,
+                success,
+                success,
+                baseline_delta,
+            ],
+        ) as run_command:
+            gate.verify_baseline_commit(repo_root, source_commit, baseline_path)
+
+        self.assertEqual(
+            run_command.call_args_list[-1],
+            mock.call(
+                [
+                    "git",
+                    "diff",
+                    "--name-only",
+                    "--no-renames",
+                    "-z",
+                    f"{source_commit}..HEAD",
+                    "--",
+                ],
+                repo_root,
+            ),
+        )
+
+    def test_final_candidate_must_be_one_commit_after_calibration(self) -> None:
+        source_commit = "a" * 40
+        repo_root = pathlib.Path("/repo")
+        baseline_path = repo_root / ".github/benchmarks/reference.json"
+        success = mock.Mock(returncode=0, stdout="")
+        two_commits = mock.Mock(returncode=0, stdout="2\n")
+
+        with mock.patch.object(
+            gate,
+            "run_command",
+            side_effect=[success, success, two_commits],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "exactly one commit"):
+                gate.verify_baseline_commit(repo_root, source_commit, baseline_path)
+
+    def test_final_candidate_must_have_only_the_calibration_parent(self) -> None:
+        source_commit = "a" * 40
+        repo_root = pathlib.Path("/repo")
+        baseline_path = repo_root / ".github/benchmarks/reference.json"
+        success = mock.Mock(returncode=0, stdout="")
+        one_commit = mock.Mock(returncode=0, stdout="1\n")
+        merge_parents = mock.Mock(
+            returncode=0,
+            stdout=f"{'c' * 40} {source_commit} {'b' * 40}\n",
+        )
+
+        with mock.patch.object(
+            gate,
+            "run_command",
+            side_effect=[success, success, one_commit, merge_parents],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "only its calibration source as parent"):
+                gate.verify_baseline_commit(repo_root, source_commit, baseline_path)
+
+    def test_final_candidate_rejects_non_baseline_changes(self) -> None:
+        source_commit = "a" * 40
+        repo_root = pathlib.Path("/repo")
+        baseline_path = repo_root / ".github/benchmarks/reference.json"
+        success = mock.Mock(returncode=0, stdout="")
+        one_commit = mock.Mock(returncode=0, stdout="1\n")
+        direct_parent = mock.Mock(
+            returncode=0,
+            stdout=f"{'c' * 40} {source_commit}\n",
+        )
+        extra_delta = mock.Mock(
+            returncode=0,
+            stdout=(
+                ".github/benchmarks/reference.json\0"
+                "fusen/src/lib.rs\0"
+            ),
+        )
+
+        with mock.patch.object(
+            gate,
+            "run_command",
+            side_effect=[
+                success,
+                success,
+                one_commit,
+                direct_parent,
+                success,
+                success,
+                extra_delta,
+            ],
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "must differ from its calibration source only",
+            ):
+                gate.verify_baseline_commit(repo_root, source_commit, baseline_path)
+
+    def test_final_candidate_requires_a_baseline_delta(self) -> None:
+        source_commit = "a" * 40
+        repo_root = pathlib.Path("/repo")
+        baseline_path = repo_root / ".github/benchmarks/reference.json"
+        success = mock.Mock(returncode=0, stdout="")
+        one_commit = mock.Mock(returncode=0, stdout="1\n")
+        direct_parent = mock.Mock(
+            returncode=0,
+            stdout=f"{'c' * 40} {source_commit}\n",
+        )
+        no_delta = mock.Mock(returncode=0, stdout="")
+
+        with mock.patch.object(
+            gate,
+            "run_command",
+            side_effect=[
+                success,
+                success,
+                one_commit,
+                direct_parent,
+                success,
+                success,
+                no_delta,
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "changed paths: <none>"):
+                gate.verify_baseline_commit(repo_root, source_commit, baseline_path)
 
     def test_parse_requires_the_complete_eight_case_matrix(self) -> None:
         sample = gate.parse_sample(benchmark_output(1), 1)

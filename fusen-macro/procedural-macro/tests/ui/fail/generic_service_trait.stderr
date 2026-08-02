@@ -1,0 +1,5 @@
+error: service interfaces must not declare generic parameters
+ --> tests/ui/fail/generic_service_trait.rs:7:22
+  |
+7 | trait GenericService<T> {
+  |                      ^

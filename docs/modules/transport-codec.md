@@ -11,6 +11,13 @@
 `application/json`。Binding ID 的稳定 registry/telemetry 表示为 `http-json-v1`；
 它不包含服务名、HTTP version 或 provider convention。
 
+`HttpOperation` 作为 binding-neutral contract 接受任意语法合法的 MIME，供其他
+binding 定义自己的表示。内置 `http-json-v1` 在 Client/Server build 阶段、网络 I/O
+之前预检每个 method，只接受 `application/json` 或具体的
+`application/<subtype>+json`，并允许 MIME 参数；`text/json`、`text/plain`、
+`application/*` 以及字面 wildcard `application/*+json` 都会被拒绝。这个限制属于
+`http-json-v1` codec，不属于 registry、transport 或 `HttpOperation` 值对象。
+
 参数可映射到 path、query、header、cookie、query map、header map、一个 synthesized
 JSON body object 的字段，或唯一 raw JSON body。`#[param(query, repeated)]` 把 JSON
 array 编码为 0/1/N 个同名 query key。Path、query、header 与 cookie 通过对应的结构化
@@ -25,8 +32,8 @@ Accept: application/json
 {"id":"42","name":"Ada"}
 ```
 
-Binding 不使用 `/_fusen/v1/...` 路由、`application/fusen+json` content type，或
-`arguments`/`result` envelope。HEAD 仅允许 unit 成功类型，客户端不读取成功 body；
+Binding 不使用框架私有的路由前缀、content type 或请求/响应 envelope。HEAD 仅允许 unit
+成功类型，客户端不读取成功 body；
 失败时若 HTTP 语义不传输 Problem Details body，客户端按 status 生成
 `remote_head_error`。
 

@@ -1,0 +1,17 @@
+error: GET methods do not accept a JSON request body
+  --> tests/ui/fail/body_field_disallowed_methods.rs:11:9
+   |
+11 |         #[param(body_field)] value: String,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: HEAD methods do not accept a JSON request body
+  --> tests/ui/fail/body_field_disallowed_methods.rs:20:9
+   |
+20 |         #[param(body_field)] value: String,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: OPTIONS methods do not accept a JSON request body
+  --> tests/ui/fail/body_field_disallowed_methods.rs:29:9
+   |
+29 |         #[param(body_field)] value: String,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

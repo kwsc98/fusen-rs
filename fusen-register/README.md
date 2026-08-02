@@ -4,6 +4,11 @@
 discovery SPI used by `fusen-rs`. Provider implementations own their remote
 workers while callers interact through prepared lifecycle handles.
 
+`Registry`, its request and handle types, `RegistryError`, the `directory`
+publication API, and the safe `provider` constructors are stable extension
+contracts across compatible 0.9.x releases. Tokio channels, provider SDK
+objects, lifecycle workers, and cleanup coordinators remain private.
+
 The SPI is independent from HTTP bindings and transport versions. A registration
 publishes one service endpoint and its capabilities, while a subscription watches
 one `ServiceSelector`; registry providers decide how that identity maps to their
@@ -30,8 +35,9 @@ observation time, `DirectoryState`, and shared service instances. The states
 are `Initializing`, `Ready`, `Stale`, `Unavailable`, and `Closed`. Tokio
 channels and provider SDK values do not cross the SPI boundary.
 
-Registry authors normally use `prepare_registration`, `prepare_subscription`,
-and `directory()` to construct conforming handles. Errors are classified by
+Registry authors normally use `provider::registration`,
+`provider::subscription`, and `directory::directory()` to construct conforming
+handles. Errors are classified by
 `error::RegistryError`, `RegistryOperation`, and `RegistryErrorKind`.
 
 This crate is provider-neutral; use `fusen-nacos` for the Nacos adapter.

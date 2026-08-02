@@ -597,7 +597,16 @@ def baseline_from_summary(summary: dict, threshold: int) -> dict:
     return baseline
 
 
-def verify_baseline_commit(repo_root: pathlib.Path, source_commit: str) -> None:
+def verify_baseline_commit(
+    repo_root: pathlib.Path, source_commit: str, baseline_path: pathlib.Path
+) -> None:
+    try:
+        baseline_relative = baseline_path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError as error:
+        raise RuntimeError(
+            "benchmark comparison baseline must be inside the repository"
+        ) from error
+
     completed = run_command(
         ["git", "cat-file", "-e", f"{source_commit}^{{commit}}"], repo_root
     )
@@ -611,6 +620,56 @@ def verify_baseline_commit(repo_root: pathlib.Path, source_commit: str) -> None:
     if completed.returncode != 0:
         raise RuntimeError(
             f"baseline source commit {source_commit} is not an ancestor of HEAD"
+        )
+
+    completed = run_command(
+        ["git", "rev-list", "--count", f"{source_commit}..HEAD"], repo_root
+    )
+    if completed.returncode != 0 or completed.stdout.strip() != "1":
+        count = completed.stdout.strip() or "unknown"
+        raise RuntimeError(
+            "benchmark final candidate must be exactly one commit after its calibration "
+            f"source; found {count} commits"
+        )
+
+    completed = run_command(
+        ["git", "rev-list", "--parents", "--max-count=1", "HEAD"], repo_root
+    )
+    parents = completed.stdout.split()[1:] if completed.returncode == 0 else []
+    if parents != [source_commit]:
+        raise RuntimeError(
+            "benchmark final candidate must have only its calibration source as parent"
+        )
+
+    for revision in (source_commit, "HEAD"):
+        completed = run_command(
+            ["git", "cat-file", "-e", f"{revision}:{baseline_relative}"], repo_root
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"benchmark baseline {baseline_relative} is not committed at {revision}"
+            )
+
+    completed = run_command(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            f"{source_commit}..HEAD",
+            "--",
+        ],
+        repo_root,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("failed to inspect benchmark calibration provenance")
+    changed_paths = {path for path in completed.stdout.split("\0") if path}
+    if changed_paths != {baseline_relative}:
+        rendered = ", ".join(sorted(changed_paths)) or "<none>"
+        raise RuntimeError(
+            "benchmark final candidate must differ from its calibration source only in "
+            f"{baseline_relative}; changed paths: {rendered}"
         )
 
 
@@ -652,8 +711,13 @@ def main() -> int:
 
     comparison_baseline = None
     if arguments.baseline is not None:
-        comparison_baseline = load_baseline(arguments.baseline.resolve())
-        verify_baseline_commit(repo_root, comparison_baseline["source_commit"])
+        comparison_baseline_path = arguments.baseline.resolve()
+        comparison_baseline = load_baseline(comparison_baseline_path)
+        verify_baseline_commit(
+            repo_root,
+            comparison_baseline["source_commit"],
+            comparison_baseline_path,
+        )
     metadata = collect_metadata(repo_root, arguments.host_id, arguments.toolchain)
     if arguments.write_baseline is not None and metadata["working_tree_dirty"]:
         raise RuntimeError("baseline generation requires a clean working tree")

@@ -11,8 +11,18 @@
 - 破坏 Rust API 或提升 MSRV 至少需要新的 minor 版本并记录在 CHANGELOG；
 - HTTP 表示兼容由稳定的 binding ID 独立约束；`http-json-v1` 的有意破坏必须引入新的 binding ID 和 ADR；
 - `ServiceEndpoint` 对 canonical `http://`/`https://` 的接受、HTTPS 严格验证与无明文降级属于公开 runtime 行为；内置 Server 不承诺 TLS termination；
-- 未记录为公开扩展面的模块、隐藏宏 ABI 与实现细节不构成稳定契约；
+- 稳定扩展面包括 `Interceptor`、`Registry`、`ConfigSource`、`InstanceRouter`、
+  `LoadBalancer`、`RetryPolicy`、`MetricsRecorder`、`Sanitizer` 以及 client-only
+  binding codec；未记录为公开扩展面的模块与实现细节不构成稳定契约。`ConfigSource`、
+  `ConfigKey`、`ConfigHandle`、`ConfigError` 及 `fusen-config::provider` 的安全构造器
+  是 0.9 的稳定 provider SPI；
 - `HttpBindingId`、`HttpVersionPolicy` 与 endpoint capabilities 相互独立；新增 transport 能力不会隐式改变 binding bytes，也不会改变 registry subscription identity。
+
+`fusen_rs::__macro::v1` 是 doc-hidden 的生成代码 ABI，不是供应用直接调用的扩展 API，
+但它是 `fusen-procedural-macro` 与 `fusen-rs` 之间的 0.9.x 兼容边界。Cargo 版本约束
+允许组合的任意 0.9.x macro/runtime 必须继续编译；patch 版本不能原地破坏 `v1`。
+需要不兼容的生成代码形状时，必须新增版本化 ABI module，并通过新的 minor 版本协调
+macro/runtime 依赖范围。未版本化的私有 helper 仍不构成兼容承诺。
 
 首个 baseline 将 `SensitiveShape::Fields` 固定为独立的 serialization/deserialization
 字段表，并将 repeated query 固定为显式 `#[param(query, repeated)]`。这两项在

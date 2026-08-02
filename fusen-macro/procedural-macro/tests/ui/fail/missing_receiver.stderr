@@ -1,0 +1,5 @@
+error: service invocation methods must have an immutable &self receiver
+ --> tests/ui/fail/missing_receiver.rs:9:5
+  |
+9 |     async fn value(value: String) -> Result<Response<()>, Error>;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

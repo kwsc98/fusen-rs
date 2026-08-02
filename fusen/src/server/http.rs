@@ -19,6 +19,7 @@ use crate::{
         validate_http_version, validated_request_id_header,
     },
 };
+use bytes::Bytes;
 use fusen_contract::{HTTP_JSON_V1, HttpBindingId, HttpVersionSet};
 use fusen_observability::{
     AdmissionRejectedEvent, InvocationFinishedEvent, InvocationStartedEvent, MetricEvent,
@@ -32,7 +33,10 @@ use http::{
         UPGRADE,
     },
 };
-use hyper::{body::Incoming, service::Service};
+use hyper::{
+    body::{Body as HttpBody, Incoming},
+    service::Service,
+};
 use serde_json::Value;
 use std::{
     convert::Infallible,
@@ -121,8 +125,9 @@ impl HttpApp {
     }
 
     async fn handle(&self, request: Request<Incoming>) -> HttpResponse<GuardedBody> {
+        let is_head = request.method() == http::Method::HEAD;
         let fallback_request_id = uuid::Uuid::new_v4().simple().to_string();
-        match self.try_handle(request).await {
+        let mut response = match self.try_handle(request).await {
             Ok(response) => response,
             Err((error, request_id, instance, controls)) => encode_problem(
                 &error,
@@ -130,7 +135,11 @@ impl HttpApp {
                 instance,
                 controls,
             ),
+        };
+        if is_head {
+            *response.body_mut() = GuardedBody::new(Bytes::new(), None);
         }
+        response
     }
 
     async fn try_handle(
@@ -304,12 +313,11 @@ impl HttpApp {
             matched.route.method.http_operation().consumes(),
             body_required,
         )?;
-        if !body_required && content_length.is_some_and(|length| length > 0) {
-            return Err(Error::framework(
-                ErrorCategory::InvalidArgument,
-                "unexpected_body",
-                "this HTTP route does not accept a request body",
-            ));
+        if !body_required
+            && (content_length.is_some_and(|length| length > 0)
+                || request.headers().contains_key(TRANSFER_ENCODING))
+        {
+            return Err(unexpected_body());
         }
         let context = Context::new(ContextParts {
             side: Side::Server,
@@ -393,6 +401,7 @@ impl HttpApp {
             drop(body_permit);
             arguments
         } else {
+            validate_body_absent(body).await?;
             matched.http_arguments(
                 query.as_deref(),
                 &request_headers,
@@ -487,11 +496,12 @@ impl Service<Request<Incoming>> for HttpApp {
 
     fn call(&self, request: Request<Incoming>) -> Self::Future {
         let app = self.clone();
+        let is_head = request.method() == http::Method::HEAD;
         let request_id = validated_request_id_header(request.headers()).map(str::to_owned);
         let invocation_controls =
             app.invocation_controls && has_invocation_controls(request.headers());
         Box::pin(async move {
-            let response = match AssertUnwindSafe(app.handle(request)).catch_unwind().await {
+            let mut response = match AssertUnwindSafe(app.handle(request)).catch_unwind().await {
                 Ok(response) => response,
                 Err(_) => {
                     tracing::error!("server HTTP service panicked outside the invocation boundary");
@@ -500,6 +510,9 @@ impl Service<Request<Incoming>> for HttpApp {
                     encode_problem(&request_panicked(), &request_id, None, invocation_controls)
                 }
             };
+            if is_head {
+                *response.body_mut() = GuardedBody::new(Bytes::new(), None);
+            }
             Ok(response)
         })
     }
@@ -671,6 +684,31 @@ fn deadline_exceeded() -> Error {
         ErrorCategory::DeadlineExceeded,
         "deadline_exceeded",
         "service invocation deadline elapsed",
+    )
+}
+
+async fn validate_body_absent(mut body: Incoming) -> Result<(), Error> {
+    while let Some(frame) =
+        std::future::poll_fn(|context| Pin::new(&mut body).poll_frame(context)).await
+    {
+        let frame = frame.map_err(|error| {
+            Error::internal("HTTP body stream failed", error).with_retry_hint(RetryHint::Retryable)
+        })?;
+        let Ok(chunk) = frame.into_data() else {
+            continue;
+        };
+        if !chunk.is_empty() {
+            return Err(unexpected_body());
+        }
+    }
+    Ok(())
+}
+
+fn unexpected_body() -> Error {
+    Error::framework(
+        ErrorCategory::InvalidArgument,
+        "unexpected_body",
+        "this HTTP route does not accept a request body",
     )
 }
 

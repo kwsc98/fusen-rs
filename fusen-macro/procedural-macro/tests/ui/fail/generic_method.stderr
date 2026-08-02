@@ -1,0 +1,5 @@
+error: service invocation methods must not declare generic parameters or where clauses
+ --> tests/ui/fail/generic_method.rs:9:19
+  |
+9 |     async fn value<T>(&self, value: T) -> Result<Response<()>, Error>;
+  |                   ^^^

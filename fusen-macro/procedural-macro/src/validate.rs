@@ -360,6 +360,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                     || meta.path.is_ident("query")
                     || meta.path.is_ident("header")
                     || meta.path.is_ident("cookie")
+                    || meta.path.is_ident("body_field")
                     || meta.path.is_ident("body")
                     || meta.path.is_ident("query_map")
                     || meta.path.is_ident("header_map")
@@ -374,6 +375,8 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                         ParameterSource::Header
                     } else if meta.path.is_ident("cookie") {
                         ParameterSource::Cookie
+                    } else if meta.path.is_ident("body_field") {
+                        ParameterSource::BodyField
                     } else if meta.path.is_ident("query_map") {
                         ParameterSource::QueryMap
                     } else if meta.path.is_ident("header_map") {
@@ -428,7 +431,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                     Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown parameter field; expected context, path, query, header, cookie, body, query_map, header_map, name, or repeated",
+                        "unknown parameter field; expected context, path, query, header, cookie, body_field, body, query_map, header_map, name, or repeated",
                     ))
                 }
             })?;
@@ -571,10 +574,14 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
         if let Some(span) = repeated
             && !explicit_source.is_some_and(|(source, _)| source == ParameterSource::Query)
         {
-            return Err(syn::Error::new(
-                span,
-                "repeated query parameters must use `#[param(query, repeated)]`",
-            ));
+            let message = if explicit_source
+                .is_some_and(|(source, _)| source == ParameterSource::BodyField)
+            {
+                "#[param(body_field)] parameters cannot be repeated"
+            } else {
+                "repeated query parameters must use `#[param(query, repeated)]`"
+            };
+            return Err(syn::Error::new(span, message));
         }
         if source == ParameterSource::Path && !placeholders.contains(&wire_name) {
             return Err(syn::Error::new_spanned(
@@ -584,7 +591,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
                 ),
             ));
         }
-        if source == ParameterSource::Body
+        if matches!(source, ParameterSource::Body | ParameterSource::BodyField)
             && matches!(http.method.as_str(), "GET" | "HEAD" | "OPTIONS")
         {
             return Err(syn::Error::new_spanned(
@@ -674,7 +681,7 @@ fn parameters(signature: &Signature, http: &HttpMapping) -> syn::Result<Vec<Para
     {
         return Err(syn::Error::new(
             span,
-            "default body fields cannot be combined with a #[param(body)] raw body; mark the other parameters #[param(query)]",
+            "body fields cannot be combined with a #[param(body)] raw body; mark the other parameters #[param(query)]",
         ));
     }
 
@@ -1071,7 +1078,7 @@ const fn source_name(source: ParameterSource) -> &'static str {
         ParameterSource::Query => "query",
         ParameterSource::Header => "header",
         ParameterSource::Cookie => "cookie",
-        ParameterSource::BodyField => "body field",
+        ParameterSource::BodyField => "body_field",
         ParameterSource::Body => "body",
         ParameterSource::QueryMap => "query map",
         ParameterSource::HeaderMap => "header map",

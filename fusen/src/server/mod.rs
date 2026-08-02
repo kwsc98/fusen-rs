@@ -13,6 +13,7 @@ use crate::{
         transport::{AcceptOutcome, DrainCommand, TransportConfig},
     },
     service::{IntoServerService, PreparedService},
+    wire::validate_json_service,
 };
 use fusen_contract::{
     ContractError, InstanceId, ServiceDescriptor, ServiceEndpoint, ServiceRegistration,
@@ -361,6 +362,12 @@ impl ServerBuilder {
                 ServerError::from_message(
                     ServerErrorKind::Validation,
                     format!("invalid interface schema: {reason}"),
+                )
+            })?;
+            validate_json_service(descriptor).map_err(|reason| {
+                ServerError::from_message(
+                    ServerErrorKind::Validation,
+                    format!("invalid http-json-v1 interface: {reason}"),
                 )
             })?;
             if !descriptors.insert(descriptor.identity()) {

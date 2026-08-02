@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
           components: rustfmt
@@ -37,12 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo +1.97.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo +1.97.0 test --locked --workspace --all-features
       - run: cargo +1.97.0 test --locked --workspace --all-features --doc
@@ -60,12 +60,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run workspace tests
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Run workspace tests and capture Unix diagnostics
+        id: unix_tests
         if: runner.os != 'Windows'
-        run: cargo +stable test --locked --workspace --all-features
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/ci-logs
+          cargo +stable test --locked --workspace --all-features 2>&1 |
+            tee "target/ci-logs/${RUNNER_OS}-workspace-tests.log"
       - name: Run workspace tests and capture Windows diagnostics
         id: windows_tests
         if: runner.os == 'Windows'
@@ -74,17 +80,18 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           New-Item -ItemType Directory -Force -Path target/ci-logs | Out-Null
           cargo +stable test --locked --workspace --all-features 2>&1 |
-            Tee-Object -FilePath target/ci-logs/windows-workspace-tests.log
+            Tee-Object -FilePath "target/ci-logs/${env:RUNNER_OS}-workspace-tests.log"
           $testExitCode = $LASTEXITCODE
           exit $testExitCode
-      - name: Archive failed Windows workspace test output
+      - name: Archive failed workspace test output
         if: >-
-          failure() && runner.os == 'Windows' &&
-          steps.windows_tests.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+          failure() &&
+          (steps.unix_tests.outcome == 'failure' ||
+          steps.windows_tests.outcome == 'failure')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows-workspace-tests-${{ github.sha }}-${{ github.run_attempt }}
-          path: target/ci-logs/windows-workspace-tests.log
+          name: workspace-tests-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-logs/*-workspace-tests.log
           if-no-files-found: error
           retention-days: 14
 
@@ -109,11 +116,11 @@ jobs:
           - name: observability-otel
             command: cargo +1.97.0 check --locked -p fusen-observability --no-default-features --features otel
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: ${{ matrix.command }}
 
   release-contracts:
@@ -121,11 +128,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo +1.97.0 fetch --locked
       - run: cargo +1.97.0 fetch --locked --manifest-path fuzz-support/Cargo.toml
       - run: cargo +1.97.0 fetch --locked --manifest-path fuzz/Cargo.toml
@@ -142,12 +149,12 @@ jobs:
           --all-targets -- -D warnings
       - name: Compile the renamed-runtime macro consumer
         run: cargo +1.97.0 test --locked --offline -p fusen-macro-renamed-runtime
-      - name: Test the benchmark schema and regression gate
+      - name: Test release tooling and safety gates
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: >-
           python3 -m unittest discover
-          -s .github/scripts -p 'test_run_benchmark_gate.py' -v
+          -s .github/scripts -p 'test_*.py' -v
       - name: Run and record the release benchmark smoke sample
         run: >-
           python3 .github/scripts/run-benchmark-gate.py
@@ -160,9 +167,9 @@ jobs:
           target/benchmark-smoke/${{ github.run_id }}-${{ github.run_attempt }}
       - name: Archive the benchmark smoke sample
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: benchmark-smoke-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          name: benchmark-smoke-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_attempt }}
           path: target/benchmark-smoke/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 14
@@ -174,11 +181,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo +1.97.0 fetch --locked
       - name: Repeat deterministic readiness and lifecycle tests
         env:
@@ -191,7 +198,7 @@ jobs:
     timeout-minutes: 20
     services:
       nacos:
-        image: nacos/nacos-server:v2.4.3
+        image: nacos/nacos-server:v2.4.3@sha256:00774155ca5816f81d8bdc9e3a73d2f41f40542c3bc47bbce7791d1cec9d3fae
         env:
           MODE: standalone
           NACOS_AUTH_ENABLE: "false"
@@ -201,17 +208,17 @@ jobs:
           - 9848:9848
           - 9849:9849
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo +1.97.0 fetch --locked
       - name: Wait for the Nacos readiness endpoint
         shell: bash
         run: |
           for attempt in {1..60}; do
-            if curl --fail --silent --show-error \
+            if curl --disable --fail --silent --show-error \
               http://127.0.0.1:8848/nacos/v1/console/health/readiness; then
               exit 0
             fi
@@ -230,12 +237,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
         with:
           tool: cargo-audit,cargo-deny
       - run: cargo +1.97.0 fetch --locked

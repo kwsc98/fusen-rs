@@ -91,13 +91,23 @@ impl std::fmt::Display for InstanceId {
 }
 
 /// Identifies the service watched by one discovery subscription.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ServiceSelector {
     service_id: String,
     group: Option<String>,
     version: Option<String>,
     metadata: Metadata,
     identity: String,
+}
+
+impl std::fmt::Debug for ServiceSelector {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServiceSelector")
+            .field("identity", &self.identity)
+            .field("metadata_count", &self.metadata.len())
+            .finish()
+    }
 }
 
 impl ServiceSelector {
@@ -536,7 +546,7 @@ impl ServiceDescriptor {
 }
 
 /// A complete provider registration submitted to a registry.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ServiceRegistration {
     instance_id: InstanceId,
     descriptor: &'static ServiceDescriptor,
@@ -544,6 +554,20 @@ pub struct ServiceRegistration {
     capabilities: EndpointCapabilities,
     weight: ServiceWeight,
     metadata: Metadata,
+}
+
+impl std::fmt::Debug for ServiceRegistration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServiceRegistration")
+            .field("instance_id", &self.instance_id)
+            .field("service", &self.descriptor.identity())
+            .field("endpoint", &self.endpoint)
+            .field("capabilities", &self.capabilities)
+            .field("weight", &self.weight)
+            .field("metadata_count", &self.metadata.len())
+            .finish()
+    }
 }
 
 impl ServiceRegistration {
@@ -609,13 +633,26 @@ impl ServiceRegistration {
 }
 
 /// One healthy discovered provider instance.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ServiceInstance {
     instance_id: InstanceId,
     endpoint: ServiceEndpoint,
     capabilities: EndpointCapabilities,
     weight: ServiceWeight,
     metadata: Metadata,
+}
+
+impl std::fmt::Debug for ServiceInstance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServiceInstance")
+            .field("instance_id", &self.instance_id)
+            .field("endpoint", &self.endpoint)
+            .field("capabilities", &self.capabilities)
+            .field("weight", &self.weight)
+            .field("metadata_count", &self.metadata.len())
+            .finish()
+    }
 }
 
 impl ServiceInstance {
@@ -1528,6 +1565,53 @@ mod tests {
         assert_eq!(instance.instance_id(), &id);
         let reserved = Metadata::from([("fusen.http.bindings".into(), "http-json-v1".into())]);
         assert!(instance.with_metadata(reserved).is_err());
+    }
+
+    #[test]
+    fn service_carrier_debug_never_expands_metadata_values() {
+        let selector = ServiceSelector::new("inventory", None, None)
+            .unwrap()
+            .with_metadata(Metadata::from([(
+                "credential".into(),
+                "private-selector-token".into(),
+            )]))
+            .unwrap();
+        let descriptor = Box::leak(Box::new(
+            ServiceDescriptor::new(selector.clone(), vec![method(0, "list")]).unwrap(),
+        ));
+        let endpoint: ServiceEndpoint = "http://127.0.0.1:8080".parse().unwrap();
+        let registration = ServiceRegistration::new(
+            InstanceId::new("inventory-01").unwrap(),
+            descriptor,
+            endpoint.clone(),
+            EndpointCapabilities::default(),
+            ServiceWeight::default(),
+        )
+        .with_metadata(Metadata::from([(
+            "credential".into(),
+            "private-registration-token".into(),
+        )]))
+        .unwrap();
+        let instance = ServiceInstance::new(
+            InstanceId::new("inventory-02").unwrap(),
+            endpoint,
+            EndpointCapabilities::default(),
+            ServiceWeight::default(),
+        )
+        .with_metadata(Metadata::from([(
+            "credential".into(),
+            "private-instance-token".into(),
+        )]))
+        .unwrap();
+
+        for debug in [
+            format!("{selector:?}"),
+            format!("{registration:?}"),
+            format!("{instance:?}"),
+        ] {
+            assert!(debug.contains("metadata_count: 1"));
+            assert!(!debug.contains("private-"));
+        }
     }
 
     #[test]

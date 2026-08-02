@@ -1,0 +1,17 @@
+error: #[param(body_field)] parameters cannot be repeated
+  --> tests/ui/fail/invalid_body_field.rs:11:29
+   |
+11 |         #[param(body_field, repeated)] values: Vec<String>,
+   |                             ^^^^^^^^
+
+error: `body_field` does not accept a value
+  --> tests/ui/fail/invalid_body_field.rs:20:17
+   |
+20 |         #[param(body_field = true)] value: String,
+   |                 ^^^^^^^^^^
+
+error: body fields cannot be combined with a #[param(body)] raw body; mark the other parameters #[param(query)]
+  --> tests/ui/fail/invalid_body_field.rs:29:30
+   |
+29 |         #[param(body_field)] field: String,
+   |                              ^^^^^

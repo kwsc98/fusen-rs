@@ -1113,7 +1113,9 @@ pub(crate) fn validate_content_type(
         _ => Err(Error::framework(
             ErrorCategory::InvalidArgument,
             "invalid_content_type",
-            format!("request Content-Type must be {expected}"),
+            format!(
+                "request Content-Type must be a JSON application media type compatible with {expected}"
+            ),
         )),
     }
 }
@@ -1133,6 +1135,24 @@ fn validate_json_response_content_type(
     Ok(())
 }
 
+pub(crate) fn validate_json_service(service: &ServiceDescriptor) -> Result<(), String> {
+    for method in service.methods() {
+        let operation = method.http_operation();
+        for (field, value) in [
+            ("consumes", operation.consumes()),
+            ("produces", operation.produces()),
+        ] {
+            if !is_json_media_type(value) {
+                return Err(format!(
+                    "method {} has {field} media type {value:?}; http-json-v1 requires application/json or a concrete application subtype ending in +json",
+                    method.invocation_name(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn media_type_matches(value: &HeaderValue, expected: &str) -> bool {
     let Ok(actual) = value
         .to_str()
@@ -1145,9 +1165,22 @@ fn media_type_matches(value: &HeaderValue, expected: &str) -> bool {
     let Ok(expected) = expected.parse::<mime::Mime>() else {
         return false;
     };
-    let actual_json = actual.subtype() == mime::JSON || actual.suffix() == Some(mime::JSON);
-    let expected_json = expected.subtype() == mime::JSON || expected.suffix() == Some(mime::JSON);
-    actual_json && expected_json
+    is_json_mime(&actual) && is_json_mime(&expected)
+}
+
+fn is_json_media_type(value: &str) -> bool {
+    value
+        .parse::<mime::Mime>()
+        .is_ok_and(|value| is_json_mime(&value))
+}
+
+fn is_json_mime(value: &mime::Mime) -> bool {
+    value.type_() == mime::APPLICATION
+        && value.subtype() != mime::STAR
+        && match value.suffix() {
+            Some(suffix) => suffix == mime::JSON,
+            None => value.subtype() == mime::JSON,
+        }
 }
 
 fn codec_panic(component: &str) -> Error {
@@ -1961,6 +1994,39 @@ mod tests {
             let headers = HeaderMap::from_iter([(CONTENT_TYPE, content_type)]);
             validate_json_response_content_type(&headers, JSON_CONTENT_TYPE, "request-1").unwrap();
         }
+    }
+
+    #[test]
+    fn json_binding_accepts_only_application_json_family_media_types() {
+        for media_type in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "application/problem+json",
+            "application/vnd.example+json; profile=compact",
+        ] {
+            assert!(
+                is_json_media_type(media_type),
+                "expected {media_type} to be JSON-compatible"
+            );
+        }
+
+        for media_type in [
+            "text/json",
+            "text/plain",
+            "application/*",
+            "application/*+json",
+            "application/json+zip",
+        ] {
+            assert!(
+                !is_json_media_type(media_type),
+                "expected {media_type} to be rejected by http-json-v1"
+            );
+        }
+
+        let headers = HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("text/json"))]);
+        let error = validate_content_type(&headers, JSON_CONTENT_TYPE, true).unwrap_err();
+        assert_eq!(error.category(), ErrorCategory::InvalidArgument);
+        assert_eq!(error.code().as_str(), "invalid_content_type");
     }
 
     #[test]

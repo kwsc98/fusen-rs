@@ -428,13 +428,13 @@ impl<T> Clone for ConfigSnapshot<T> {
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for ConfigSnapshot<T> {
+impl<T> fmt::Debug for ConfigSnapshot<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ConfigSnapshot")
             .field("revision", &self.revision)
             .field("observed_at", &self.observed_at)
-            .field("value", &self.value)
+            .field("value", &"<omitted>")
             .finish()
     }
 }
@@ -931,6 +931,26 @@ mod tests {
         assert!(ConfigKey::new("").is_err());
         assert!(ConfigKey::new(" bad").is_err());
         assert!(ConfigKey::builder("app").group("prod").build().is_ok());
+    }
+
+    #[test]
+    fn snapshot_debug_never_expands_the_typed_value() {
+        struct Secret {
+            _value: &'static str,
+        }
+
+        let snapshot = ConfigSnapshot {
+            revision: 7,
+            observed_at: Instant::now(),
+            value: Arc::new(Secret {
+                _value: "private-config-secret",
+            }),
+        };
+        let debug = format!("{snapshot:?}");
+
+        assert!(debug.contains("revision: 7"));
+        assert!(debug.contains("<omitted>"));
+        assert!(!debug.contains("private-config-secret"));
     }
 
     #[tokio::test]

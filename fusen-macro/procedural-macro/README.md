@@ -5,7 +5,14 @@ declaration and parameter validation. Applications normally use the `interface`
 and `method` macros re-exported by `fusen-rs`.
 
 ```rust
-use fusen_rs::{Error, Response};
+use fusen_rs::{Error, Response, SensitiveFields};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, SensitiveFields)]
+#[sensitive(opaque)]
+pub struct User {
+    pub id: String,
+}
 
 #[fusen_rs::interface(name = "user", group = "prod", version = "1")]
 pub trait UserApi {
@@ -29,7 +36,10 @@ clients use the runtime's generic `ClientBuilder<UserApiClient>`.
 
 Service invocation methods must be `async`, take immutable `&self`, accept zero
 or more owned parameters with plain identifier patterns, and return
-`Result<Response<T>, Error>`. Every method must declare
+`Result<Response<T>, Error>`. Wire parameters and successful response values
+must satisfy the Serde and `SensitiveFields` contracts in both client and server
+directions; values captured by the generated `Send` futures must also be `Send`.
+Every method must declare
 `#[method(method = "...", path = "...")]`; generated clients use the mapping to
 build requests, generated servers use it for routing, and it determines retry
 eligibility.
@@ -42,15 +52,30 @@ explicitly confirms a path parameter and requires a matching placeholder;
 query value serialized as an array and represented by repeated keys,
 `#[param(header)]` and `#[param(cookie)]` bind named HTTP values,
 `#[param(query_map)]` and `#[param(header_map)]` bind complete maps,
+`#[param(body_field)]` explicitly binds one field in a synthesized JSON object,
 `#[param(body)]` declares one complete raw JSON body,
 `#[param(context)]` carries an unencoded `Call`, and
 `#[param(name = "...")]` renames the wire parameter. Non-context wire names remain
 globally unique across sources. A raw body cannot coexist with synthesized body
 fields. A method accepts at most one query map and one header map; map parameters
-cannot declare `name` or `repeated`. `consumes` and
-`produces` default to `application/json` and are validated as MIME media types.
+cannot declare `name` or `repeated`. Standard library map types cannot implement
+the external `SensitiveFields` trait directly, so query-map and header-map
+parameters normally use `#[sensitive(opaque)]` or an application-owned wrapper.
+GET, HEAD, and OPTIONS reject both raw bodies and body fields. DELETE parameters
+default to query values but may opt into `body` or `body_field`; HEAD must return
+`Response<()>`. `consumes` and `produces` default to `application/json` and are
+validated as MIME media types. The built-in `http-json-v1` client and server
+accept only `application/json` and application media types with a `+json`
+suffix; other media types require a compatible client binding and cannot be
+served by the built-in Server.
 Retry eligibility is inferred from the standard HTTP method. The `http-json-v1`
 binding encodes business parameters according to these explicit HTTP roles.
+
+`SensitiveFields` infers generic bounds for ordinary fields and unqualified
+recursive DTOs. Qualified recursive paths and recursive type aliases cannot be
+resolved reliably during procedural macro expansion; use a complete type-level
+`#[sensitive(bound = "...")]` override for those shapes. This override replaces
+all inferred bounds.
 
 Generated code resolves a renamed `fusen-rs` dependency and targets only its
 hidden macro ABI. This package is not a runtime extension surface.

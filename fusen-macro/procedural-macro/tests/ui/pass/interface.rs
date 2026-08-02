@@ -346,6 +346,36 @@ trait UserApi {
         notify: bool,
     ) -> Result<Response<User>, Error>;
 
+    #[fusen_procedural_macro::method(method = "PUT", path = "/users/{id}")]
+    async fn replace(
+        &self,
+        #[param(path)] id: String,
+        #[param(body)] user: User,
+    ) -> Result<Response<User>, Error>;
+
+    #[fusen_procedural_macro::method(method = "PATCH", path = "/users/{id}")]
+    async fn patch(
+        &self,
+        #[param(path)] id: String,
+        #[param(body_field, name = "display_name")] name: String,
+    ) -> Result<Response<User>, Error>;
+
+    #[fusen_procedural_macro::method(method = "DELETE", path = "/users/{id}")]
+    async fn delete(
+        &self,
+        #[param(path)] id: String,
+        #[param(body_field)] reason: String,
+    ) -> Result<Response<User>, Error>;
+
+    #[fusen_procedural_macro::method(method = "HEAD", path = "/users/{id}")]
+    async fn exists(&self, #[param(path)] id: String) -> Result<Response<()>, Error>;
+
+    #[fusen_procedural_macro::method(method = "OPTIONS", path = "/users")]
+    async fn options(
+        &self,
+        #[param(query)] verbose: Option<bool>,
+    ) -> Result<Response<User>, Error>;
+
     #[fusen_procedural_macro::method(method = "POST", path = "/users/bindings")]
     async fn bindings(
         &self,
@@ -400,6 +430,26 @@ impl UserApi for Handler {
             "{}:{notify}",
             names.join(",")
         ))))
+    }
+
+    async fn replace(&self, id: String, user: User) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(format!("{id}:{}", user.0))))
+    }
+
+    async fn patch(&self, id: String, name: String) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(format!("{id}:{name}"))))
+    }
+
+    async fn delete(&self, id: String, reason: String) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(format!("{id}:{reason}"))))
+    }
+
+    async fn exists(&self, _id: String) -> Result<Response<()>, Error> {
+        Ok(Response::new(()))
+    }
+
+    async fn options(&self, verbose: Option<bool>) -> Result<Response<User>, Error> {
+        Ok(Response::new(User(format!("{verbose:?}"))))
     }
 
     async fn bindings(

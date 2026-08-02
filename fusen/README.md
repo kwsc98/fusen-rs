@@ -39,15 +39,24 @@ Every service method requires `#[method(method = "...", path = "...")]`, accepts
 more owned named parameters, and returns `Result<Response<T>, Error>`.
 Path placeholders are inferred by name, or confirmed explicitly with
 `#[param(path)]`; an explicit path wire name must match its placeholder.
-Remaining read-method parameters become query values, while remaining
+Remaining GET/HEAD/OPTIONS/DELETE parameters become query values, while remaining
 POST/PUT/PATCH parameters become fields in one JSON body object.
-`#[param(query)]`, `#[param(query, repeated)]`, `#[param(body)]`,
-`#[param(context)]`, and `#[param(name = "...")]` provide the other explicit
-overrides. Repeated query parameters must use the complete
-`#[param(query, repeated)]` form. Non-context wire
-names remain globally unique across sources. The macro generates
+`#[param(query)]`, `#[param(query, repeated)]`, `#[param(header)]`,
+`#[param(cookie)]`, `#[param(query_map)]`, `#[param(header_map)]`,
+`#[param(body_field)]`, `#[param(body)]`, `#[param(context)]`, and
+`#[param(name = "...")]` provide the other explicit overrides. Repeated query
+parameters must use the complete `#[param(query, repeated)]` form. A
+`body_field` may use `name` but never `repeated`; GET, HEAD, and OPTIONS reject
+both body forms, while DELETE accepts an explicit `body` or `body_field`. HEAD
+must return `Response<()>`. Non-context wire names remain globally unique
+across sources. The macro generates
 `UserApiClient` and `UserApiServer<T>`; both the generated client and a user
 handler implement `UserApi`. Clients use the generic `ClientBuilder<UserApiClient>`.
+
+Generated code depends only on the doc-hidden, versioned
+`fusen_rs::__macro::v1` ABI. It is not an application extension API, but Cargo-
+compatible combinations of `fusen-procedural-macro` and `fusen-rs` 0.9.x must
+continue to compile, including applications that rename the runtime dependency.
 
 ## Sensitive projections
 
@@ -165,14 +174,24 @@ uses HTTP/1.1, while `https://` plus `Auto` negotiates HTTP/2 or HTTP/1.1 throug
 ALPN. Set `.direct_capabilities(...)` to replace that inference with an explicit
 binding, version, and controls contract.
 
+`HttpOperation` stores any syntactically valid MIME value for use by custom
+bindings. The built-in `http-json-v1` client and server preflight `consumes` and
+`produces` before network I/O and accept only `application/json` or a concrete
+`application/<subtype>+json` media type, with optional parameters.
+
 The client accepts canonical `http://` and `https://` endpoints. The server does
 not terminate TLS; use a sidecar, service mesh, ingress, or reverse proxy for
 inbound HTTPS.
 
 The supported extension surface is `Interceptor`, `Registry`, `ConfigSource`,
-`InstanceRouter`, `LoadBalancer`, `RetryPolicy`, `MetricsRecorder`, and the client-side
+`InstanceRouter`, `LoadBalancer`, `RetryPolicy`, `MetricsRecorder`, `Sanitizer`, and the client-side
 `RequestEncoder`/`ResponseDecoder`/`ErrorDecoder` traits. Transports, server codecs,
 acceptors, connection pools, and lifecycle state machines are private runtime
 implementation details.
+
+Third-party `ConfigSource` implementations may rely on the public
+`fusen-config` key, handle, error, publisher, and lifecycle constructor APIs
+throughout compatible 0.9.x releases. Provider SDK and worker internals remain
+private.
 
 Requires Rust 1.97 or newer. Licensed under Apache-2.0.

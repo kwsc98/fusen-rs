@@ -1,9 +1,4 @@
-pub use crate::{
-    context::{Arguments, Call, CallInfo, Response},
-    error::{
-        Error, ErrorCategory, ErrorCode, ErrorDetails, ErrorOrigin, InvalidErrorCode, RetryHint,
-    },
-};
+use crate::{Error, ErrorCategory};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -84,21 +79,6 @@ impl ArgumentField {
             repeated,
         }
     }
-
-    /// Returns the field's wire name.
-    pub const fn name(&self) -> &'static str {
-        self.name
-    }
-
-    /// Returns the field's HTTP wire role.
-    pub const fn source(&self) -> ArgumentSource {
-        self.source
-    }
-
-    /// Returns whether a query field uses repeated keys.
-    pub const fn is_repeated(&self) -> bool {
-        self.repeated
-    }
 }
 
 #[doc(hidden)]
@@ -107,8 +87,10 @@ pub fn encode_argument<T: Serialize>(value: &T) -> Result<Value, Error> {
         .map_err(|error| Error::internal("failed to serialize invocation argument", error))
 }
 
-#[doc(hidden)]
-pub fn decode_argument<T: DeserializeOwned>(value: Value, text_encoded: bool) -> Result<T, Error> {
+pub(crate) fn decode_argument<T: DeserializeOwned>(
+    value: Value,
+    text_encoded: bool,
+) -> Result<T, Error> {
     if let Ok(decoded) = serde_json::from_value(value.clone()) {
         return Ok(decoded);
     }

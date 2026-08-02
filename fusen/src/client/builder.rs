@@ -4,11 +4,11 @@ use super::{
 };
 use crate::{
     ClientError, ClientErrorKind, InstanceRouter, Interceptor, LoadBalancer, WeightedRandom,
-    interceptor::erase_interceptor,
+    interceptor::erase_interceptor, wire::validate_json_service,
 };
 use fusen_contract::{
-    ContractError, EndpointCapabilities, HttpBindingId, HttpVersionPolicy, ServiceDescriptor,
-    ServiceEndpoint,
+    ContractError, EndpointCapabilities, HTTP_JSON_V1, HttpBindingId, HttpVersionPolicy,
+    ServiceDescriptor, ServiceEndpoint,
 };
 use std::{marker::PhantomData, sync::Arc, sync::atomic::Ordering};
 
@@ -141,6 +141,14 @@ impl<C> ClientBuilder<C> {
                     format!("HTTP binding {} is not registered", self.binding_id),
                 )
             })?;
+        if self.binding_id.as_str() == HTTP_JSON_V1 {
+            validate_json_service(interface).map_err(|reason| {
+                ClientError::from_message(
+                    ClientErrorKind::Connect,
+                    format!("invalid http-json-v1 interface: {reason}"),
+                )
+            })?;
+        }
         let source = match self.endpoint {
             EndpointMode::Direct(endpoint) => {
                 if self

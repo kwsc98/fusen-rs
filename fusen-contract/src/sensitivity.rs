@@ -162,7 +162,7 @@ impl std::fmt::Debug for SensitiveArgument {
 
 /// Process-local sensitivity metadata for one service method.
 ///
-/// This value does not participate in method identity, protocol support, discovery, or
+/// This value does not participate in method identity, binding capabilities, discovery, or
 /// registration.
 #[derive(Clone)]
 pub struct MethodSensitivity {

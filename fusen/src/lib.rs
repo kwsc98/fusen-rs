@@ -12,8 +12,7 @@ mod error;
 pub(crate) use error::RemoteErrorParts;
 /// Shared client/server interceptor API.
 pub mod interceptor;
-/// Interface parameter schema and argument encoding contracts.
-pub mod interface;
+mod interface;
 /// Client routing, load balancing, and retry policy APIs.
 pub mod policy;
 mod projection;
@@ -80,9 +79,8 @@ pub mod __macro {
             Response,
         };
         pub use fusen_contract::{
-            MethodDescriptor, MethodId, MethodSensitivity, SensitiveArgument, SensitiveField,
-            SensitiveFields, SensitiveShape, SensitiveShapeResolver, SensitivityKind,
-            ServiceDescriptor, ServiceSelector,
+            MethodDescriptor, MethodId, MethodSensitivity, SensitiveArgument, SensitiveFields,
+            SensitiveShape, SensitivityKind, ServiceDescriptor, ServiceSelector,
         };
         pub use http;
     }
