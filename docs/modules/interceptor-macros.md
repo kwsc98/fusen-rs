@@ -7,7 +7,7 @@
 
 用户直接实现唯一对象安全的 `Interceptor`。`Next` 消费自身且不可克隆，因此下游最多执行一次；Interceptor 可以短路并返回 `Error`，或通过 `Context::respond(value)` 创建受当前 runtime response limit 与 byte budget 约束的 `Response<Body>`。
 
-四个阶段为 `ClientCall`、`ClientAttempt`、`ServerHead` 和 `ServerCall`。`ClientCall` 包围整个 logical invocation 且不随 retry 重复；`ClientAttempt` 每个物理 attempt 执行，可读取 endpoint 与 attempt number；`ServerHead` 在 admission 后、body poll 前执行；`ServerCall` 在 decode 后、Handler 前执行。每阶段固定 global 在前、interface-local 在后。ClientCall extensions 克隆到每次 attempt 且 attempt 修改相互隔离；ServerHead extensions 原样传到 ServerCall 与 Handler。ServerHead 短路不会读取 body。
+四个阶段为 `ClientCall`、`ClientAttempt`、`ServerHead` 和 `ServerCall`。`ClientCall` 包围整个 logical invocation 且不随 retry 重复；`ClientAttempt` 每个物理 attempt 执行，可读取 endpoint 与 attempt number；`ServerHead` 在 admission 后、body poll 前执行；`ServerCall` 在 decode 后、Handler 前执行。每阶段固定 global 在前、interface-local 在后。ClientCall extensions 克隆到每次 attempt 且 attempt 修改相互隔离；ServerHead extensions 原样传到 ServerCall 与 Handler。ServerHead 通过 `Context::headers_mut()` 修改并传给下游的 application headers，是后续 `header`、`header_map`、`cookie` 参数绑定以及 `ServerCall`、Handler `Call` 的唯一 header 视图；原始 HTTP request 中的 transport 与 Fusen control headers 已在此阶段前完成校验和剔除。ServerCall 开始时参数已经绑定，此阶段再修改 headers 不会追溯重绑显式参数。ServerHead 短路不会读取 body。
 
 每个扩展调用有独立 panic boundary。Panic 返回隐藏细节的内部错误，并释放 admission/byte permits。Future 被取消时不保证 Interceptor 后置代码执行，资源清理必须依赖 RAII。同步阻塞工作应使用 `spawn_blocking`。
 

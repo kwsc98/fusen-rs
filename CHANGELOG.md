@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 修复 `ServerHead` interceptor 修改 application headers 后，显式 header、cookie 与 header map 参数仍从原始 HTTP request 绑定的问题；Head 后的 `Context` headers 现在是 `ServerCall`、Handler `Call` 和参数绑定的统一数据源。
+
 ## [0.9.0] - 2026-08-02
 
 `0.9.0` 是 clean-slate 的首个兼容性 baseline，不兼容此前未发布的 Rust API、宏、配置或 wire 流量。

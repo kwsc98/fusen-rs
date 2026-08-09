@@ -3,11 +3,14 @@
 use fusen_rs::{
     Call, ClientConfig, ClientRuntime, Context, Error, ErrorCategory, InterceptionStage,
     Interceptor, InterceptorFuture, Next, PolicySanitizer, Response, RetryConfig, SanitizedValue,
-    Server, Side, interface,
+    Server, Side,
+    contract::{EndpointCapabilities, HttpVersionPolicy, HttpVersionSet},
+    interface,
 };
-use http::HeaderValue;
+use http::{HeaderValue, header::COOKIE};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -425,6 +428,212 @@ async fn server_head_rejection_does_not_poll_the_request_body() {
     );
 
     server.shutdown().await.unwrap();
+}
+
+#[interface(name = "header-propagation-contract", group = "test", version = "1")]
+trait HeaderPropagationContract {
+    #[fusen_rs::method(method = "GET", path = "/interceptor/headers")]
+    async fn without_body(
+        &self,
+        #[param(context)] call: Call,
+        #[param(header, name = "x-replaced")] replaced: String,
+        #[param(header, name = "x-removed-explicit")] removed: Option<String>,
+        #[param(header, name = "x-added-explicit")] added: Option<String>,
+        #[param(cookie, name = "session")] session: String,
+        #[sensitive(opaque)]
+        #[param(header_map)]
+        headers: BTreeMap<String, String>,
+    ) -> Result<Response<String>, Error>;
+
+    #[fusen_rs::method(method = "PUT", path = "/interceptor/headers/body")]
+    async fn with_body(
+        &self,
+        #[param(context)] call: Call,
+        #[param(header, name = "x-replaced")] replaced: String,
+        #[param(header, name = "x-added-explicit")] added: Option<String>,
+        #[param(cookie, name = "session")] session: String,
+        #[sensitive(opaque)]
+        #[param(header_map)]
+        headers: BTreeMap<String, String>,
+        #[param(body)] value: String,
+    ) -> Result<Response<String>, Error>;
+}
+
+#[derive(Clone, Copy)]
+struct NormalizeServerHeaders;
+
+impl Interceptor for NormalizeServerHeaders {
+    fn intercept<'a>(&'a self, mut context: Context, next: Next<'a>) -> InterceptorFuture<'a> {
+        assert_eq!(context.stage(), InterceptionStage::ServerHead);
+        for name in FUSEN_CONTROL_HEADERS {
+            assert!(!context.headers().contains_key(name));
+        }
+
+        let headers = context.headers_mut();
+        headers.insert("x-replaced", HeaderValue::from_static("trusted-replaced"));
+        headers.remove("x-removed-explicit");
+        headers.insert(
+            "x-added-explicit",
+            HeaderValue::from_static("trusted-added"),
+        );
+        headers.remove("x-map-removed");
+        headers.insert("x-added-map", HeaderValue::from_static("trusted-added-map"));
+        headers.insert(COOKIE, HeaderValue::from_static("session=trusted-session"));
+
+        Box::pin(async move { next.run(context).await })
+    }
+}
+
+struct HeaderPropagationHandler;
+
+impl HeaderPropagationContract for HeaderPropagationHandler {
+    async fn without_body(
+        &self,
+        call: Call,
+        replaced: String,
+        removed: Option<String>,
+        added: Option<String>,
+        session: String,
+        headers: BTreeMap<String, String>,
+    ) -> Result<Response<String>, Error> {
+        assert_eq!(removed, None);
+        assert_propagated_headers(&call, &replaced, added.as_deref(), &session, &headers);
+        Ok(Response::new("without-body".to_owned()))
+    }
+
+    async fn with_body(
+        &self,
+        call: Call,
+        replaced: String,
+        added: Option<String>,
+        session: String,
+        headers: BTreeMap<String, String>,
+        value: String,
+    ) -> Result<Response<String>, Error> {
+        assert_eq!(value, "request-body");
+        assert_propagated_headers(&call, &replaced, added.as_deref(), &session, &headers);
+        Ok(Response::new("with-body".to_owned()))
+    }
+}
+
+const FUSEN_CONTROL_HEADERS: [&str; 5] = [
+    "x-request-id",
+    "x-fusen-timeout-ms",
+    "x-fusen-attempt",
+    "x-fusen-service-group",
+    "x-fusen-service-version",
+];
+
+fn assert_propagated_headers(
+    call: &Call,
+    replaced: &str,
+    added: Option<&str>,
+    session: &str,
+    headers: &BTreeMap<String, String>,
+) {
+    assert_eq!(replaced, "trusted-replaced");
+    assert_eq!(added, Some("trusted-added"));
+    assert_eq!(session, "trusted-session");
+    assert_eq!(
+        headers,
+        &BTreeMap::from([
+            ("x-added-map".to_owned(), "trusted-added-map".to_owned()),
+            ("x-passthrough".to_owned(), "original".to_owned()),
+        ])
+    );
+
+    assert_eq!(call.headers().get("x-replaced").unwrap(), replaced);
+    assert_eq!(
+        call.headers().get("x-added-explicit").unwrap(),
+        added.unwrap()
+    );
+    assert_eq!(
+        call.headers().get(COOKIE).unwrap(),
+        "session=trusted-session"
+    );
+    assert!(!call.headers().contains_key("x-removed-explicit"));
+    assert!(!call.headers().contains_key("x-map-removed"));
+    for (name, value) in headers {
+        assert_eq!(call.headers().get(name.as_str()).unwrap(), value);
+    }
+    for name in FUSEN_CONTROL_HEADERS {
+        assert!(!call.headers().contains_key(name));
+        assert!(!headers.contains_key(name));
+    }
+}
+
+async fn assert_server_head_header_propagation(with_body: bool) {
+    let server = Server::builder("127.0.0.1:0")
+        .interface(
+            HeaderPropagationContractServer::new(HeaderPropagationHandler)
+                .head_interceptor(NormalizeServerHeaders),
+        )
+        .build()
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let runtime = ClientRuntime::builder().build().unwrap();
+    let client = HeaderPropagationContractClient::builder(&runtime)
+        .direct(format!("http://{}", server.local_addr()))
+        .http_version_policy(HttpVersionPolicy::H2c)
+        .direct_capabilities(
+            EndpointCapabilities::new(HttpVersionSet::ALL, [Default::default()], true).unwrap(),
+        )
+        .connect()
+        .await
+        .unwrap();
+    let header_map = BTreeMap::from([
+        ("x-map-removed".to_owned(), "attacker-map".to_owned()),
+        ("x-passthrough".to_owned(), "original".to_owned()),
+    ]);
+
+    let response = if with_body {
+        client
+            .with_body(
+                Call::new(),
+                "attacker-replaced".to_owned(),
+                None,
+                "attacker-session".to_owned(),
+                header_map,
+                "request-body".to_owned(),
+            )
+            .await
+    } else {
+        client
+            .without_body(
+                Call::new(),
+                "attacker-replaced".to_owned(),
+                Some("attacker-removed".to_owned()),
+                None,
+                "attacker-session".to_owned(),
+                header_map,
+            )
+            .await
+    }
+    .unwrap();
+    assert_eq!(
+        response.body(),
+        if with_body {
+            "with-body"
+        } else {
+            "without-body"
+        }
+    );
+
+    drop(client);
+    runtime.shutdown().await.unwrap();
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_head_header_mutations_propagate_to_non_body_bindings() {
+    assert_server_head_header_propagation(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_head_header_mutations_propagate_to_body_bindings() {
+    assert_server_head_header_propagation(true).await;
 }
 
 #[derive(

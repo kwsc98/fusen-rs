@@ -709,6 +709,11 @@ impl Context {
     }
 
     /// Returns mutable application headers.
+    ///
+    /// At `ServerHead`, changes forwarded through `Next::run` are authoritative for subsequent
+    /// `header`, `header_map`, and `cookie` argument binding. The same headers remain visible at
+    /// `ServerCall` and through the handler's [`Call`]. At `ServerCall`, arguments are already
+    /// bound, so later header changes do not retroactively update explicit parameters.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.headers
     }

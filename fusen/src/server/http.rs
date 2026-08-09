@@ -372,8 +372,7 @@ impl HttpApp {
             body_required,
         } = execution;
         let query = request.uri().query().map(str::to_owned);
-        let (_parts, body) = request.into_parts();
-        let request_headers = application_headers(&_parts.headers);
+        let body = request.into_body();
         let arguments = if body_required {
             let (bytes, body_permit) = control
                 .deadline
@@ -394,7 +393,7 @@ impl HttpApp {
             })?;
             let arguments = matched.http_arguments(
                 query.as_deref(),
-                &request_headers,
+                context.headers(),
                 Some(body),
                 self.max_query_pairs,
             )?;
@@ -404,7 +403,7 @@ impl HttpApp {
             validate_body_absent(body).await?;
             matched.http_arguments(
                 query.as_deref(),
-                &request_headers,
+                context.headers(),
                 None,
                 self.max_query_pairs,
             )?
